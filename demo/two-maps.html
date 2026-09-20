@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>mapwright demo — two maps</title>
+    <style>
+      body { margin: 0; font: 14px system-ui; }
+      .wrap { display: flex; gap: 12px; padding: 12px; }
+      .map { width: 480px; height: 420px; border: 1px solid #999; }
+      #log { padding: 0 12px; }
+    </style>
+  </head>
+  <body>
+    <div class="wrap">
+      <div id="left" class="map"></div>
+      <div id="right" class="map"></div>
+    </div>
+    <div id="log">Last click: <span data-testid="last-click"></span></div>
+    <script type="module" src="/src/two-maps.ts"></script>
+  </body>
+</html>

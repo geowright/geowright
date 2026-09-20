@@ -70,8 +70,12 @@ export interface MapwrightOptions {
   ignoreLayers?: string[];
 }
 
+export type Modifier = 'Shift' | 'Control' | 'Alt' | 'Meta';
+
 export interface ActionOptions extends ActionPointOptions {
   timeout?: number;
+  /** Keys held down during the action (real key events), e.g. ['Shift'] for shift+click. */
+  modifiers?: Modifier[];
   /**
    * Map equivalent of scrollIntoView: if the target is not in the viewport, move the camera. Opt-in.
    * `true` looks the feature up in the source data (GeoJSON sources only). For tiled sources the
@@ -206,7 +210,24 @@ export class MapHandle {
     await step(`map.clickAt(${fmt(at)}${opts.button ? `, ${opts.button}` : ''})`, async () => {
       const p = await this._pointAt(at, opts, 'map.clickAt');
       await this.page.mouse.move(p.x, p.y);
-      await this.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount });
+      await withModifiers(this.page, opts.modifiers, () => this.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount }));
+    });
+  }
+
+  dblclickAt(at: LngLat, opts: ActionOptions = {}): Promise<void> {
+    return this.clickAt(at, { ...opts, clickCount: 2 });
+  }
+
+  /**
+   * Real mouse-wheel input with the pointer over a location (MapLibre zooms around the pointer).
+   * Negative deltaY zooms in. The zoom is animated: follow with `expect(map).toHaveView(...)` or
+   * `waitForIdle()`.
+   */
+  async wheelAt(at: LngLat, deltaY: number, opts: ActionOptions = {}): Promise<void> {
+    await step(`map.wheelAt(${fmt(at)}, ${deltaY})`, async () => {
+      const p = await this._pointAt(at, opts, 'map.wheelAt');
+      await this.page.mouse.move(p.x, p.y);
+      await withModifiers(this.page, opts.modifiers, () => this.page.mouse.wheel(0, deltaY));
     });
   }
 
@@ -337,7 +358,7 @@ export class FeatureHandle {
         let verdict: ClickVerdict;
         try {
           await this.map.page.mouse.move(p.x, p.y);
-          await this.map.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount });
+          await withModifiers(this.map.page, opts.modifiers, () => this.map.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount }));
         } finally {
           verdict = await this.map._call<ClickVerdict>('disarmClick', token);
         }
@@ -542,6 +563,16 @@ export class MapwrightError extends Error {
 
 export function mapwright(page: Page, opts?: MapwrightOptions): MapHandle {
   return new MapHandle(page, opts);
+}
+
+/** Hold modifier keys (real keyboard input) around `body`. */
+async function withModifiers<T>(page: Page, modifiers: Modifier[] | undefined, body: () => Promise<T>): Promise<T> {
+  for (const m of modifiers ?? []) await page.keyboard.down(m);
+  try {
+    return await body();
+  } finally {
+    for (const m of [...(modifiers ?? [])].reverse()) await page.keyboard.up(m);
+  }
 }
 
 /** Show up as one boxed step in traces/reports when running under @playwright/test. */
