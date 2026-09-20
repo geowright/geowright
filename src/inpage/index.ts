@@ -7,7 +7,7 @@ import type { CanvasAdapter } from './types';
  * In-page entry. Injected by the Playwright side (never shipped in the app bundle).
  *
  * The app's only obligation is one dependency-free line:
- *     (window.__mapwright_maps ??= {}).main = map;
+ *     (window.__geowright_maps ??= {}).main = map;
  * We wrap whatever is registered there in an adapter, lazily, on first use — so it does not
  * matter whether the app registers before or after this script is injected.
  */
@@ -20,17 +20,17 @@ function adapterFor(instance: any): CanvasAdapter<any> {
   if (instance && typeof instance.queryRenderedFeatures === 'function' && typeof instance.project === 'function') {
     return new MapLibreAdapter(instance);
   }
-  throw new Error('mapwright: registered object is not a recognised map instance');
+  throw new Error('geowright: registered object is not a recognised map instance');
 }
 
 function engine(mapId: string): Engine<any> {
-  const reg = (window as any).__mapwright_maps as Registry | undefined;
+  const reg = (window as any).__geowright_maps as Registry | undefined;
   const instance = reg?.[mapId];
   if (!instance) {
     const ids = reg ? Object.keys(reg) : [];
     throw new Error(
-      `mapwright: no map registered as "${mapId}"` +
-        (ids.length ? ` (registered: ${ids.join(', ')})` : '. Add to the app: (window.__mapwright_maps ??= {}).main = map;'),
+      `geowright: no map registered as "${mapId}"` +
+        (ids.length ? ` (registered: ${ids.join(', ')})` : '. Add to the app: (window.__geowright_maps ??= {}).main = map;'),
     );
   }
   const cached = engines.get(mapId);
@@ -41,7 +41,7 @@ function engine(mapId: string): Engine<any> {
 }
 
 const api = {
-  has: (mapId: string) => !!(window as any).__mapwright_maps?.[mapId],
+  has: (mapId: string) => !!(window as any).__geowright_maps?.[mapId],
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
   find: (mapId: string, q: any) => engine(mapId).find(q),
   actionPoint: (mapId: string, q: any, opts: any) => engine(mapId).actionPoint(q, opts),
@@ -49,11 +49,11 @@ const api = {
   disarmClick: (mapId: string, token: string) => engine(mapId).disarmClick(token),
   entities: (mapId: string, opts?: any) => engine(mapId).entities(opts),
   /** Agent sessions only: mirror features into the accessibility tree as real, clickable buttons. */
-  hasMirror: (mapId: string) => !!(window as any).__mapwright_mirrors?.[mapId],
+  hasMirror: (mapId: string) => !!(window as any).__geowright_mirrors?.[mapId],
   mirror: (mapId: string, opts?: any) => {
     const w = window as any;
-    (w.__mapwright_mirrors ??= {})[mapId]?.();
-    w.__mapwright_mirrors[mapId] = startMirror(engine(mapId), mapId, opts);
+    (w.__geowright_mirrors ??= {})[mapId]?.();
+    w.__geowright_mirrors[mapId] = startMirror(engine(mapId), mapId, opts);
     return true;
   },
   snapshot: (mapId: string, opts?: any) => engine(mapId).snapshot(opts),
@@ -84,7 +84,7 @@ const api = {
 };
 
 export type InPageApi = typeof api;
-(window as any).__mapwright = api;
+(window as any).__geowright = api;
 
 /**
  * Agent integration, best effort: if the browser exposes the experimental WebMCP API
@@ -95,8 +95,8 @@ export type InPageApi = typeof api;
  */
 try {
   const mc = (navigator as any).modelContext;
-  if (mc?.registerTool && !(window as any).__mapwright_webmcp) {
-    (window as any).__mapwright_webmcp = true;
+  if (mc?.registerTool && !(window as any).__geowright_webmcp) {
+    (window as any).__geowright_webmcp = true;
     mc.registerTool({
       name: 'map_snapshot',
       description:

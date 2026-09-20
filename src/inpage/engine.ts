@@ -622,12 +622,12 @@ function histogram(props: Record<string, unknown>[]): string {
  */
 export function topElementAt(x: number, y: number): Element | null {
   for (const el of document.elementsFromPoint(x, y)) {
-    if (!el.closest('[data-mapwright-mirror]')) return el;
+    if (!el.closest('[data-geowright-mirror]')) return el;
   }
   return null;
 }
 
-const isMirrorNode = (el: EventTarget | null) => el instanceof Element && !!el.closest('[data-mapwright-mirror]');
+const isMirrorNode = (el: EventTarget | null) => el instanceof Element && !!el.closest('[data-geowright-mirror]');
 
 function showWant(v: unknown): string {
   const op = v as WhereOp | null;

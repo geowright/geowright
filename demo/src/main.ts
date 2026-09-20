@@ -189,7 +189,7 @@ const map = new MlMap({
 });
 
 // Test hook — required by the Playwright map-testing library.
-((window as any).__mapwright_maps ??= {}).main = map;
+((window as any).__geowright_maps ??= {}).main = map;
 
 // Shift+click selects alerts. MapLibre's box-zoom handler claims shift+mousedown and the map then
 // never emits 'click', so apps with shift-click selection disable it (mapbox-gl-draw does the same).

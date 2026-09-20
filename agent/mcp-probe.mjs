@@ -37,7 +37,7 @@ const call = async (name, a) => {
 };
 const head = (s, n = 1500) => (s.length > n ? s.slice(0, n) + `\n… [${s.length - n} more chars]` : s);
 
-await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'mapwright-probe', version: '0' } });
+await rpc('initialize', { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 'geowright-probe', version: '0' } });
 notify('notifications/initialized', {});
 const tools = (await rpc('tools/list', {})).result.tools.map((t) => t.name);
 console.log('TOOLS:', tools.join(' '));
@@ -51,7 +51,7 @@ console.log('new tools:', after.filter((t) => !tools.includes(t)).join(' ') || '
 console.log('navigator.modelContext:', await call('browser_evaluate', { function: '() => typeof navigator.modelContext' }));
 
 console.log('\n=== browser_evaluate -> map snapshot ===');
-const snap = await call('browser_evaluate', { function: "async () => { await window.__mapwright.waitForIdle('main', 5000); return await window.__mapwright.snapshot('main'); }" });
+const snap = await call('browser_evaluate', { function: "async () => { await window.__geowright.waitForIdle('main', 5000); return await window.__geowright.snapshot('main'); }" });
 console.log(head(snap, 3000));
 
 if (after.includes('browser_mouse_click_xy')) {

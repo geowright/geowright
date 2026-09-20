@@ -20,14 +20,14 @@ test('auto-discovery finds nothing in a bundled ESM app; the explicit hook does'
     // 1. the classic: a library global whose constructor could be patched from addInitScript
     const libraryGlobal = 'maplibregl' in w || 'mapboxgl' in w;
     // 2. any window property holding a map (excluding our hook)
-    const globals = Object.getOwnPropertyNames(w).filter((k) => k !== '__mapwright_maps' && isMapLike(w[k]));
+    const globals = Object.getOwnPropertyNames(w).filter((k) => k !== '__geowright_maps' && isMapLike(w[k]));
     // 3. a back-reference from the map's DOM subtree (own props incl. symbols, e.g. framework expandos)
     const container = document.querySelector('.maplibregl-map')!;
     const nodes = [container, ...container.querySelectorAll('*')];
     const domRefs = nodes.filter((n) =>
       [...Object.getOwnPropertyNames(n), ...Object.getOwnPropertySymbols(n)].some((k) => isMapLike((n as any)[k])),
     ).length;
-    return { libraryGlobal, globals, domRefs, hook: isMapLike(w.__mapwright_maps?.main) };
+    return { libraryGlobal, globals, domRefs, hook: isMapLike(w.__geowright_maps?.main) };
   });
 
   expect(found).toEqual({ libraryGlobal: false, globals: [], domRefs: 0, hook: true });

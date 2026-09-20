@@ -127,7 +127,7 @@ test.describe('act gap', () => {
         'mousemove',
         () => {
           w.__sabotaged++;
-          const m = w.__mapwright_maps.main;
+          const m = w.__geowright_maps.main;
           m.jumpTo({ center: [m.getCenter().lng + 0.02, m.getCenter().lat] });
         },
         { capture: true, once: true },

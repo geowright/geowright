@@ -28,7 +28,7 @@ const maps = {
 };
 const out = document.querySelector('[data-testid="last-click"]') as HTMLElement;
 for (const [name, map] of Object.entries(maps)) {
-  ((window as any).__mapwright_maps ??= {})[name] = map;
+  ((window as any).__geowright_maps ??= {})[name] = map;
   map.on('click', 'sites', (e) => {
     out.textContent = `${name}:${(e.features![0].properties as any).name}`;
   });

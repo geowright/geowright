@@ -19,7 +19,7 @@ export function startMirror(engine: Engine<any>, mapId: string, opts: { max?: nu
   const host = surface.parentElement!;
   const root = document.createElement('div');
   root.setAttribute('role', 'group');
-  root.setAttribute('data-mapwright-mirror', mapId);
+  root.setAttribute('data-geowright-mirror', mapId);
   root.style.cssText = 'position:absolute;inset:0;pointer-events:none;overflow:hidden;';
   host.appendChild(root);
   const nodes = new Map<string, HTMLButtonElement>();

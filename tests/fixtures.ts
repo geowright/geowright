@@ -2,7 +2,7 @@ import { test as base } from '@playwright/test';
 import { makeTilePng } from './tile-png';
 import { BUILDINGS } from './buildings';
 import { routeVectorTiles } from '../src/playwright/tiles';
-import { mapwright, type MapHandle } from '../src/playwright';
+import { geowright, type MapHandle } from '../src/playwright';
 
 export { expect } from '../src/playwright';
 
@@ -21,7 +21,7 @@ export const test = base.extend<{ map: MapHandle }>({
     await page.route('**/tiles/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: TILE }));
     await routeVectorTiles(page, '**/vt/buildings/**', { buildings: BUILDINGS });
     await page.goto('/');
-    const map = mapwright(page);
+    const map = geowright(page);
     await map.waitForIdle();
     await use(map);
     if (external.length) throw new Error(`external network requests are not allowed in tests:\n${external.join('\n')}`);

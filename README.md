@@ -1,7 +1,7 @@
-# mapwright (working name — taken on npm, see the design notes)
+# geowright
 
 Grey-box testing for canvas maps in Playwright. First adapter: MapLibre GL JS 6.
-Spike quality. Not published. Design log and honest caveats: the design notes.
+Prototype quality. Design log and honest caveats: the design notes.
 
 Closes two gaps a DOM-only Playwright suite has on a WebGL map:
 
@@ -14,7 +14,7 @@ Actions are **real input** (`page.mouse` at projected pixels), never `map.fire()
 
 ```ts
 const map = new maplibregl.Map({ ... });
-(window.__mapwright_maps ??= {}).main = map;   // that's it; nothing is imported, nothing ships
+(window.__geowright_maps ??= {}).main = map;   // that's it; nothing is imported, nothing ships
 ```
 
 The in-page adapter is injected by Playwright at test time. (Auto-discovery is not possible for bundled ESM apps — `tests/discovery.spec.ts` proves it.)
@@ -22,9 +22,9 @@ The in-page adapter is injected by Playwright at test time. (Auto-discovery is n
 ## Test side
 
 ```ts
-import { mapwright, expect } from '../src/playwright';
+import { geowright, expect } from '../src/playwright';
 
-const map = mapwright(page);                       // { mapId?: 'main', timeout?, ignoreLayers?, mirror? }
+const map = geowright(page);                       // { mapId?: 'main', timeout?, ignoreLayers?, mirror? }
 await map.waitForIdle();
 
 // ASSERT — retrying, like web-first assertions
@@ -96,13 +96,13 @@ Browser agents get an empty `region "Map"` from the accessibility snapshot. Two 
 Playwright MCP's `--init-script` (no custom MCP server):
 
 ```sh
-npm run build:inpage      # dist/inpage.js        -> adapter + window.__mapwright.snapshot()
+npm run build:inpage      # dist/inpage.js        -> adapter + window.__geowright.snapshot()
 npx esbuild src/inpage/agent-entry.ts --bundle --format=iife --outfile=dist/inpage-agent.js   # + accessibility mirror
 npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/init-page.ts \
     --init-script dist/inpage.js --caps=vision        # or dist/inpage-agent.js, no caps needed
 ```
 
-- **Text snapshot** — the agent calls `browser_evaluate` with `window.__mapwright.snapshot('main')` (see `agent/MAP_SKILL.md`) and
+- **Text snapshot** — the agent calls `browser_evaluate` with `window.__geowright.snapshot('main')` (see `agent/MAP_SKILL.md`) and
   clicks the listed client pixels with `browser_mouse_click_xy`. Most efficient in our runs.
 - **Accessibility mirror** — features appear in the normal `browser_snapshot` as buttons; normal `browser_click` works
   (a real click that bubbles to the map, like a MapLibre Marker). Zero instructions. Also usable from tests:
@@ -113,7 +113,7 @@ npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/
 ## Vector tiles without a tile server
 
 ```ts
-import { routeVectorTiles } from 'mapwright-spike/tiles';
+import { routeVectorTiles } from 'geowright/tiles';
 await routeVectorTiles(page, '**/vt/buildings/**', { buildings: buildingsGeoJSON }); // key = MVT source-layer
 ```
 
@@ -132,7 +132,7 @@ node demo/scripts/copy-worker.mjs      # MapLibre 6 worker files -> demo/public 
 npx playwright test                    # builds the demo, serves it on :4173, runs headless
 npx playwright test --repeat-each=20   # the flake bar
 npm run dev                            # poke at the demo app by hand
-npm run pack:local                     # dist/mapwright-spike-0.0.0.tgz for trying it in another project (for local testing)
+npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it in another project (for local testing)
 ```
 
 ## Layout
@@ -140,7 +140,7 @@ npm run pack:local                     # dist/mapwright-spike-0.0.0.tgz for tryi
 ```
 demo/             the system under test (Vite + MapLibre 6 + terra-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
-src/playwright/   mapwright(page), handles, expect matchers
+src/playwright/   geowright(page), handles, expect matchers
 tests/            assert / act / draw / input / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```

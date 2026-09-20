@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import { mapwright } from '../src/playwright';
+import { geowright } from '../src/playwright';
 
 /**
  * Accessibility mirror (agent mode, opt-in): map features become real, invisible buttons inside
@@ -24,7 +24,7 @@ test.describe('accessibility mirror', () => {
   });
 
   test('aria snapshot contains the map', async ({ page }) => {
-    await expect(page.locator('[data-mapwright-mirror="main"]')).toMatchAriaSnapshot(`
+    await expect(page.locator('[data-geowright-mirror="main"]')).toMatchAriaSnapshot(`
       - group /Map main - 41 features in view, center 34\\.7800,32\\.0800 zoom 12\\.0/:
         - button /alerts 1 \\(Point\\) id=1, name=Gas leak, severity=high/
     `);
@@ -62,7 +62,7 @@ test.describe('accessibility mirror', () => {
 
   test('mirror: true option starts the mirror and restores it after navigation', async ({ page, map }) => {
     void map;
-    const mirrored = mapwright(page, { mirror: { max: 100 } });
+    const mirrored = geowright(page, { mirror: { max: 100 } });
     await page.reload();
     await mirrored.waitForIdle();
     await page.getByRole('button', { name: /Road closure/ }).click();

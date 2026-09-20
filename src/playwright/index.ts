@@ -67,8 +67,8 @@ function getInpageSource(): Promise<string> {
 
 /* ------------------------------------------------------------------ options */
 
-export interface MapwrightOptions {
-  /** Key under window.__mapwright_maps. Default "main". */
+export interface GeowrightOptions {
+  /** Key under window.__geowright_maps. Default "main". */
   mapId?: string;
   /** Default timeout for actions and waits (ms). Assertions use Playwright's expect timeout. */
   timeout?: number;
@@ -123,9 +123,9 @@ export class MapHandle {
   readonly mapId: string;
   readonly timeout: number;
   readonly ignoreLayers: string[];
-  private readonly mirrorOpt: MapwrightOptions['mirror'];
+  private readonly mirrorOpt: GeowrightOptions['mirror'];
 
-  constructor(readonly page: Page, opts: MapwrightOptions = {}) {
+  constructor(readonly page: Page, opts: GeowrightOptions = {}) {
     this.mirrorOpt = opts.mirror;
     this.mapId = opts.mapId ?? 'main';
     this.timeout = opts.timeout ?? 10_000;
@@ -147,7 +147,7 @@ export class MapHandle {
     const run = () =>
       this.page.evaluate(
         async ([m, id, a]) => {
-          const api = (window as any).__mapwright;
+          const api = (window as any).__geowright;
           if (!api) return { missing: true as const };
           return { missing: false as const, value: await api[m as string](id, ...(a as unknown[])) };
         },
@@ -178,7 +178,7 @@ export class MapHandle {
       if (Date.now() + wait > deadline) break;
       await new Promise((r) => setTimeout(r, wait));
     }
-    throw new MapwrightError(`${what}: timed out after ${timeout}ms — ${last}`);
+    throw new GeowrightError(`${what}: timed out after ${timeout}ms — ${last}`);
   }
 
   /**
@@ -365,10 +365,10 @@ export class FeatureHandle {
         return (await act(r.client)) ?? { value: true };
       });
     } catch (e) {
-      if (!(e instanceof MapwrightError)) throw e;
+      if (!(e instanceof GeowrightError)) throw e;
       const explain = await this.map._explain(this.query);
       await attach(`map state — ${what}`, explain);
-      throw new MapwrightError(`${e.message}\n\nWhat is on the map:\n${indent(explain)}`);
+      throw new GeowrightError(`${e.message}\n\nWhat is on the map:\n${indent(explain)}`);
     }
   }
 
@@ -418,7 +418,7 @@ export class FeatureHandle {
   /** lng/lat of the point on the feature that an action would use. */
   async lngLat(opts: { timeout?: number } = {}): Promise<LngLat> {
     const f = await this.info(opts);
-    if (!f.lngLat) throw new MapwrightError(`${this}.lngLat(): feature is rendered but not inside the viewport`);
+    if (!f.lngLat) throw new GeowrightError(`${this}.lngLat(): feature is rendered but not inside the viewport`);
     return f.lngLat;
   }
 
@@ -577,14 +577,14 @@ export const expect = baseExpect.extend({
 
 /* ------------------------------------------------------------------ misc */
 
-export class MapwrightError extends Error {
+export class GeowrightError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = 'MapwrightError';
+    this.name = 'GeowrightError';
   }
 }
 
-export function mapwright(page: Page, opts?: MapwrightOptions): MapHandle {
+export function geowright(page: Page, opts?: GeowrightOptions): MapHandle {
   return new MapHandle(page, opts);
 }
 
