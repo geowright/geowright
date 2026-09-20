@@ -45,6 +45,7 @@ const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
   find: (mapId: string, q: any) => engine(mapId).find(q),
   actionPoint: (mapId: string, q: any, opts: any) => engine(mapId).actionPoint(q, opts),
+  debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
   overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
   geometry: (mapId: string, q: any) => engine(mapId).geometry(q),
   compareGeometry: (mapId: string, q: any, expected: any, tolerancePx: number) => engine(mapId).compareGeometry(q, expected, tolerancePx),

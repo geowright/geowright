@@ -56,7 +56,7 @@ test.describe('DOM markers and popups', () => {
     await page.getByTestId('toggle-markers').check();
     await map.marker({ at: { lng: 34.8, lat: 32.0595 } });
     const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout: 700 }).then(() => null, (e: Error) => e);
-    expect(err?.message).toMatch(/dom-covered: every candidate point is covered by DOM element <(div|svg|path|g|circle|ellipse)[^>]*/);
+    expect(err?.message).toMatch(/dom-covered: every candidate point is covered by DOM element .*<div\.maplibregl-marker.* data-testid="marker-pin-106">/);
     await expect(page.getByTestId('popup')).toHaveCount(0);
   });
 });

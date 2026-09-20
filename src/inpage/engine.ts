@@ -3,6 +3,7 @@ import type {
   ActionPointResult,
   CanvasAdapter,
   ClickVerdict,
+  DebugMark,
   EntityView,
   GeometryExpectation,
   GeometryVerdict,
@@ -144,22 +145,32 @@ export class Engine<W = unknown> {
     const rect = this.adapter.surface().getBoundingClientRect();
     let occluder: RenderedFeature | undefined;
     let domCover: Element | undefined;
+    const skipped = { miss: 0, occluded: 0, dom: 0 };
 
-    for (const c of cands) {
+    for (const [i, c] of cands.entries()) {
       const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
       const onTarget = hits.some((h) => this.key(h) === targetKey);
-      if (!onTarget) continue; // candidate is not actually on the rendered feature (e.g. icon offset)
+      if (!onTarget) {
+        skipped.miss++; // candidate is not actually on the rendered feature (e.g. icon offset)
+        continue;
+      }
       if (!opts.force && this.entityKey(hits[0]) !== targetEntity) {
         occluder ??= hits[0];
+        skipped.occluded++;
         continue;
       }
       const client = { x: rect.left + c.x, y: rect.top + c.y };
       const el = topElementAt(client.x, client.y);
       if (el !== this.adapter.surface()) {
         domCover ??= el ?? undefined;
+        skipped.dom++;
         continue;
       }
-      return { ok: true, client: round(client), surface: round(c), feature: this.summarize(pieces) };
+      const why =
+        `candidate ${i + 1} of ${cands.length} (${pieces[0].geometry.type.includes('Polygon') ? 'interior points, farthest from the edge first' : pieces[0].geometry.type.includes('Line') ? 'middle of the line first' : 'centre first, then a ring around it'})` +
+        (i ? `; skipped before it: ${skipped.occluded} under another feature${occluder ? ` (${occluder.layer}${occluder.id !== undefined ? '#' + occluder.id : ''})` : ''}, ${skipped.dom} under DOM${domCover ? ` (${describeEl(domCover)})` : ''}, ${skipped.miss} not on the feature` : '') +
+        (opts.force ? '; force: occlusion not checked' : '');
+      return { ok: true, client: round(client), surface: round(c), feature: this.summarize(pieces), why };
     }
     if (domCover) return fail('dom-covered', `every candidate point is covered by DOM element ${describeEl(domCover)}`);
     if (occluder) {
@@ -210,6 +221,41 @@ export class Engine<W = unknown> {
     const r = this.actionPointOnce(q, {});
     if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
     return { ok: true, diff: this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
+  }
+
+  /* ---------------- failure artefacts ---------------- */
+
+  /**
+   * What to draw on a failure screenshot: for every feature the query matches, its candidate pixels
+   * classified the same way `actionPoint` classifies them, plus the asked-for location if any.
+   */
+  debugMarks(q: FeatureQuery, opts: ActionPointOptions = {}): DebugMark[] {
+    const rect = this.adapter.surface().getBoundingClientRect();
+    const size = this.surfaceSize();
+    const ignore = new Set(opts.ignoreLayers ?? []);
+    const marks: DebugMark[] = [];
+    if (q.at) {
+      const p = this.adapter.project(q.at as W);
+      marks.push({ x: rect.left + p.x, y: rect.top + p.y, kind: 'target', label: 'at' });
+    }
+    for (const pieces of [...this.group(q).values()].slice(0, 8)) {
+      const k = this.key(pieces[0]);
+      const ek = this.entityKey(pieces[0]);
+      let labelled = false;
+      for (const c of this.candidates(pieces, size).slice(0, 25)) {
+        const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
+        const client = { x: rect.left + c.x, y: rect.top + c.y };
+        const el = topElementAt(client.x, client.y);
+        const kind: DebugMark['kind'] = !hits.some((h) => this.key(h) === k) ? 'miss' : this.entityKey(hits[0]) !== ek ? 'occluded' : el !== this.adapter.surface() ? 'dom' : 'ok';
+        const label = labelled
+          ? undefined
+          : `${pieces[0].layer}${pieces[0].id !== undefined ? '#' + pieces[0].id : ''}` +
+            (kind === 'occluded' ? ` under ${hits[0].layer}${hits[0].id !== undefined ? '#' + hits[0].id : ''}` : kind === 'dom' && el ? ` under ${describeEl(el)}` : '');
+        labelled = true;
+        marks.push({ ...client, kind, label });
+      }
+    }
+    return marks;
   }
 
   /* ---------------- DOM overlays (markers, popups) ---------------- */
@@ -870,8 +916,18 @@ export function describe(f: { layer: string; id?: string | number; properties: R
 }
 
 function describeEl(el: Element): string {
-  const id = el.id ? `#${el.id}` : '';
-  const cls = typeof el.className === 'string' && el.className ? '.' + el.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
-  const tid = el.getAttribute('data-testid');
-  return `<${el.tagName.toLowerCase()}${id}${cls}${tid ? ` data-testid="${tid}"` : ''}>`;
+  const one = (e: Element) => {
+    const id = e.id ? `#${e.id}` : '';
+    const cls = typeof e.className === 'string' && e.className ? '.' + e.className.trim().split(/\s+/).slice(0, 2).join('.') : '';
+    const tid = e.getAttribute('data-testid');
+    return { named: !!(id || cls || tid), text: `<${e.tagName.toLowerCase()}${id}${cls}${tid ? ` data-testid="${tid}"` : ''}>` };
+  };
+  const self = one(el);
+  if (self.named) return self.text;
+  // An anonymous inner node (an <ellipse> inside a marker's SVG) says nothing: name its nearest identifiable ancestor too.
+  for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+    const anc = one(p);
+    if (anc.named) return `${self.text} in ${anc.text}`;
+  }
+  return self.text;
 }

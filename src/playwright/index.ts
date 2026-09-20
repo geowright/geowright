@@ -6,6 +6,7 @@ import type {
   ActionPointOptions,
   ActionPointResult,
   ClickVerdict,
+  DebugMark,
   Geometry,
   GeometryExpectation,
   GeometryVerdict,
@@ -88,6 +89,12 @@ export interface GeowrightOptions {
    * Trade-off: it adds DOM to the page under test. Off by default.
    */
   mirror?: boolean | { max?: number };
+  /**
+   * When an action or assertion fails under @playwright/test, attach a screenshot of the map with
+   * the expectation drawn on it (candidate pixels, occluders, asked-for location). The drawing is a
+   * pointer-events:none overlay that exists only while the screenshot is taken. Default true.
+   */
+  failureScreenshots?: boolean;
 }
 
 /** Which marker / popup: at a location, and/or pointing at a feature. */
@@ -148,9 +155,11 @@ export class MapHandle {
   readonly timeout: number;
   readonly ignoreLayers: string[];
   private readonly mirrorOpt: GeowrightOptions['mirror'];
+  private readonly failureScreenshots: boolean;
 
   constructor(readonly page: Page, opts: GeowrightOptions = {}) {
     this.mirrorOpt = opts.mirror;
+    this.failureScreenshots = opts.failureScreenshots ?? true;
     this.mapId = opts.mapId ?? 'main';
     this.timeout = opts.timeout ?? 10_000;
     this.ignoreLayers = opts.ignoreLayers ?? [];
@@ -164,6 +173,70 @@ export class MapHandle {
   /** @internal */
   _explain(q: FeatureQuery): Promise<string> {
     return this._call<string>('explain', toWire(q)).catch((e) => `(could not inspect the map: ${(e as Error).message.split('\n')[0]})`);
+  }
+
+  /**
+   * @internal Failure artefact: the map as it is NOW, with marks drawn on it. The overlay is added,
+   * screenshotted and removed in one go (never left in the app's DOM), and nothing here may throw:
+   * a failing artefact must not mask the real failure.
+   */
+  async _attachFailureScreenshot(name: string, query: FeatureQuery | undefined, extra: DebugMark[] = [], opts: ActionPointOptions = {}): Promise<void> {
+    if (!this.failureScreenshots) return;
+    try {
+      test.info();
+    } catch {
+      return; // not under @playwright/test: nowhere to attach
+    }
+    const id = `geowright-marks-${Math.random().toString(36).slice(2)}`;
+    try {
+      const marks = [...extra, ...(query ? await this._call<DebugMark[]>('debugMarks', toWire(query), opts) : [])];
+      const clip = await this.page.evaluate(
+        ([overlayId, mapId, list]) => {
+          const map = (window as any).__geowright_maps?.[mapId as string];
+          const r = (map?.getCanvas?.() as HTMLElement | undefined)?.getBoundingClientRect();
+          const color = { ok: '#00c853', miss: '#9e9e9e', occluded: '#d50000', dom: '#ff6d00', target: '#2962ff' } as Record<string, string>;
+          const ns = 'http://www.w3.org/2000/svg';
+          const svg = document.createElementNS(ns, 'svg');
+          svg.id = overlayId as string;
+          svg.setAttribute('style', 'position:fixed;inset:0;width:100vw;height:100vh;pointer-events:none;z-index:2147483647;');
+          for (const m of list as DebugMark[]) {
+            const g = document.createElementNS(ns, 'g');
+            const c = color[m.kind];
+            const arm = m.kind === 'target' ? 9 : 5;
+            g.innerHTML =
+              `<path d="M${m.x - arm},${m.y}H${m.x + arm}M${m.x},${m.y - arm}V${m.y + arm}" stroke="#fff" stroke-width="4"/>` +
+              `<path d="M${m.x - arm},${m.y}H${m.x + arm}M${m.x},${m.y - arm}V${m.y + arm}" stroke="${c}" stroke-width="2"/>` +
+              (m.kind === 'target' ? `<circle cx="${m.x}" cy="${m.y}" r="12" fill="none" stroke="${c}" stroke-width="2"/>` : '');
+            if (m.label) {
+              const t = document.createElementNS(ns, 'text');
+              const flip = m.x + 10 + m.label.length * 7 > (r?.right ?? Infinity); // keep the label inside the clip
+              if (flip) t.setAttribute('text-anchor', 'end');
+              t.setAttribute('x', String(flip ? m.x - 10 : m.x + 10));
+              t.setAttribute('y', String(m.y - 8));
+              t.setAttribute('style', `font:bold 12px system-ui;fill:${c};paint-order:stroke;stroke:#fff;stroke-width:3px;`);
+              t.textContent = m.label;
+              g.appendChild(t);
+            }
+            svg.appendChild(g);
+          }
+          const legend = document.createElementNS(ns, 'text');
+          legend.setAttribute('x', String((r?.left ?? 0) + 8));
+          legend.setAttribute('y', String((r?.bottom ?? 20) - 8));
+          legend.setAttribute('style', 'font:12px system-ui;fill:#000;paint-order:stroke;stroke:#fff;stroke-width:3px;');
+          legend.textContent = 'geowright: green = clickable pixel · red = under another feature · orange = under DOM · grey = not on the feature · blue = asked location';
+          svg.appendChild(legend);
+          document.documentElement.appendChild(svg);
+          return r ? { x: Math.max(0, r.left), y: Math.max(0, r.top), width: r.width, height: r.height } : null;
+        },
+        [id, this.mapId, marks] as const,
+      );
+      const body = await this.page.screenshot({ clip: clip ?? undefined, animations: 'disabled', caret: 'initial' });
+      await test.info().attach(name, { body, contentType: 'image/png' });
+    } catch {
+      /* best effort */
+    } finally {
+      await this.page.evaluate((overlayId) => document.getElementById(overlayId)?.remove(), id).catch(() => {});
+    }
   }
 
   /** @internal RPC into the in-page engine; (re)injects it on demand, e.g. after navigation. */
@@ -354,9 +427,20 @@ export class MapHandle {
   }
 
   /** @internal lngLat -> client pixel, waiting until it is in view, uncovered and the map is still. */
-  _pointAt(at: LngLat, opts: ActionOptions, what: string): Promise<{ x: number; y: number }> {
+  async _pointAt(at: LngLat, opts: ActionOptions, what: string): Promise<{ x: number; y: number }> {
+    let last: { x: number; y: number } | undefined;
+    try {
+      return await this._pointAtOnce(at, opts, what, (c) => (last = c));
+    } catch (e) {
+      if (e instanceof GeowrightError) await this._attachFailureScreenshot(`map screenshot — ${what}`, undefined, last ? [{ ...last, kind: 'target', label: fmt(at) }] : []);
+      throw e;
+    }
+  }
+
+  private _pointAtOnce(at: LngLat, opts: ActionOptions, what: string, seen: (client: { x: number; y: number }) => void): Promise<{ x: number; y: number }> {
     return this._retry<{ x: number; y: number }>(`${what} ${fmt(at)}`, opts.timeout ?? this.timeout, async () => {
       const r = await this._call<{ client: { x: number; y: number }; inside: boolean; hidden: boolean; covered: boolean; moving: boolean }>('clientPoint', at);
+      seen(r.client);
       if (r.moving) return { retry: 'map is moving' };
       if (!r.inside) {
         if (!opts.autoPan) return { retry: 'location is outside the viewport (pass { autoPan: true } to move the camera)' };
@@ -459,12 +543,18 @@ export class FeatureHandle {
           }
           return { retry: `${r.reason}: ${r.message}` };
         }
-        return (await act(r.client)) ?? { value: true };
+        const outcome = await act(r.client);
+        if (!outcome) {
+          // Trace friendliness: WHICH pixel, and why that one. One short text attachment per action.
+          await attach(`pixel — ${what}`, `client (${r.client.x}, ${r.client.y}) · canvas (${r.surface.x}, ${r.surface.y})${r.feature.world ? ` · ${JSON.stringify(r.feature.world)}` : ''}\n${r.why}`);
+        }
+        return outcome ?? { value: true };
       });
     } catch (e) {
       if (!(e instanceof GeowrightError)) throw e;
       const explain = await this.map._explain(this.query);
       await attach(`map state — ${what}`, explain);
+      await this.map._attachFailureScreenshot(`map screenshot — ${what}`, this.query, [], this.pointOpts(opts));
       throw new GeowrightError(`${e.message}\n\nWhat is on the map:\n${indent(explain)}`);
     }
   }
@@ -619,6 +709,7 @@ export const expect = baseExpect.extend({
     const { pass, found, error } = await pollFeatures(map, query, timeout, this.isNot, (f) => f.length > 0);
     const explain = pass === this.isNot ? await map._explain(query) : '';
     if (explain) await attach('map state — toHaveFeature', explain);
+    if (explain) await map._attachFailureScreenshot('map screenshot — toHaveFeature', query);
     return {
       pass,
       name: 'toHaveFeature',
@@ -643,6 +734,7 @@ export const expect = baseExpect.extend({
     const { pass, found, error } = await pollFeatures(received.map, received.query, timeout, this.isNot, (f) => f.length === expected);
     const explain = pass === this.isNot ? await received.map._explain(received.query) : '';
     if (explain) await attach('map state — toHaveFeatureCount', explain);
+    if (explain) await received.map._attachFailureScreenshot('map screenshot — toHaveFeatureCount', received.query);
     return {
       pass,
       name: 'toHaveFeatureCount',
@@ -701,6 +793,7 @@ export const expect = baseExpect.extend({
     }
     const explain = pass === this.isNot ? await map._explain(query) : '';
     if (explain) await attach('map state — toBeVisibleOnMap', explain);
+    if (explain) await map._attachFailureScreenshot('map screenshot — toBeVisibleOnMap', query);
     return {
       pass,
       name: 'toBeVisibleOnMap',

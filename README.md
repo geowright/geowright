@@ -24,7 +24,7 @@ The in-page adapter is injected by Playwright at test time. (Auto-discovery is n
 ```ts
 import { geowright, expect } from '../src/playwright';
 
-const map = geowright(page);                       // { mapId?: 'main', timeout?, ignoreLayers?, mirror? }
+const map = geowright(page);                       // { mapId?: 'main', timeout?, ignoreLayers?, mirror?, failureScreenshots? }
 await map.waitForIdle();
 
 // ASSERT — retrying, like web-first assertions
@@ -113,6 +113,8 @@ What is on the map:
     "severity" wanted "critical"; rendered values: "low", "medium", "high"
 ```
 
+A failure also attaches `map screenshot — <call>`: the map with every candidate pixel drawn on it (green clickable, red under another feature, orange under DOM, grey not on the feature, blue the asked location). Every successful action attaches `pixel — <call>`: which pixel it used and what it skipped first. `{ failureScreenshots: false }` turns the screenshot off.
+
 It also distinguishes: layer does not exist · layer hidden · feature exists in the source but is off-screen · occluded (names the occluder) · ambiguous (lists the matches). The same text is attached to the HTML report / trace as `map state — …`.
 
 ### DOM markers and popups
@@ -188,6 +190,6 @@ npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it 
 demo/             the system under test (Vite + MapLibre 6 + terra-draw; dense.html = 5k points; draw2.html = mapbox-gl-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   geowright(page), handles, expect matchers
-tests/            assert / act / draw / draw2 / dense / camera / overlays / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
+tests/            assert / act / draw / draw2 / dense / camera / overlays / artefacts / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```

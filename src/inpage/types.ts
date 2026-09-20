@@ -168,7 +168,8 @@ export type ActionPointFailure =
   | 'unstable';
 
 export type ActionPointResult =
-  | { ok: true; client: Pt; surface: Pt; feature: FeatureSummary }
+  /** `why`: which candidate pixel was chosen and what was skipped before it — for traces. */
+  | { ok: true; client: Pt; surface: Pt; feature: FeatureSummary; why: string }
   | { ok: false; reason: ActionPointFailure; message: string };
 
 export interface ClickVerdict {
@@ -245,4 +246,13 @@ export interface Overlay {
   /** The pixel the overlay points at (popup tip; marker anchor if it can be known), surface-relative. */
   anchor?: Pt;
   text: string;
+}
+
+/** Something to draw on a failure screenshot, in CLIENT pixels. */
+export interface DebugMark {
+  x: number;
+  y: number;
+  /** ok: clean clickable pixel · miss: not on the feature · occluded / dom: on it but covered · target: an asked-for location */
+  kind: 'ok' | 'miss' | 'occluded' | 'dom' | 'target';
+  label?: string;
 }
