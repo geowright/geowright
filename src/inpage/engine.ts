@@ -23,14 +23,20 @@ export class Engine<W = unknown> {
     return q.layer === undefined ? undefined : Array.isArray(q.layer) ? q.layer : [q.layer];
   }
 
-  private matches(f: RenderedFeature, q: FeatureQuery): boolean {
+  /** `rendered: false` for features that come from source DATA: paint visibility does not apply. */
+  private matches(f: RenderedFeature, q: FeatureQuery, rendered = true): boolean {
     if (q.id !== undefined && String(f.id) !== String(q.id)) return false;
+    if (rendered && q.visible !== undefined && this.visibility(f).visible !== q.visible) return false;
     if (q.where) {
       for (const [k, v] of Object.entries(q.where)) {
         if (!testWhere(f.properties[k], v)) return false;
       }
     }
     return true;
+  }
+
+  private visibility(f: RenderedFeature) {
+    return this.adapter.visibility?.(f) ?? { visible: true };
   }
 
   /**
@@ -75,7 +81,10 @@ export class Engine<W = unknown> {
     const size = this.surfaceSize();
     const best = this.candidates(pieces, size)[0];
     const rect = this.adapter.surface().getBoundingClientRect();
+    const vis = this.visibility(f);
     return {
+      visible: vis.visible,
+      invisibleBecause: vis.visible ? undefined : vis.reason,
       layer: f.layer,
       id: f.id,
       properties: f.properties,
@@ -118,6 +127,10 @@ export class Engine<W = unknown> {
       return fail('ambiguous', `strict mode violation: query resolved to ${groups.length} features: ${list}`);
     }
     const pieces = groups[0];
+    const vis = this.visibility(pieces[0]);
+    if (!vis.visible && !opts.force) {
+      return fail('invisible', `feature is rendered but not visible: ${vis.reason}. A user cannot see it; use { force: true } to act on it anyway.`);
+    }
     const targetKey = this.key(pieces[0]);
     const targetEntity = this.entityKey(pieces[0]);
     const size = this.surfaceSize();
@@ -183,6 +196,17 @@ export class Engine<W = unknown> {
   private surfaceSize() {
     const el = this.adapter.surface();
     return { w: el.clientWidth, h: el.clientHeight };
+  }
+
+  /**
+   * Ground-truth visibility: do the pixels at the feature's action point change when its layer is
+   * not drawn? Catches what paint evaluation cannot (transparent icon image, colour identical to
+   * what is underneath). Layer-level differential at a pixel that hit-tests to the feature.
+   */
+  pixelProbe(q: FeatureQuery): { ok: true; diff: number | undefined; surface: Pt; layer: string } | { ok: false; message: string } {
+    const r = this.actionPointOnce(q, {});
+    if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
+    return { ok: true, diff: this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
   }
 
   /* ---------------- click-time verification ---------------- */
@@ -279,6 +303,16 @@ export class Engine<W = unknown> {
             (values.length ? values.slice(0, 10).join(', ') + (values.length > 10 ? ', …' : '') : '(none)'),
         );
       }
+      if (q.visible !== undefined) {
+        const { visible: _v, ...anyVisibility } = q;
+        const other = this.find({ ...anyVisibility, layer: id }).filter((f) => f.visible !== q.visible);
+        if (other.length) {
+          lines.push(
+            `  ${other.length} feature(s) match but are ${q.visible ? 'NOT VISIBLE' : 'visible'}` +
+              (q.visible ? `: ${other.slice(0, 3).map((f) => `${f.layer}${f.id !== undefined ? '#' + f.id : ''} (${f.invisibleBecause})`).join('; ')}` : ''),
+          );
+        }
+      }
       if (q.id !== undefined && rendered.length) {
         lines.push(`  id wanted ${JSON.stringify(q.id)}; rendered ids: ${rendered.slice(0, 15).map((f) => JSON.stringify(f.id)).join(', ')}`);
       }
@@ -290,7 +324,7 @@ export class Engine<W = unknown> {
         );
       }
       if (data) {
-        const offscreen = data.filter((f) => this.matches(f, q));
+        const offscreen = data.filter((f) => this.matches(f, q, false));
         if (offscreen.length && !this.find(q).length) {
           lines.push(
             `  ${offscreen.length} matching feature(s) exist in the source but are not rendered ` +
@@ -363,8 +397,19 @@ export class Engine<W = unknown> {
         }
         blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${hits[0].layer}${hits[0].id !== undefined ? '#' + hits[0].id : ''}`;
       }
-      return { key: ek, layer: e.owner, alsoLayers: [...e.byLayer.keys()].filter((l) => l !== e.owner), id: f.id, geometryType: f.geometry.type, properties: f.properties, pixel, blocked };
+      return { key: ek, layer: e.owner, alsoLayers: [...e.byLayer.keys()].filter((l) => l !== e.owner), id: f.id, geometryType: f.geometry.type, properties: f.properties, pixel, blocked, invisible: this.entityInvisible(e.byLayer) };
     });
+  }
+
+  /** An entity is invisible only if NO layer paints anything for it. Returns the reason, else undefined. */
+  private entityInvisible(byLayer: Map<string, RenderedFeature[]>): string | undefined {
+    const reasons: string[] = [];
+    for (const pieces of byLayer.values()) {
+      const v = this.visibility(pieces[0]);
+      if (v.visible) return undefined;
+      reasons.push(v.reason ?? 'not painted');
+    }
+    return reasons.join('; ');
   }
 
   /* ---------------- text snapshot for agents ---------------- */
@@ -414,10 +459,10 @@ export class Engine<W = unknown> {
       e.byLayer.get(f.layer)!.push(f);
       if (rank(f.layer) > rank(e.owner)) e.owner = f.layer;
     }
-    const byLayer = new Map<string, { pieces: RenderedFeature[]; also: Set<string> }[]>();
+    const byLayer = new Map<string, { pieces: RenderedFeature[]; also: Set<string>; invisible?: string }[]>();
     for (const e of entities.values()) {
       if (!byLayer.has(e.owner)) byLayer.set(e.owner, []);
-      byLayer.get(e.owner)!.push({ pieces: e.byLayer.get(e.owner)!, also: new Set([...e.byLayer.keys()].filter((l) => l !== e.owner)) });
+      byLayer.get(e.owner)!.push({ pieces: e.byLayer.get(e.owner)!, also: new Set([...e.byLayer.keys()].filter((l) => l !== e.owner)), invisible: this.entityInvisible(e.byLayer) });
     }
 
     const visible = layers.filter((l) => l.visible);
@@ -462,7 +507,8 @@ export class Engine<W = unknown> {
       for (const r of rows.slice(0, perLayer)) {
         const f = r.e.pieces[0];
         const pos = r.pt ? `@(${Math.round(rect.left + r.pt.x)},${Math.round(rect.top + r.pt.y)})` : '@(edge: no clickable pixel in view)';
-        out.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${r.note} ${fmtProps(f.properties, maxProps)}`);
+        const inv = r.e.invisible ? ` NOT-VISIBLE(${r.e.invisible})` : '';
+        out.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${r.note}${inv} ${fmtProps(f.properties, maxProps)}`);
       }
       const rest = rows.slice(perLayer);
       if (rest.length) out.push(`  … ${rest.length} more not listed. ${histogram(rest.map((r) => r.e.pieces[0].properties))}`);
@@ -508,7 +554,7 @@ export class Engine<W = unknown> {
     if (!this.adapter.reveal || !this.adapter.queryData) return false;
     for (const id of this.layersOf(q) ?? []) {
       const data = await this.adapter.queryData(id);
-      const hit = data?.find((f) => this.matches(f, q));
+      const hit = data?.find((f) => this.matches(f, q, false));
       if (!hit) continue;
       const first = explode(hit.geometry)[0];
       const coords = first.kind === 'point' ? [first.coord] : first.kind === 'line' ? first.coords : first.rings[0];
@@ -658,9 +704,12 @@ const round = (p: Pt): Pt => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y 
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const fail = (reason: Exclude<ActionPointResult, { ok: true }>['reason'], message: string): ActionPointResult => ({ ok: false, reason, message });
 
-export function describe(f: { layer: string; id?: string | number; properties: Record<string, unknown>; geometryType?: string; pixel?: Pt }): string {
+export function describe(f: { layer: string; id?: string | number; properties: Record<string, unknown>; geometryType?: string; pixel?: Pt; visible?: boolean; invisibleBecause?: string }): string {
   const props = JSON.stringify(f.properties);
-  return `${f.layer}${f.id !== undefined ? `#${f.id}` : ''} ${props.length > 120 ? props.slice(0, 117) + '…' : props}${f.pixel ? ` @(${f.pixel.x},${f.pixel.y})` : ''}`;
+  return (
+    `${f.layer}${f.id !== undefined ? `#${f.id}` : ''} ${props.length > 120 ? props.slice(0, 117) + '…' : props}${f.pixel ? ` @(${f.pixel.x},${f.pixel.y})` : ''}` +
+    (f.visible === false ? ` [NOT VISIBLE: ${f.invisibleBecause}]` : '')
+  );
 }
 
 function describeEl(el: Element): string {

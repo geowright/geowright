@@ -490,9 +490,10 @@ export interface ViewExpectation {
 
 export const expect = baseExpect.extend({
   /** At least one rendered feature matches. Retries; `.not` waits for none. */
-  async toHaveFeature(map: MapHandle, query: FeatureQuery, options?: { timeout?: number }) {
+  async toHaveFeature(map: MapHandle, query: FeatureQuery, options?: { timeout?: number; visible?: boolean }) {
     if (!(map instanceof MapHandle)) throw new Error('toHaveFeature: receiver must be a MapHandle — expect(map).toHaveFeature(...)');
     const timeout = options?.timeout ?? this.timeout;
+    if (options?.visible !== undefined) query = { ...query, visible: options.visible };
     const { pass, found, error } = await pollFeatures(map, query, timeout, this.isNot, (f) => f.length > 0);
     const explain = pass === this.isNot ? await map._explain(query) : '';
     if (explain) await attach('map state — toHaveFeature', explain);
@@ -530,6 +531,67 @@ export const expect = baseExpect.extend({
         `Expected: ${this.isNot ? 'not ' : ''}${expected}\nReceived: ${found.length}${error ? `  (last error: ${error})` : ''}\n` +
         found.slice(0, 8).map((f) => `  - ${fmtFeature(f)}`).join('\n') +
         `\n\nWhat is on the map:\n${indent(explain)}`,
+    };
+  },
+
+  /**
+   * The feature can actually be SEEN, not merely "rendered" (MapLibre's queryRenderedFeatures also
+   * returns opacity-0 / transparent / zero-size features). Two checks, both must hold:
+   *  1. paint: the layer's paint properties, evaluated for this feature, draw something
+   *  2. pixels (default on; `{ pixels: false }` to skip): the canvas pixels at the feature's action
+   *     point change when its layer is not drawn. Catches transparent icons and same-colour-as-
+   *     background; needs an unoccluded point, so an occluded feature is not visible either.
+   * The pixel probe re-renders the map three times and briefly toggles the layer's visibility
+   * within one task (nothing is composited, but 'styledata' fires) — it runs once, after the cheap
+   * paint check has passed, not on every poll.
+   */
+  async toBeVisibleOnMap(received: FeatureHandle, options?: { timeout?: number; pixels?: boolean }) {
+    if (!(received instanceof FeatureHandle)) throw new Error('toBeVisibleOnMap: receiver must be map.feature(...)');
+    const timeout = options?.timeout ?? this.timeout;
+    const map = received.map;
+    const { visible: _v, ...query } = received.query;
+    const deadline = Date.now() + timeout;
+    let pass = false;
+    let why = 'never checked';
+    for (let i = 0; ; i++) {
+      try {
+        await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
+        const found = await map._find(query);
+        pass = found.length === 1 && found[0].visible;
+        why = found.length === 0 ? 'no rendered feature matches' : found.length > 1 ? `strict mode violation: ${found.length} features match` : found[0].visible ? '' : `paint: ${found[0].invisibleBecause}`;
+        if (pass && options?.pixels !== false) {
+          const probe = await map._call<{ ok: true; diff?: number; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query));
+          if (!probe.ok) {
+            pass = false;
+            why = `pixels: no clean point to probe — ${probe.message}`;
+          } else if (probe.diff === 0) {
+            pass = false;
+            why = `pixels: hiding layer "${probe.layer}" changes nothing at (${probe.surface.x},${probe.surface.y}) — it paints nothing a user could see there`;
+          }
+        }
+        if (pass !== this.isNot) break;
+      } catch (e) {
+        why = (e as Error).message.split('\n')[0];
+      }
+      const wait = POLL[Math.min(i + 2, POLL.length - 1)];
+      if (Date.now() + wait >= deadline) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    const explain = pass === this.isNot ? await map._explain(query) : '';
+    if (explain) await attach('map state — toBeVisibleOnMap', explain);
+    return {
+      pass,
+      name: 'toBeVisibleOnMap',
+      message: () =>
+        `expect(${received}).${this.isNot ? 'not.' : ''}toBeVisibleOnMap()
+
+` +
+        `Expected: ${this.isNot ? 'not visible (absent, or painted invisibly)' : 'exactly one matching feature, visible to a user'}, within ${timeout}ms
+` +
+        `Received: ${pass ? 'visible' : why}
+
+What is on the map:
+${indent(explain)}`,
     };
   },
 
@@ -620,5 +682,5 @@ async function attach(name: string, body: string): Promise<void> {
 
 const fmt = (l: LngLat) => `[${+l.lng.toFixed(5)}, ${+l.lat.toFixed(5)}]`;
 const fmtFeature = (f: FeatureSummary) =>
-  `${f.layer}${f.id !== undefined ? `#${f.id}` : ''} ${JSON.stringify(f.properties)}${f.pixel ? ` @(${f.pixel.x},${f.pixel.y})` : ''}`;
+  `${f.layer}${f.id !== undefined ? `#${f.id}` : ''} ${JSON.stringify(f.properties)}${f.pixel ? ` @(${f.pixel.x},${f.pixel.y})` : ''}${f.visible ? '' : ` [NOT VISIBLE: ${f.invisibleBecause}]`}`;
 const indent = (s: string) => s.split('\n').map((l) => '  ' + l).join('\n');

@@ -45,6 +45,7 @@ const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
   find: (mapId: string, q: any) => engine(mapId).find(q),
   actionPoint: (mapId: string, q: any, opts: any) => engine(mapId).actionPoint(q, opts),
+  pixelProbe: (mapId: string, q: any) => engine(mapId).pixelProbe(q),
   armClick: (mapId: string, q: any, opts: any) => engine(mapId).armClick(q, opts),
   disarmClick: (mapId: string, token: string) => engine(mapId).disarmClick(token),
   entities: (mapId: string, opts?: any) => engine(mapId).entities(opts),

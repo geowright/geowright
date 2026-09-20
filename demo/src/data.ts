@@ -168,3 +168,38 @@ export const ROADS: FeatureCollection<LineString, RoadProps> = {
     },
   ],
 };
+
+// ---------------------------------------------------------------------------
+// Sensors: "rendered is not visible" cases (all invented)
+// ---------------------------------------------------------------------------
+
+export interface SensorProps {
+  id: number;
+  name: string;
+  status: 'active' | 'archived';
+  kind: 'probe' | 'ghost';
+}
+
+const sensor = (id: number, name: string, status: SensorProps['status'], kind: SensorProps['kind'], coords: number[]): Feature<Point, SensorProps> => ({
+  type: 'Feature',
+  id,
+  geometry: { type: 'Point', coordinates: coords },
+  properties: { id, name, status, kind },
+});
+
+export const SENSORS: FeatureCollection<Point, SensorProps> = {
+  type: 'FeatureCollection',
+  features: [
+    sensor(501, 'Sensor Ash', 'active', 'probe', [34.72, 32.04]),
+    sensor(502, 'Sensor Birch', 'archived', 'probe', [34.735, 32.04]), // painted with opacity 0
+    sensor(503, 'Sensor Cedar', 'active', 'probe', [34.75, 32.04]),
+    sensor(504, 'Sensor Ghost', 'active', 'ghost', [34.765, 32.04]), // icon image is fully transparent
+  ],
+};
+
+export const SENSOR_ZONES: FeatureCollection<Polygon, { id: number; sensor: number }> = {
+  type: 'FeatureCollection',
+  features: [
+    { type: 'Feature', id: 601, geometry: { type: 'Polygon', coordinates: [rect(34.72, 32.04, 0.009, 0.006)] }, properties: { id: 601, sensor: 501 } },
+  ],
+};

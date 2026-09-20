@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>geowright demo — dense map</title>
+    <style>
+      html, body { margin: 0; height: 100%; font: 14px system-ui; }
+      #map { position: absolute; inset: 0 0 32px 0; }
+      #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 32px; line-height: 32px; padding: 0 12px; background: #263238; color: #fff; }
+    </style>
+  </head>
+  <body>
+    <div id="map" role="region" aria-label="Map"></div>
+    <div id="bar">Selected: <span data-testid="selected"></span></div>
+    <script type="module" src="/src/dense.ts"></script>
+  </body>
+</html>

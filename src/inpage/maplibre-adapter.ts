@@ -1,5 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Pt, RenderedFeature } from './types';
+import { paintVisibility } from './maplibre-paint';
+import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Pt, RenderedFeature, Visibility } from './types';
 
 /**
  * MapLibre GL JS adapter. PUBLIC API ONLY — no underscore fields. (MapGrab, the archived prior
@@ -117,6 +118,43 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     });
   }
 
+  visibility(f: RenderedFeature): Visibility {
+    return paintVisibility(this.map, f);
+  }
+
+  /**
+   * Pixel probe. A WebGL canvas without preserveDrawingBuffer reads back zeros — except in the
+   * same task as the draw. `redraw()` (public) renders synchronously, so: draw, read, hide the
+   * layer, draw, read, restore, draw. All in one task, so the intermediate frame is never
+   * composited (no flicker). Costs three renders (~50ms each on SwiftShader), fires 'styledata'
+   * and makes MapLibre reload the layer's source afterwards — a probe, not something to run per poll.
+   */
+  pixelContribution(layer: string, at: Pt): number | undefined {
+    const canvas = this.map.getCanvas();
+    const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as WebGLRenderingContext | null;
+    if (!gl || !this.map.getLayer(layer) || this.map.getLayoutProperty(layer, 'visibility') === 'none') return undefined;
+    const dpr = canvas.width / canvas.clientWidth;
+    const R = 2; // (2R+1)² device pixels around the point
+    const read = () => {
+      this.map.redraw();
+      const px = new Uint8Array(4 * (2 * R + 1) ** 2);
+      gl.readPixels(Math.round(at.x * dpr) - R, canvas.height - Math.round(at.y * dpr) - R - 1, 2 * R + 1, 2 * R + 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      return px;
+    };
+    const withLayer = read();
+    let without: Uint8Array;
+    try {
+      this.map.setLayoutProperty(layer, 'visibility', 'none');
+      without = read();
+    } finally {
+      this.map.setLayoutProperty(layer, 'visibility', 'visible');
+      this.map.redraw();
+    }
+    let diff = 0;
+    for (let i = 0; i < withLayer.length; i++) diff += Math.abs(withLayer[i] - without[i]);
+    return diff;
+  }
+
   subscribe(cb: () => void): () => void {
     this.map.on('idle', cb);
     return () => this.map.off('idle', cb);
@@ -134,5 +172,6 @@ function toRendered(f: MapGeoJSONFeature): RenderedFeature {
     id: f.id,
     properties: (f.properties ?? {}) as Record<string, unknown>,
     geometry: f.geometry as Geometry,
+    state: f.state as Record<string, unknown> | undefined,
   };
 }

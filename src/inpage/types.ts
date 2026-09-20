@@ -38,6 +38,14 @@ export interface RenderedFeature {
   properties: Record<string, unknown>;
   /** Geometry in world coordinates. May be a clipped piece of the full feature (tiling). */
   geometry: Geometry;
+  /** Library-side per-feature state that styling may depend on (MapLibre feature-state). */
+  state?: Record<string, unknown>;
+}
+
+/** Does the style paint anything for a feature? `reason` says why not (e.g. "circle-opacity evaluates to 0"). */
+export interface Visibility {
+  visible: boolean;
+  reason?: string;
 }
 
 export interface LayerInfo {
@@ -75,6 +83,17 @@ export interface CanvasAdapter<W = unknown> {
   waitForIdle(timeoutMs: number): Promise<boolean>;
   /** Optional: call `cb` whenever the rendered content may have changed and has settled. Returns unsubscribe. */
   subscribe?(cb: () => void): () => void;
+  /**
+   * Optional: "rendered is not visible". Libraries return features from their hit test that the
+   * style makes invisible (opacity 0, transparent colour, zero size). Must never report a false
+   * "invisible": when in doubt, visible.
+   */
+  visibility?(f: RenderedFeature): Visibility;
+  /**
+   * Optional pixel probe: how much do the surface's pixels around `at` change when `layer` is not
+   * drawn? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
+   */
+  pixelContribution?(layer: string, at: Pt): number | undefined;
   /** Optional "scrollIntoView": move the camera so `world` is comfortably inside the viewport. */
   reveal?(world: W): Promise<void>;
 }
@@ -105,6 +124,11 @@ export interface FeatureQuery {
   where?: Record<string, WhereValue | WhereOp>;
   /** Only features rendered under this world location (hit test). Disambiguates e.g. vertex handles. */
   at?: LngLat;
+  /**
+   * true: only features the style actually paints (opacity > 0, non-transparent colour, non-zero
+   * size). false: only invisible ones. Default: do not care — "rendered", as the library reports it.
+   */
+  visible?: boolean;
 }
 
 export interface FeatureSummary {
@@ -118,6 +142,9 @@ export interface FeatureSummary {
   client?: Pt;
   /** World coordinate under that pixel (for maps: { lng, lat }). */
   world?: unknown;
+  /** False when the style paints nothing for this feature ("rendered" but a user cannot see it). */
+  visible: boolean;
+  invisibleBecause?: string;
 }
 
 export type ActionPointFailure =
@@ -125,6 +152,7 @@ export type ActionPointFailure =
   | 'ambiguous'
   | 'offscreen'
   | 'occluded'
+  | 'invisible'
   | 'dom-covered'
   | 'moving'
   | 'unstable';
@@ -171,4 +199,6 @@ export interface EntityView {
   pixel?: Pt;
   /** Why there is no clean pixel (covered-by:..., covered-by-dom:..., or out of view). */
   blocked?: string;
+  /** Set when no layer paints anything for this entity (opacity 0 etc.): rendered, not visible. */
+  invisible?: string;
 }

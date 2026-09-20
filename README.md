@@ -32,6 +32,8 @@ await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'high' } }
 await expect(map).not.toHaveFeature({ layer: 'alerts', id: 2 });
 await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3);
 await expect(map).toHaveView({ center: { lng: 35.2, lat: 32.08 }, zoom: 12 });
+await expect(map).toHaveFeature({ layer: 'sensors', id: 502 }, { visible: true });   // rendered is not visible
+await expect(map.feature({ layer: 'sensors', id: 501 })).toBeVisibleOnMap();       // paint AND pixels
 
 // ACT — auto-waiting, strict, verified
 await map.feature({ layer: 'parcels', id: 123 }).click();
@@ -55,14 +57,29 @@ await map.draw.polygon([a, b, c, d], { finish: 'click-first' });          // fin
 { layer: 'alerts', where: { severity: { in: ['high', 'medium'] }, id: { gte: 2 } } }
 //   operators: eq ne gt gte lt lte in matches exists
 { layer: 'td-point', at: { lng, lat } }               // only what is rendered under that location
+{ layer: 'sensors', visible: true }                   // only what the style actually paints (see below)
 ```
 
 `map.feature(q)` is **strict** (exactly one match, like a Locator); `map.features(q)` is a set.
 Handles are lazy: nothing is resolved until an action or assertion runs.
 
+### Rendered is not visible
+
+MapLibre's `queryRenderedFeatures` also returns features painted with opacity 0, a transparent colour, zero
+radius/width or `text-opacity: 0` — so a plain `toHaveFeature` can pass on something no user can see.
+
+- `visible: true | false` in any query (or `toHaveFeature(q, { visible: true })`): evaluates the layer's paint
+  properties **for that feature** — data-driven expressions, zoom, feature-state — with MapLibre's own expression
+  evaluator. Cheap; failure messages say which property (`[NOT VISIBLE: circle-opacity evaluates to 0]`).
+- `expect(map.feature(q)).toBeVisibleOnMap()`: the paint check **and** a pixel probe (do the canvas pixels at the
+  feature change when its layer is not drawn?). Catches a transparent icon image. The probe re-renders three
+  times and toggles the layer within one task — use it where it matters, `{ pixels: false }` skips it.
+- Actions refuse an invisible feature by default (`{ force: true }` overrides). Every `FeatureSummary` has
+  `visible` / `invisibleBecause`; the snapshot tags `NOT-VISIBLE(...)`.
+
 ### What an action waits for (actionability)
 
-1. the query resolves to exactly one feature
+1. the query resolves to exactly one feature, and the style actually paints it (not opacity 0 / transparent)
 2. the map is not moving, and the target pixel is stable across two frames
 3. the pixel is **on** the feature — for polygons an interior point far from the edge, never the centroid
 4. the feature is the **topmost hit** at that pixel (its own label on top does not count as an occluder)
@@ -132,6 +149,7 @@ node demo/scripts/copy-worker.mjs      # MapLibre 6 worker files -> demo/public 
 npx playwright test                    # builds the demo, serves it on :4173, runs headless
 npx playwright test --repeat-each=20   # the flake bar
 npm run dev                            # poke at the demo app by hand
+bash scripts/kill-preview.sh           # stop THIS repo's preview server so the next run rebuilds the demo
 npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it in another project (for local testing)
 ```
 
@@ -141,6 +159,6 @@ npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it 
 demo/             the system under test (Vite + MapLibre 6 + terra-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   geowright(page), handles, expect matchers
-tests/            assert / act / draw / input / vector-tiles / two-maps / discovery / snapshot / mirror specs
+tests/            assert / act / draw / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```

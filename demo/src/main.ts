@@ -10,7 +10,7 @@ import {
 import { TerraDraw, TerraDrawPolygonMode, TerraDrawSelectMode, TerraDrawRenderMode } from 'terra-draw';
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter';
 import type { Feature, Point } from 'geojson';
-import { PARCELS, ALERTS, STATIONS, ROADS, type Severity, type AlertProps } from './data';
+import { PARCELS, ALERTS, STATIONS, ROADS, SENSORS, SENSOR_ZONES, type Severity, type AlertProps } from './data';
 
 // MapLibre 6 is ESM-only and resolves its worker relative to import.meta.url, which does
 // not survive Vite's bundling. We ship the worker (+ its shared chunk) verbatim under
@@ -63,6 +63,9 @@ const style: StyleSpecification = {
       data: ROADS as unknown as GeoJSON.GeoJSON,
       promoteId: 'id',
     },
+    // "Rendered is not visible" cases. All sensor layers start hidden (toggle in the sidebar).
+    sensors: { type: 'geojson', data: SENSORS as unknown as GeoJSON.GeoJSON, promoteId: 'id' },
+    'sensor-zones': { type: 'geojson', data: SENSOR_ZONES as unknown as GeoJSON.GeoJSON, promoteId: 'id' },
   },
   layers: [
     {
@@ -158,6 +161,39 @@ const style: StyleSpecification = {
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffffff',
       },
+    },
+    {
+      // Invisible hit areas: a common real-world trick (fill-opacity 0 so clicks near a sensor count).
+      id: 'sensor-zones',
+      type: 'fill',
+      source: 'sensor-zones',
+      layout: { visibility: 'none' },
+      paint: { 'fill-color': '#000000', 'fill-opacity': 0 },
+    },
+    {
+      // Archived (data) or muted (feature-state) sensors are hidden by a data-driven paint expression,
+      // not by a filter: MapLibre still reports them as rendered.
+      id: 'sensors',
+      type: 'circle',
+      source: 'sensors',
+      filter: ['!=', ['get', 'kind'], 'ghost'],
+      layout: { visibility: 'none' },
+      paint: {
+        'circle-radius': 9,
+        'circle-color': '#00897b',
+        'circle-stroke-color': '#ffffff',
+        'circle-stroke-width': 2,
+        'circle-opacity': ['case', ['any', ['==', ['get', 'status'], 'archived'], ['boolean', ['feature-state', 'muted'], false]], 0, 1],
+        'circle-stroke-opacity': ['case', ['any', ['==', ['get', 'status'], 'archived'], ['boolean', ['feature-state', 'muted'], false]], 0, 1],
+      },
+    },
+    {
+      // The style says "draw an icon", but the icon image is fully transparent: only pixels can tell.
+      id: 'sensors-ghost',
+      type: 'symbol',
+      source: 'sensors',
+      filter: ['==', ['get', 'kind'], 'ghost'],
+      layout: { visibility: 'none', 'icon-image': 'ghost-icon', 'icon-allow-overlap': true },
     },
     {
       // Default collision behaviour on purpose: labels that collide are hidden, like a real app.
@@ -351,6 +387,25 @@ function wireToggle(testId: string, layerIds: string[]) {
 }
 
 // ---------------------------------------------------------------------------
+// Sensors: hidden through paint, by data (archive) or by feature-state (mute)
+// ---------------------------------------------------------------------------
+
+let sensorData = SENSORS;
+(document.querySelector('[data-testid="sensor-archive-501"]') as HTMLButtonElement).addEventListener('click', () => {
+  setTimeout(() => {
+    sensorData = {
+      ...sensorData,
+      features: sensorData.features.map((f) => (f.properties.id === 501 ? { ...f, properties: { ...f.properties, status: f.properties.status === 'archived' ? 'active' : 'archived' } } : f)),
+    };
+    (map.getSource('sensors') as GeoJSONSource).setData(sensorData as unknown as GeoJSON.GeoJSON);
+  }, randomDelay());
+});
+(document.querySelector('[data-testid="sensor-mute-503"]') as HTMLButtonElement).addEventListener('click', () => {
+  const muted = !!map.getFeatureState({ source: 'sensors', id: 503 }).muted;
+  map.setFeatureState({ source: 'sensors', id: 503 }, { muted: !muted });
+});
+
+// ---------------------------------------------------------------------------
 // Clusters
 // ---------------------------------------------------------------------------
 
@@ -510,6 +565,8 @@ map.on('load', () => {
   wireToggle('toggle-stations', ['stations-clusters', 'stations-cluster-count', 'stations-points']);
   wireToggle('toggle-roads', ['roads']);
   wireToggle('toggle-buildings', ['buildings']);
+  wireToggle('toggle-sensors', ['sensor-zones', 'sensors', 'sensors-ghost']);
+  map.addImage('ghost-icon', new ImageData(24, 24)); // all pixels rgba(0,0,0,0)
 
   const adapter = new TerraDrawMapLibreGLAdapter({ map });
   terraDraw = new TerraDraw({
