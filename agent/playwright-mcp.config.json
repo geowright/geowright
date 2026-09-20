@@ -1,0 +1,15 @@
+{
+  "browser": {
+    "browserName": "chromium",
+    "isolated": true,
+    "launchOptions": {
+      "headless": true,
+      "args": [
+        "--disable-gpu",
+        "--enable-unsafe-swiftshader",
+        "--enable-features=AllowSwiftShaderFallback,AllowSoftwareGLFallbackDueToCrashes"
+      ]
+    },
+    "contextOptions": { "viewport": { "width": 1280, "height": 720 } }
+  }
+}

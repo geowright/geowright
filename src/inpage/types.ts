@@ -73,6 +73,8 @@ export interface CanvasAdapter<W = unknown> {
   isMoving(): boolean;
   /** Resolves true once fully settled, false on timeout. Must not hang if already idle. */
   waitForIdle(timeoutMs: number): Promise<boolean>;
+  /** Optional: call `cb` whenever the rendered content may have changed and has settled. Returns unsubscribe. */
+  subscribe?(cb: () => void): () => void;
   /** Optional "scrollIntoView": move the camera so `world` is comfortably inside the viewport. */
   reveal?(world: W): Promise<void>;
 }
@@ -154,4 +156,19 @@ export interface SnapshotOptions {
   /** Only these layers. Default: every layer that has rendered features, minus `skipLayers`. */
   layers?: string[];
   skipLayers?: string[];
+}
+
+/** One data entity as the snapshot / mirror see it. */
+export interface EntityView {
+  /** Stable identity (source + id + properties) — lets a mirror reuse DOM nodes across renders. */
+  key: string;
+  layer: string;
+  alsoLayers: string[];
+  id?: string | number;
+  geometryType: string;
+  properties: Record<string, unknown>;
+  /** Clickable surface pixel where the entity is the topmost hit and no DOM covers it. */
+  pixel?: Pt;
+  /** Why there is no clean pixel (covered-by:..., covered-by-dom:..., or out of view). */
+  blocked?: string;
 }

@@ -1,0 +1,1 @@
+{ "mcpServers": { "playwright": { "command": "npx", "args": ["@playwright/mcp", "--config", "agent/playwright-mcp.config.json", "--caps=vision", "--init-page", "agent/init-page.ts", "--init-script", "dist/inpage.js"] } } }

@@ -117,6 +117,11 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     });
   }
 
+  subscribe(cb: () => void): () => void {
+    this.map.on('idle', cb);
+    return () => this.map.off('idle', cb);
+  }
+
   async reveal(w: LngLat): Promise<void> {
     this.map.jumpTo({ center: [w.lng, w.lat] });
   }

@@ -3,6 +3,7 @@ import type {
   ActionPointResult,
   CanvasAdapter,
   ClickVerdict,
+  EntityView,
   SnapshotOptions,
   WhereOp,
   FeatureQuery,
@@ -309,6 +310,55 @@ export class Engine<W = unknown> {
     }
     if (!layers) lines.push(`rendered layers with features: ${[...new Set(this.adapter.queryFeatures({}).map((f) => f.layer))].join(', ')}`);
     return lines.join('\n');
+  }
+
+  /* ---------------- entities (shared by snapshot + accessibility mirror) ---------------- */
+
+  /**
+   * Rendered features folded into data entities, each with a clean clickable pixel if one exists.
+   * `ignoreDom` lets a caller declare DOM it owns (the mirror's own buttons) as transparent.
+   */
+  entities(o: { layers?: string[]; skipLayers?: string[]; ignoreDom?: (el: Element) => boolean } = {}): EntityView[] {
+    const a = this.adapter;
+    const surface = a.surface();
+    const rect = surface.getBoundingClientRect();
+    const size = this.surfaceSize();
+    const typeOf = new Map(a.listLayers().map((l) => [l.id, l.type]));
+    const rank = (layerId: string) => (typeOf.get(layerId) === 'symbol' ? 0 : typeOf.get(layerId) === 'line' ? 1 : 2);
+    const skip = new Set(o.skipLayers ?? []);
+    const only = o.layers && new Set(o.layers);
+    const found = new Map<string, { owner: string; byLayer: Map<string, RenderedFeature[]> }>();
+    for (const f of a.queryFeatures({})) {
+      if (skip.has(f.layer) || (only && !only.has(f.layer))) continue;
+      const k = this.entityKey(f);
+      let e = found.get(k);
+      if (!e) found.set(k, (e = { owner: f.layer, byLayer: new Map() }));
+      if (!e.byLayer.has(f.layer)) e.byLayer.set(f.layer, []);
+      e.byLayer.get(f.layer)!.push(f);
+      if (rank(f.layer) > rank(e.owner)) e.owner = f.layer;
+    }
+    const topEl = (c: Pt) => {
+      const stack = document.elementsFromPoint(rect.left + c.x, rect.top + c.y);
+      return stack.find((el) => !o.ignoreDom?.(el));
+    };
+    return [...found.entries()].map(([ek, e]) => {
+      const pieces = e.byLayer.get(e.owner)!;
+      const f = pieces[0];
+      let pixel: Pt | undefined;
+      let blocked: string | undefined = 'no part of it is inside the view';
+      for (const c of this.candidates(pieces, size).slice(0, 40)) {
+        const hits = a.queryFeatures({ at: c });
+        if (!hits.some((h) => this.entityKey(h) === ek)) continue;
+        const el = topEl(c);
+        if (this.entityKey(hits[0]) === ek && el === surface) {
+          pixel = round(c);
+          blocked = undefined;
+          break;
+        }
+        blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${hits[0].layer}${hits[0].id !== undefined ? '#' + hits[0].id : ''}`;
+      }
+      return { key: ek, layer: e.owner, alsoLayers: [...e.byLayer.keys()].filter((l) => l !== e.owner), id: f.id, geometryType: f.geometry.type, properties: f.properties, pixel, blocked };
+    });
   }
 
   /* ---------------- text snapshot for agents ---------------- */

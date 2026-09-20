@@ -1,5 +1,6 @@
 import { Engine } from './engine';
 import { MapLibreAdapter } from './maplibre-adapter';
+import { startMirror } from './mirror';
 import type { CanvasAdapter } from './types';
 
 /**
@@ -46,6 +47,14 @@ const api = {
   actionPoint: (mapId: string, q: any, opts: any) => engine(mapId).actionPoint(q, opts),
   armClick: (mapId: string, q: any, opts: any) => engine(mapId).armClick(q, opts),
   disarmClick: (mapId: string, token: string) => engine(mapId).disarmClick(token),
+  entities: (mapId: string, opts?: any) => engine(mapId).entities(opts),
+  /** Agent sessions only: mirror features into the accessibility tree as real, clickable buttons. */
+  mirror: (mapId: string, opts?: any) => {
+    const w = window as any;
+    (w.__mapwright_mirrors ??= {})[mapId]?.();
+    w.__mapwright_mirrors[mapId] = startMirror(engine(mapId), mapId, opts);
+    return true;
+  },
   snapshot: (mapId: string, opts?: any) => engine(mapId).snapshot(opts),
   explain: (mapId: string, q: any) => engine(mapId).explain(q),
   reveal: (mapId: string, q: any) => engine(mapId).reveal(q),
@@ -75,3 +84,28 @@ const api = {
 
 export type InPageApi = typeof api;
 (window as any).__mapwright = api;
+
+/**
+ * Agent integration, best effort: if the browser exposes the experimental WebMCP API
+ * (navigator.modelContext), register a tool. Playwright MCP collects page-registered tools and
+ * offers them to the agent, so the agent DISCOVERS the map capability instead of being told about
+ * a magic global. Read-only by nature: page JS cannot produce real input, so acting still goes
+ * through the agent's own mouse tool using the pixels in the snapshot.
+ */
+try {
+  const mc = (navigator as any).modelContext;
+  if (mc?.registerTool && !(window as any).__mapwright_webmcp) {
+    (window as any).__mapwright_webmcp = true;
+    mc.registerTool({
+      name: 'map_snapshot',
+      description:
+        'Text snapshot of the interactive map canvas on this page (invisible to the accessibility snapshot): view state, layers, ' +
+        'and every rendered feature with its properties and CLIENT pixel position. Click a feature by clicking its pixel.',
+      inputSchema: { type: 'object', properties: { mapId: { type: 'string', description: 'default "main"' } } },
+      annotations: { readOnlyHint: true },
+      execute: async (args: { mapId?: string }) => ({ content: [{ type: 'text', text: await api.snapshot(args?.mapId ?? 'main') }] }),
+    });
+  }
+} catch {
+  /* WebMCP is experimental; absence or API drift must never break the adapter */
+}
