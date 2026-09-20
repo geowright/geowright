@@ -1,0 +1,10 @@
+--- upstream/test/examples/variable-label-placement.html (v6.10.0)
++++ wild/maplibre-examples/examples/variable-label-placement.html
+@@ -109,6 +109,7 @@
+         center: [-77.04, 38.907],
+         zoom: 11.15
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         // Add a GeoJSON source containing place coordinates and information.

@@ -33,6 +33,36 @@ export function brightBasemap(center: [number, number], o: { icons?: string[] } 
   ];
 }
 
+/**
+ * The same synthetic city behind CARTO's hosted basemap styles (positron / dark-matter / voyager), which
+ * the react-map-gl examples use. Their real styles and tiles are CARTO's (OSM data, CARTO terms): not
+ * committable. Reproduced contract: the style URL, a vector source, glyphs, and the layer ids apps insert
+ * their own layers before (`waterway_label` — react-map-gl's `filter` example does `beforeId="waterway_label"`,
+ * and with a style lacking that id MapLibre throws and the map never loads: found by the vendoring smoke test).
+ */
+export function cartoBasemap(name: 'positron' | 'dark-matter' | 'voyager', center: [number, number]): Routes {
+  const dark = name === 'dark-matter';
+  const base = brightStyle();
+  const recolour: Record<string, string> = dark ? { background: '#0e0e0e', water: '#2c353c', park: '#16201a', 'landuse-residential': '#141414', building: '#1d1d1d', 'building-top': '#232323' } : {};
+  const layers = base.layers
+    .filter((l: any) => l.id !== 'natural_earth' && !/^poi_|^road_oneway/.test(l.id)) // no sprite in these styles
+    .map((l: any) => {
+      const out = { ...l, ...(l.source ? { source: 'carto' } : {}) };
+      if (l.id === 'water_name_point_label') out.id = 'waterway_label';
+      const c = recolour[l.id];
+      if (c) out.paint = { ...l.paint, [l.type === 'background' ? 'background-color' : 'fill-color']: c };
+      if (dark && l.type === 'symbol') out.paint = { ...l.paint, 'text-color': '#cfcfcf', 'text-halo-color': 'rgba(0,0,0,0.8)' };
+      return out;
+    });
+  const host = 'https://tiles.basemaps.cartocdn.com';
+  return [
+    [`https://basemaps.cartocdn.com/gl/${name}-gl-style/style.json`, { json: { version: 8, name: `geowright synthetic ${name}`, sources: { carto: { type: 'vector', url: `${host}/vector/carto.streets/v1/tiles.json` } }, glyphs: `${host}/fonts/{fontstack}/{range}.pbf`, layers } }],
+    [`${host}/vector/carto.streets/v1/tiles.json`, { json: { tilejson: '2.2.0', tiles: [`${host}/vector/carto.streets/v1/synthetic/{z}/{x}/{y}.mvt`], minzoom: 0, maxzoom: 14, bounds: [-180, -85, 180, 85] } }],
+    [/^https:\/\/tiles\.basemaps\.cartocdn\.com\/vector\/carto\.streets\/v1\/synthetic\/\d+\/\d+\/\d+\.mvt/, vectorTileHandler(syntheticCity(center))],
+    glyphs(/^https:\/\/tiles\.basemaps\.cartocdn\.com\/fonts\//),
+  ];
+}
+
 /** Metres east/north of `center` -> [lng, lat]. */
 const offset = (center: [number, number]) => (x: number, y: number): [number, number] => [center[0] + x / (111_320 * Math.cos((center[1] * Math.PI) / 180)), center[1] + y / 111_320];
 

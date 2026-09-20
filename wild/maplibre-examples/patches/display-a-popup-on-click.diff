@@ -1,0 +1,10 @@
+--- upstream/test/examples/display-a-popup-on-click.html (v6.10.0)
++++ wild/maplibre-examples/examples/display-a-popup-on-click.html
+@@ -32,6 +32,7 @@
+         center: [-77.04, 38.907],
+         zoom: 11.15
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         map.addSource('places', {

@@ -1,0 +1,10 @@
+--- upstream/test/examples/center-the-map-on-a-clicked-symbol.html (v6.10.0)
++++ wild/maplibre-examples/examples/center-the-map-on-a-clicked-symbol.html
+@@ -25,6 +25,7 @@
+         center: [-90.96, -0.47],
+         zoom: 7.5
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', async () => {
+         // Add an image to use as a custom marker

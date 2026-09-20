@@ -327,3 +327,16 @@ test.describe('describe', () => {
     expect(visibleS).not.toContain('NOT VISIBLE');
   });
 });
+
+test.describe('nested property values (found on a react-map-gl app: counties with a `flows` object)', () => {
+  test('fmtProps prints them as truncated JSON, not "[object Object]"', () => {
+    expect(fmtProps({ name: 'Seward, KS', flows: { '18': -36, '26': -6, '35': -1, '46': 16, '69': 1 }, centroid: [-100.85, 37.19, 0] }, 6)).toBe(
+      'name="Seward, KS" flows={"18":-36,"26":-6,"35":-1,"46":16,"69":1} centroid=[-100.85,37.19,0]',
+    );
+    expect(fmtProps({ flows: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [String(i), i])) }, 6)).toMatch(/^flows=\{"0":0,.{20,40}…$/);
+  });
+
+  test('histogram ignores them', () => {
+    expect(histogram([{ a: { x: 1 }, kind: 'k' }, { a: { x: 2 }, kind: 'k' }], 2)).toBe('Summary of all 2 — kind: k×2');
+  });
+});

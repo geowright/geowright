@@ -8,3 +8,5 @@ agent/runs/
 
 # wild apps: pristine upstream copies are re-fetchable (wild/scripts/examples.sh), not committed
 wild/maplibre-examples/.upstream/
+# prebuilt third-party apps ARE committed (tests must not need a second npm install)
+!wild/apps/*/dist/

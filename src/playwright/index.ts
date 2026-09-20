@@ -330,7 +330,7 @@ export class MapHandle {
     return new FeatureSetHandle(this, query);
   }
 
-  viewState(): Promise<{ center: LngLat; zoom: number; bearing: number; pitch: number; bounds: Record<string, number>; size: { width: number; height: number } }> {
+  viewState(): Promise<{ center: LngLat; zoom: number; bearing: number; pitch: number; bounds: Record<string, number>; size: { width: number; height: number }; projection: string; terrain: boolean }> {
     return this._call('viewState');
   }
 

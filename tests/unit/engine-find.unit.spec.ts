@@ -97,3 +97,33 @@ test.describe('Engine.find with a fake adapter', () => {
     expect(summary.client).toEqual({ x: RECT.left + 50, y: RECT.top + 50 });
   });
 });
+
+test.describe('id-less features with identical properties (found on MapLibre\'s symbol examples)', () => {
+  const idless = (layer: string, properties: Record<string, unknown>, geometry: RenderedFeature['geometry']): RenderedFeature => ({ layer, properties, geometry });
+  const square = (x: number, y: number, w: number): RenderedFeature['geometry'] => ({ type: 'Polygon', coordinates: [[[x, y], [x + w, y], [x + w, y + w], [x, y + w], [x, y]]] });
+
+  test('three look-alike points are THREE features (they were one)', () => {
+    const pois = [[100, 100], [300, 120], [500, 400]].map((c) => idless('poi-music', { icon: 'music' }, { type: 'Point', coordinates: c }));
+    const engine = new Engine(makeAdapter(pois));
+    expect(engine.find({ layer: 'poi-music' })).toHaveLength(3);
+    expect(engine.find({ layer: 'poi-music', where: { icon: 'music' } }).map((f) => f.pixel)).toEqual([{ x: 100, y: 100 }, { x: 300, y: 120 }, { x: 500, y: 400 }]);
+  });
+
+  test('the same point returned twice (two tiles\' buffers) is still ONE', () => {
+    const p = () => idless('poi', {}, { type: 'Point', coordinates: [256, 300] });
+    expect(new Engine(makeAdapter([p(), p()])).find({ layer: 'poi' })).toHaveLength(1);
+  });
+
+  test('tile pieces of ONE polygon touch, so they stay one; a look-alike elsewhere is another', () => {
+    const left = idless('lots', { use: 'vacant' }, square(100, 100, 56)); // clipped at a tile border x=156 (+ buffer)
+    const right = idless('lots', { use: 'vacant' }, square(150, 100, 60));
+    const elsewhere = idless('lots', { use: 'vacant' }, square(400, 300, 50));
+    expect(new Engine(makeAdapter([left, right, elsewhere])).find({ layer: 'lots' })).toHaveLength(2);
+  });
+
+  test('features WITH an id are grouped by it alone, however far apart their pieces are (world copies, multi-part shapes)', () => {
+    const a = point('islands', 7, { name: 'x' }, [50, 50]);
+    const b = point('islands', 7, { name: 'x' }, [700, 500]);
+    expect(new Engine(makeAdapter([a, b])).find({ layer: 'islands' })).toHaveLength(1);
+  });
+});

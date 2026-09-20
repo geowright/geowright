@@ -63,6 +63,57 @@ export class Engine<W = unknown> {
     return `${f.source ?? f.layer}|${f.id ?? ''}|${JSON.stringify(f.properties)}`;
   }
 
+  /**
+   * Features with NO id and IDENTICAL properties — three POIs that are all just `{ icon: "music" }`, buildings
+   * with no attributes at all — have the same key, and until an earlier phase they silently became ONE feature (found on
+   * MapLibre's own symbol examples). Geometry is all that tells them apart, but it cannot simply go into the
+   * key: pieces of one tiled polygon have different (clipped) geometries. What pieces of ONE feature do is
+   * touch: neighbouring tiles overlap by their buffer. So same-key, id-less pieces are split into connected
+   * components of their on-screen boxes. Limit: two id-less, property-identical shapes that touch stay one.
+   */
+  private split(pieces: RenderedFeature[]): RenderedFeature[][] {
+    if (pieces.length < 2 || pieces[0].id !== undefined) return [pieces];
+    // Sweep along x so that thousands of look-alike points cost n·log n, not n².
+    const boxes = pieces.map((p, i) => ({ i, ...this.box(p) })).sort((a, b) => a.x0 - b.x0);
+    const parent = pieces.map((_, i) => i);
+    const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
+    for (let m = 0; m < boxes.length; m++) {
+      for (let n = m + 1; n < boxes.length && boxes[n].x0 <= boxes[m].x1 + TOUCH_PX; n++) {
+        if (boxes[m].y0 <= boxes[n].y1 + TOUCH_PX && boxes[n].y0 <= boxes[m].y1 + TOUCH_PX) parent[root(boxes[m].i)] = root(boxes[n].i);
+      }
+    }
+    const out = new Map<number, RenderedFeature[]>();
+    pieces.forEach((p, i) => out.set(root(i), [...(out.get(root(i)) ?? []), p]));
+    return [...out.values()];
+  }
+
+  /** On-screen bounding box of a piece's geometry. */
+  private box(f: RenderedFeature) {
+    const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
+    for (const part of explode(f.geometry)) {
+      for (const c of part.kind === 'point' ? [part.coord] : part.kind === 'line' ? part.coords : part.rings[0]) {
+        const p = this.adapter.project(this.adapter.worldFromCoord(c));
+        b.x0 = Math.min(b.x0, p.x); b.y0 = Math.min(b.y0, p.y); b.x1 = Math.max(b.x1, p.x); b.y1 = Math.max(b.y1, p.y);
+      }
+    }
+    return b;
+  }
+
+  private touch(a: RenderedFeature, b: RenderedFeature): boolean {
+    const p = this.box(a), q = this.box(b);
+    return p.x0 <= q.x1 + TOUCH_PX && q.x0 <= p.x1 + TOUCH_PX && p.y0 <= q.y1 + TOUCH_PX && q.y0 <= p.y1 + TOUCH_PX;
+  }
+
+  /** Is this hit a piece of THAT feature? The key decides, plus — for id-less features — touching it. */
+  private isPieceOf(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
+    return this.key(h) === this.key(pieces[0]) && (h.id !== undefined || pieces.some((p) => this.touch(h, p)));
+  }
+
+  /** Same DATA entity (whatever layer drew it): a circle and its own label, a fill and its outline. */
+  private sameEntity(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
+    return this.entityKey(h) === this.entityKey(pieces[0]) && (h.id !== undefined || pieces.some((p) => this.touch(h, p)));
+  }
+
   /** Rendered features matching the query, grouped into logical features (pieces merged). */
   private group(q: FeatureQuery): Map<string, RenderedFeature[]> {
     const at = q.at ? this.adapter.project(q.at as W) : undefined;
@@ -73,6 +124,12 @@ export class Engine<W = unknown> {
       const g = groups.get(k);
       if (g) g.push(f);
       else groups.set(k, [f]);
+    }
+    for (const [k, pieces] of [...groups]) {
+      const parts = this.split(pieces);
+      if (parts.length < 2) continue;
+      groups.delete(k);
+      parts.forEach((part, i) => groups.set(`${k}#${i}`, part));
     }
     return groups;
   }
@@ -154,8 +211,6 @@ export class Engine<W = unknown> {
     if (!vis.visible && !opts.force) {
       return fail('invisible', `feature is rendered but not visible: ${vis.reason}. A user cannot see it; use { force: true } to act on it anyway.`);
     }
-    const targetKey = this.key(pieces[0]);
-    const targetEntity = this.entityKey(pieces[0]);
     const size = this.surfaceSize();
     const cands = this.candidates(pieces, size);
     if (cands.length === 0) return fail('offscreen', 'feature is rendered but no part of it is inside the viewport');
@@ -172,13 +227,13 @@ export class Engine<W = unknown> {
       // A user does not hunt for the one uncovered sliver either; after MAX_TRIES it is "occluded".
       if (i >= MAX_TRIES) break;
       const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
-      const onTarget = hits.some((h) => this.key(h) === targetKey);
+      const onTarget = hits.some((h) => this.isPieceOf(h, pieces));
       if (!onTarget) {
         skipped.miss++; // candidate is not actually on the rendered feature (e.g. icon offset)
         continue;
       }
       const top = this.topVisible(hits)!;
-      if (!opts.force && this.entityKey(top) !== targetEntity) {
+      if (!opts.force && !this.sameEntity(top, pieces)) {
         occluder ??= top;
         skipped.occluded++;
         continue;
@@ -278,15 +333,13 @@ export class Engine<W = unknown> {
       marks.push({ x: rect.left + p.x, y: rect.top + p.y, kind: 'target', label: 'at' });
     }
     for (const pieces of [...this.group(q).values()].slice(0, 8)) {
-      const k = this.key(pieces[0]);
-      const ek = this.entityKey(pieces[0]);
       let labelled = false;
       for (const c of this.candidates(pieces, size).slice(0, 25)) {
         const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
         const client = { x: rect.left + c.x, y: rect.top + c.y };
         const el = topElementAt(client.x, client.y);
         const top = this.topVisible(hits);
-        const kind: DebugMark['kind'] = !hits.some((h) => this.key(h) === k) ? 'miss' : this.entityKey(top!) !== ek ? 'occluded' : el !== this.adapter.surface() ? 'dom' : 'ok';
+        const kind: DebugMark['kind'] = !hits.some((h) => this.isPieceOf(h, pieces)) ? 'miss' : !this.sameEntity(top!, pieces) ? 'occluded' : el !== this.adapter.surface() ? 'dom' : 'ok';
         const label = labelled
           ? undefined
           : `${pieces[0].layer}${pieces[0].id !== undefined ? '#' + pieces[0].id : ''}` +
@@ -414,7 +467,7 @@ export class Engine<W = unknown> {
         const layers = this.layersOf(q);
         const mine = hits.find((h) => (!layers || layers.includes(h.layer)) && this.matches(h, q));
         if (!mine) verdict.reason = 'target was no longer under the pointer when the click arrived';
-        else if (!opts.force && this.entityKey(this.topVisible(hits)!) !== this.entityKey(mine)) {
+        else if (!opts.force && !this.sameEntity(this.topVisible(hits)!, [mine])) {
           const top = this.topVisible(hits)!;
           verdict.reason = `target was covered by ${describe({ ...top, geometryType: top.geometry.type })} when the click arrived`;
         } else verdict.ok = true;
@@ -555,11 +608,23 @@ export class Engine<W = unknown> {
       e.byLayer.get(f.layer)!.push(f);
       if (rank(f.layer) > rank(e.owner)) e.owner = f.layer;
     }
-    for (const [k, e] of found) {
+    for (const [k, e] of [...found]) {
       if (o.filter && !matched.has(k)) {
         found.delete(k);
         continue;
       }
+      // id-less look-alikes (see split()): one entity per connected component, over ALL its layers' pieces
+      const parts = this.split([...e.byLayer.values()].flat());
+      if (parts.length < 2) continue;
+      found.delete(k);
+      parts.forEach((part, i) => {
+        const byLayer = new Map<string, RenderedFeature[]>();
+        for (const f of part) byLayer.set(f.layer, [...(byLayer.get(f.layer) ?? []), f]);
+        const owner = [...byLayer.keys()].reduce((best, l) => (rank(l) > rank(best) ? l : best));
+        found.set(`${k}#${i}`, { key: `${k}#${i}`, owner, byLayer, d: Infinity });
+      });
+    }
+    for (const e of found.values()) {
       e.cands = this.candidates(e.byLayer.get(e.owner)!, size);
       const c = e.cands[0];
       e.d = c ? Math.hypot(c.x - centre.x, c.y - centre.y) : Infinity;
@@ -577,10 +642,11 @@ export class Engine<W = unknown> {
     let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
     for (const c of (e.cands ?? []).slice(0, 40)) {
       const hits = this.adapter.queryFeatures({ at: c });
-      if (!hits.some((h) => this.entityKey(h) === e.key)) continue;
+      const all = [...e.byLayer.values()].flat();
+      if (!hits.some((h) => this.sameEntity(h, all))) continue;
       const el = document.elementsFromPoint(rect.left + c.x, rect.top + c.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
       const top = this.topVisible(hits)!;
-      if (this.entityKey(top) === e.key && el === surface) return { pixel: round(c) };
+      if (this.sameEntity(top, all) && el === surface) return { pixel: round(c) };
       coveredPixel ??= round(c);
       blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${top.layer}${top.id !== undefined ? '#' + top.id : ''}`;
     }
@@ -789,6 +855,9 @@ export class Engine<W = unknown> {
 /** Layer types that paint pixels without features one could query or click. */
 const PIXEL_ONLY = new Set(['raster', 'hillshade', 'heatmap', 'background', 'color-relief', 'custom']);
 
+/** Pieces of one id-less feature whose on-screen boxes come this close (px) belong together. */
+const TOUCH_PX = 0.75;
+
 /** Hit tests per attempt at finding a clickable pixel on one feature. */
 const MAX_TRIES = 600;
 
@@ -914,8 +983,10 @@ export function distToRing(p: Pt, ring: Pt[]): number {
 export function fmtProps(p: Record<string, unknown>, max: number): string {
   const keys = Object.keys(p);
   const shown = keys.slice(0, max).map((k) => {
-    let v = typeof p[k] === 'string' ? JSON.stringify(p[k]) : String(p[k]);
-    if (v.length > 42) v = v.slice(0, 40) + '…"';
+    // Nested values are common in the wild (GeoJSON sources keep objects/arrays as they are): String() would print "[object Object]".
+    const isObj = typeof p[k] === 'object' && p[k] !== null;
+    let v = typeof p[k] === 'string' || isObj ? JSON.stringify(p[k]) : String(p[k]);
+    if (v.length > 42) v = v.slice(0, 40) + (isObj ? '…' : '…"');
     return `${k}=${v}`;
   });
   return shown.join(' ') + (keys.length > max ? ` (+${keys.length - max} props)` : '');
@@ -926,7 +997,7 @@ export function histogram(props: Record<string, unknown>[], total: number): stri
   const keys = [...new Set(props.flatMap((p) => Object.keys(p)))].slice(0, 6);
   const parts: string[] = [];
   for (const k of keys) {
-    const vals = props.map((p) => p[k]).filter((v) => v !== undefined && v !== null);
+    const vals = props.map((p) => p[k]).filter((v) => v !== undefined && v !== null && typeof v !== 'object'); // nested values make no histogram
     const distinct = new Map<string, number>();
     for (const v of vals) distinct.set(String(v), (distinct.get(String(v)) ?? 0) + 1);
     if (distinct.size > 0 && distinct.size <= 5) {

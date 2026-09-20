@@ -1,0 +1,4 @@
+| file | what the app asked for | origin / license | size |
+|---|---|---|---|
+| `react-map-gl/us-income.geojson` | `https://raw.githubusercontent.com/uber/react-map-gl/master/examples/.data/us-income.geojson` (react-map-gl `geojson` example) | file of `visgl/react-map-gl` (**MIT**, `wild/apps/react-map-gl/LICENSE`); US states + median income by year | 382 KB |
+| `react-map-gl/counties.KS-NE-OK.json` | `https://raw.githubusercontent.com/visgl/deck.gl-data/refs/heads/master/examples/arc/counties.json` (react-map-gl `filter` example) | file of `visgl/deck.gl-data` (**MIT**, `react-map-gl/LICENSE.deck.gl-data`). The original is 6.0 MB (3,220 US counties, each with a large `flows` property): **trimmed to Kansas, Nebraska and Oklahoma (275 counties), features otherwise unmodified** — skipped for size, not for licence | see file |

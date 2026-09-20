@@ -1,0 +1,10 @@
+--- upstream/test/examples/filter-symbols-by-text-input.html (v6.10.0)
++++ wild/maplibre-examples/examples/filter-symbols-by-text-input.html
+@@ -133,6 +133,7 @@
+         center: [-77.04, 38.907],
+         zoom: 11.15
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         // Add a GeoJSON source containing place coordinates and information.
