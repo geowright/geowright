@@ -87,6 +87,26 @@ What is on the map:
 
 It also distinguishes: layer does not exist · layer hidden · feature exists in the source but is off-screen · occluded (names the occluder) · ambiguous (lists the matches). The same text is attached to the HTML report / trace as `map state — …`.
 
+## Agents (Playwright MCP)
+
+Browser agents get an empty `region "Map"` from the accessibility snapshot. Two ways to fix that, both via
+Playwright MCP's `--init-script` (no custom MCP server):
+
+```sh
+npm run build:inpage      # dist/inpage.js        -> adapter + window.__mapwright.snapshot()
+npx esbuild src/inpage/agent-entry.ts --bundle --format=iife --outfile=dist/inpage-agent.js   # + accessibility mirror
+npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/init-page.ts \
+    --init-script dist/inpage.js --caps=vision        # or dist/inpage-agent.js, no caps needed
+```
+
+- **Text snapshot** — the agent calls `browser_evaluate` with `window.__mapwright.snapshot('main')` (see `agent/MAP_SKILL.md`) and
+  clicks the listed client pixels with `browser_mouse_click_xy`. Most efficient in our runs.
+- **Accessibility mirror** — features appear in the normal `browser_snapshot` as buttons; normal `browser_click` works
+  (a real click that bubbles to the map, like a MapLibre Marker). Zero instructions. Also usable from tests:
+  `page.getByRole('button', { name: /Gas leak/ }).click()`.
+
+`agent/mcp-probe.mjs` exercises the whole path without an LLM; results of real agent runs are in the design notes (an earlier phase).
+
 ## Determinism
 
 No network. Inline style, GeoJSON sources, raster tiles fulfilled with `page.route`, glyphs served by the app (Noto Sans, OFL). The `map` fixture aborts and fails the test on any non-local request. Headless software WebGL flags (same set MapLibre uses in its own CI) are documented in `playwright.config.ts`.
@@ -107,5 +127,6 @@ npm run dev                            # poke at the demo app by hand
 demo/             the system under test (Vite + MapLibre 6 + terra-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   mapwright(page), handles, expect matchers
-tests/            assert / act / draw / discovery specs
+tests/            assert / act / draw / discovery / snapshot / mirror specs
+agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```
