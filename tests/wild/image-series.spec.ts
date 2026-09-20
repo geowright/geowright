@@ -46,10 +46,8 @@ test.describe('wild: animate-a-series-of-images', () => {
     await expect.poll(() => seen.size, { timeout: 5000 }).toBe(5);
   });
 
-  test('the radar image paints pixels over the forecast area, none beside it', async ({ wild }) => {
-    const map = await wild.open(example('animate-a-series-of-images'), { routes });
-    const layer = (await map.layers()).find((l) => l.sourceType === 'image')!.id;
-    await expect(map).toHaveLayerPixels(layer, { at: { lng: -75.97, lat: 42.19 } });
-    await expect(map).not.toHaveLayerPixels(layer, { at: { lng: -68, lat: 42.19 } });
-  });
+  // REMOVED after the 20x: `toHaveLayerPixels` on this layer. The example swaps the source image every 200 ms; when
+  // the machine cannot deliver and decode an image in 200 ms (5 workers of software GL), the layer paints nothing
+  // for seconds — the app's behaviour under starvation, faithfully observed: 7 failures in 160 under contention, 0 in
+  // 40 alone. An assertion that depends on the machine being fast is not one for this suite (the design notes).
 });

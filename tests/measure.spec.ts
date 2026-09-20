@@ -42,13 +42,15 @@ test.describe('measurements', () => {
   test('pixel probe (toBeVisibleOnMap) — first and warm', async ({ map, page }) => {
     await page.getByTestId('toggle-sensors').check();
     await map.waitForIdle();
-    const times = await page.evaluate(() => {
+    const times = await page.evaluate(async () => {
       const api = (window as any).__geowright;
-      return [0, 1, 2, 3, 4].map(() => {
+      const out: number[] = [];
+      for (let i = 0; i < 5; i++) {
         const t0 = performance.now();
-        api.pixelProbe('main', { layer: 'sensors', id: 501 });
-        return Math.round(performance.now() - t0);
-      });
+        await api.pixelProbe('main', { layer: 'sensors', id: 501 });
+        out.push(Math.round(performance.now() - t0));
+      }
+      return out;
     });
     console.log('\nPIXEL PROBE ms (first, then warm): ' + times.join(', '));
   });

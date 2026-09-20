@@ -946,7 +946,9 @@ export const expect = baseExpect.extend({
       } catch (e) {
         why = (e as Error).message.split('\n')[0];
       }
-      const wait = POLL[Math.min(i + 2, POLL.length - 1)];
+      // Each probe hides and re-shows the layer, after which MapLibre reloads its source: back off, so that a
+      // slow machine gets to finish that before the next probe knocks it over again.
+      const wait = [250, 500, 1000, 2000][Math.min(i, 3)];
       if (Date.now() + wait >= deadline) break;
       await new Promise((r) => setTimeout(r, wait));
     }

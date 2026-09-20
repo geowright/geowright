@@ -134,3 +134,17 @@ test('an id-less feature drawn in two WORLD COPIES is one feature (the adapter r
   expect(new Engine(adapter).find({ layer: 'quakes' })).toHaveLength(1);
   expect(new Engine(makeAdapter([copy(100), copy(612)])).find({ layer: 'quakes' })).toHaveLength(2); // no period known: two things
 });
+
+test('look-alike pieces far apart are ONE feature when the source data holds exactly one such feature (a dot re-set every frame, seen in two tile generations)', async () => {
+  const dot = (x: number, y: number): RenderedFeature => ({ layer: 'point', properties: {}, geometry: { type: 'Point', coordinates: [x, y] } });
+  const rendered = [dot(753, 349), dot(751, 381)];
+  const one = { ...makeAdapter(rendered), queryData: async () => [dot(752, 365)] };
+  const engine = new Engine(one);
+  expect(engine.find({ layer: 'point' })).toHaveLength(2); // rendered pieces alone cannot tell
+  await engine.learnIdentity({ layer: 'point' });
+  expect(engine.find({ layer: 'point' })).toHaveLength(1);
+
+  const two = new Engine({ ...makeAdapter(rendered), queryData: async () => [dot(753, 349), dot(751, 381)] }); // two real look-alike POIs
+  await two.learnIdentity({ layer: 'point' });
+  expect(two.find({ layer: 'point' })).toHaveLength(2);
+});

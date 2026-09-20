@@ -79,7 +79,7 @@ export class Engine<W = unknown> {
    * components of their on-screen boxes. Limit: two id-less, property-identical shapes that touch stay one.
    */
   private split(pieces: RenderedFeature[]): RenderedFeature[][] {
-    if (pieces.length < 2 || pieces[0].id !== undefined) return [pieces];
+    if (pieces.length < 2 || pieces[0].id !== undefined || this.single.has(this.key(pieces[0]))) return [pieces];
     // Sweep along x so that thousands of look-alike points cost n·log n, not n².
     // World copies: the same feature drawn once per visible copy of the world is one feature — fold x by the period.
     const wrap = this.adapter.wrapPx?.();
@@ -99,6 +99,49 @@ export class Engine<W = unknown> {
     const out = new Map<number, RenderedFeature[]>();
     pieces.forEach((p, i) => out.set(root(i), [...(out.get(root(i)) ?? []), p]));
     return [...out.values()];
+  }
+
+  /**
+   * Keys PROVEN to be one feature although their pieces do not touch. The split above has a failure mode,
+   * found by the 20x on MapLibre's "animate a point": a source that is re-set every frame is, for an
+   * instant, rendered from two tile generations — one moving dot comes back at two positions, 30px apart,
+   * and read as "2 features" (before the split existed they merged). Rendered pieces cannot tell that
+   * from two look-alike POIs; the SOURCE can: if its data holds exactly one feature with these properties,
+   * it is one. Asked only when a split actually happened, and only of sources that can answer (GeoJSON).
+   */
+  private single = new Set<string>();
+
+  async learnIdentity(q: FeatureQuery): Promise<void> {
+    if (!this.adapter.queryData) return;
+    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    const byKey = new Map<string, RenderedFeature[]>();
+    for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
+      if (f.id !== undefined) continue;
+      const k = this.key(f);
+      byKey.set(k, [...(byKey.get(k) ?? []), f]);
+    }
+    const data = new Map<string, RenderedFeature[] | null>();
+    for (const [k, pieces] of byKey) {
+      // Only a moment in which the pieces do NOT touch can be decided; what was learnt then stays learnt
+      // until the data says otherwise (the two-generation instant comes and goes between calls).
+      if (pieces.length < 2 || this.splitAlways(pieces).length < 2) continue;
+      const layer = pieces[0].layer;
+      if (!data.has(layer)) data.set(layer, (await this.adapter.queryData(layer)) ?? null);
+      const props = JSON.stringify(pieces[0].properties);
+      const n = data.get(layer)?.filter((d) => JSON.stringify(d.properties) === props).length;
+      if (n === 1) this.single.add(k);
+      else this.single.delete(k);
+    }
+  }
+
+  private splitAlways(pieces: RenderedFeature[]): RenderedFeature[][] {
+    const k = this.key(pieces[0]);
+    const was = this.single.delete(k);
+    try {
+      return this.split(pieces);
+    } finally {
+      if (was) this.single.add(k);
+    }
   }
 
   /** On-screen bounding box of a piece's geometry. */
@@ -122,12 +165,12 @@ export class Engine<W = unknown> {
 
   /** Is this hit a piece of THAT feature? The key decides, plus — for id-less features — touching it. */
   private isPieceOf(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
-    return this.key(h) === this.key(pieces[0]) && (h.id !== undefined || pieces.some((p) => this.touch(h, p)));
+    return this.key(h) === this.key(pieces[0]) && (h.id !== undefined || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
   }
 
   /** Same DATA entity (whatever layer drew it): a circle and its own label, a fill and its outline. */
   private sameEntity(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
-    return this.entityKey(h) === this.entityKey(pieces[0]) && (h.id !== undefined || pieces.some((p) => this.touch(h, p)));
+    return this.entityKey(h) === this.entityKey(pieces[0]) && (h.id !== undefined || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
   }
 
   /** Rendered features matching the query, grouped into logical features (pieces merged). */
@@ -196,11 +239,19 @@ export class Engine<W = unknown> {
    */
   async actionPoint(q: FeatureQuery, opts: ActionPointOptions = {}): Promise<ActionPointResult> {
     if (this.adapter.isMoving()) return fail('moving', 'map is moving (camera animation or user gesture in progress)');
-    const first = this.actionPointOnce(q, opts);
+    // Look-alikes, or ONE id-less feature caught in two tile generations? On 'ambiguous', ask the source — now,
+    // while the split is visible — and look again.
+    const once = async (): Promise<ActionPointResult> => {
+      const r = this.actionPointOnce(q, opts);
+      if (r.ok || r.reason !== 'ambiguous') return r;
+      await this.learnIdentity(q);
+      return this.actionPointOnce(q, opts);
+    };
+    const first = await once();
     if (!first.ok) return first;
     await twoFrames();
     if (this.adapter.isMoving()) return fail('moving', 'map started moving');
-    const second = this.actionPointOnce(q, opts);
+    const second = await once();
     if (!second.ok) return second;
     if (Math.hypot(first.surface.x - second.surface.x, first.surface.y - second.surface.y) > 1) {
       return fail('unstable', 'feature position changed between two animation frames');
@@ -652,7 +703,8 @@ export class Engine<W = unknown> {
         continue;
       }
       // id-less look-alikes (see split()): one entity per connected component, over ALL its layers' pieces
-      const parts = this.split([...e.byLayer.values()].flat());
+      const all = [...e.byLayer.values()].flat();
+      const parts = all.some((f) => this.single.has(this.key(f))) ? [all] : this.split(all);
       if (parts.length < 2) continue;
       found.delete(k);
       parts.forEach((part, i) => {

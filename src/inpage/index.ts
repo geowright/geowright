@@ -42,13 +42,13 @@ function engine(mapId: string): Engine<any> {
 
 const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
-  find: (mapId: string, q: any) => engine(mapId).find(q),
-  actionPoint: (mapId: string, q: any, opts: any) => engine(mapId).actionPoint(q, opts),
+  find: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).find(q)),
+  actionPoint: async (mapId: string, q: any, opts: any) => (await engine(mapId).learnIdentity(q), engine(mapId).actionPoint(q, opts)),
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
   overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
-  geometry: (mapId: string, q: any) => engine(mapId).geometry(q),
-  compareGeometry: (mapId: string, q: any, expected: any, tolerancePx: number) => engine(mapId).compareGeometry(q, expected, tolerancePx),
-  pixelProbe: (mapId: string, q: any) => engine(mapId).pixelProbe(q),
+  geometry: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).geometry(q)),
+  compareGeometry: async (mapId: string, q: any, expected: any, tolerancePx: number) => (await engine(mapId).learnIdentity(q), engine(mapId).compareGeometry(q, expected, tolerancePx)),
+  pixelProbe: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).pixelProbe(q)),
   /** Pixel-only layers (raster, image, canvas, video, heatmap, hillshade): how much do the pixels at a location change when the layer is not drawn? */
   layerPixels: (mapId: string, layer: string, world: any, radiusPx = 24) => {
     const a = engine(mapId).adapter;
@@ -70,7 +70,7 @@ const api = {
     w.__geowright_mirrors[mapId] = startMirror(engine(mapId), mapId, opts);
     return true;
   },
-  snapshot: (mapId: string, opts?: any) => engine(mapId).snapshot(opts),
+  snapshot: async (mapId: string, opts?: any) => (await engine(mapId).learnIdentity({ layer: opts?.layers }), engine(mapId).snapshot(opts)),
   explain: (mapId: string, q: any) => engine(mapId).explain(q),
   reveal: (mapId: string, q: any) => engine(mapId).reveal(q),
   viewState: (mapId: string) => engine(mapId).adapter.getViewState(),
