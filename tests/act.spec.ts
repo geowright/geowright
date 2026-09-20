@@ -20,9 +20,7 @@ test.describe('act gap', () => {
   test('partially occluded polygon: picks a pixel where it is the topmost hit', async ({ map, page }) => {
     // Drop an alert exactly on the "best" pixel of parcel 101, then click the parcel.
     const parcel = map.feature({ layer: 'parcels', id: 101 });
-    const before = await parcel.info();
-    const box = (await page.locator('#map canvas').boundingBox())!;
-    const centre = await map.lngLatAt({ x: box.x + before.pixel!.x, y: box.y + before.pixel!.y });
+    const centre = await parcel.lngLat();
     await page.getByTestId('alert-name').fill('On top of 101');
     await page.getByTestId('alert-lng').fill(String(centre.lng));
     await page.getByTestId('alert-lat').fill(String(centre.lat));
@@ -66,7 +64,7 @@ test.describe('act gap', () => {
 
     await far.click({ autoPan: true });
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '4');
-    expect((await map.viewState()).center.lng).toBeCloseTo(35.2, 2);
+    await expect(map).toHaveView({ center: { lng: 35.2, lat: 32.08 } });
   });
 
   test('strictness: ambiguous query is an error, like a Playwright locator', async ({ map }) => {
@@ -91,9 +89,7 @@ test.describe('act gap', () => {
 
     await page.getByTestId('ctx-add-alert').click();
     await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Alert from menu' } });
-    const added = await map.feature({ layer: 'alerts', where: { name: 'Alert from menu' } }).info();
-    const box = (await page.locator('#map canvas').boundingBox())!;
-    const where = await map.lngLatAt({ x: box.x + added.pixel!.x, y: box.y + added.pixel!.y });
+    const where = await map.feature({ layer: 'alerts', where: { name: 'Alert from menu' } }).lngLat();
     expect(where.lng).toBeCloseTo(at.lng, 3);
     expect(where.lat).toBeCloseTo(at.lat, 3);
   });
@@ -111,6 +107,35 @@ test.describe('act gap', () => {
     await expect(map).not.toHaveFeature({ layer: 'stations-clusters', where: { cluster_id: target.properties.cluster_id as number } });
     const pieces = (await clusters.count()) + (await map.features({ layer: 'stations-points' }).count());
     expect(pieces).toBeGreaterThan(1);
+  });
+
+  test("a feature's own label on top of it is not an occluder", async ({ map }) => {
+    // stations-cluster-count draws the number ON the cluster circle (same source feature).
+    const cluster = map.feature({ layer: 'stations-clusters', at: { lng: 34.78, lat: 32.118 } });
+    await cluster.hover(); // would time out as "occluded" if labels counted
+    const info = await cluster.info();
+    expect(info.lngLat!.lng).toBeCloseTo(34.78, 2);
+  });
+
+  test('click-time verification: map moved between aiming and clicking -> click is cancelled and retried', async ({ map, page }) => {
+    // Sabotage: on the first real mousemove (our aim), the app jumps the map sideways, so the
+    // pixel we computed is stale by the time the click lands. A naive tool clicks empty map.
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__sabotaged = 0;
+      window.addEventListener(
+        'mousemove',
+        () => {
+          w.__sabotaged++;
+          const m = w.__mapwright_maps.main;
+          m.jumpTo({ center: [m.getCenter().lng + 0.02, m.getCenter().lat] });
+        },
+        { capture: true, once: true },
+      );
+    });
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    expect(await page.evaluate(() => (window as any).__sabotaged)).toBe(1);
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1'); // right target, after retry
   });
 
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {

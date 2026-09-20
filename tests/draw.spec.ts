@@ -20,7 +20,7 @@ test.describe('drawing', () => {
     await map.draw.polygon(SQUARE, { finish: 'click-first' });
 
     await expect(page.getByTestId('draw-count')).toHaveText('1');
-    await expect(map.features({ layer: 'td-polygon' })).toHaveCount(1);
+    await expect(map.features({ layer: 'td-polygon' })).toHaveFeatureCount(1);
 
     const ring = await drawnRing(page);
     expect(ring).toHaveLength(5); // closed ring
@@ -37,7 +37,7 @@ test.describe('drawing', () => {
 
     await page.getByTestId('draw-select').click();
     await map.feature({ layer: 'td-polygon' }).click();
-    await expect(map.features({ layer: 'td-point', where: { selectionPoint: true } })).toHaveCount(4);
+    await expect(map.features({ layer: 'td-point', where: { selectionPoint: true } })).toHaveFeatureCount(4);
 
     const to = { lng: 34.86, lat: 32.065 };
     await map.feature({ layer: 'td-point', where: { selectionPoint: true }, at: SQUARE[2] }).dragTo(to);

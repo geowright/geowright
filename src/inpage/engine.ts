@@ -2,6 +2,8 @@ import type {
   ActionPointOptions,
   ActionPointResult,
   CanvasAdapter,
+  ClickVerdict,
+  WhereOp,
   FeatureQuery,
   FeatureSummary,
   Geometry,
@@ -23,7 +25,7 @@ export class Engine<W = unknown> {
     if (q.id !== undefined && String(f.id) !== String(q.id)) return false;
     if (q.where) {
       for (const [k, v] of Object.entries(q.where)) {
-        if ((f.properties[k] ?? null) !== v) return false;
+        if (!testWhere(f.properties[k], v)) return false;
       }
     }
     return true;
@@ -37,6 +39,15 @@ export class Engine<W = unknown> {
    */
   private key(f: RenderedFeature): string {
     return `${f.layer}|${f.id ?? ''}|${JSON.stringify(f.properties)}`;
+  }
+
+  /**
+   * Identity of the underlying DATA feature, independent of which layer drew it. A circle and its
+   * text label are two rendered features of one entity; the label on top is not an occluder — to a
+   * user it is the same thing. Without this, every labelled point is "occluded" by its own label.
+   */
+  private entityKey(f: RenderedFeature): string {
+    return `${f.source ?? f.layer}|${f.id ?? ''}|${JSON.stringify(f.properties)}`;
   }
 
   /** Rendered features matching the query, grouped into logical features (pieces merged). */
@@ -60,13 +71,16 @@ export class Engine<W = unknown> {
   private summarize(pieces: RenderedFeature[]): FeatureSummary {
     const f = pieces[0];
     const size = this.surfaceSize();
-    const cands = this.candidates(pieces, size);
+    const best = this.candidates(pieces, size)[0];
+    const rect = this.adapter.surface().getBoundingClientRect();
     return {
       layer: f.layer,
       id: f.id,
       properties: f.properties,
       geometryType: f.geometry.type,
-      pixel: cands[0] ? round(cands[0]) : undefined,
+      pixel: best && round(best),
+      client: best && round({ x: rect.left + best.x, y: rect.top + best.y }),
+      world: best && this.adapter.unproject(best),
     };
   }
 
@@ -103,6 +117,7 @@ export class Engine<W = unknown> {
     }
     const pieces = groups[0];
     const targetKey = this.key(pieces[0]);
+    const targetEntity = this.entityKey(pieces[0]);
     const size = this.surfaceSize();
     const cands = this.candidates(pieces, size);
     if (cands.length === 0) return fail('offscreen', 'feature is rendered but no part of it is inside the viewport');
@@ -116,7 +131,7 @@ export class Engine<W = unknown> {
       const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
       const onTarget = hits.some((h) => this.key(h) === targetKey);
       if (!onTarget) continue; // candidate is not actually on the rendered feature (e.g. icon offset)
-      if (!opts.force && this.key(hits[0]) !== targetKey) {
+      if (!opts.force && this.entityKey(hits[0]) !== targetEntity) {
         occluder ??= hits[0];
         continue;
       }
@@ -168,6 +183,72 @@ export class Engine<W = unknown> {
     return { w: el.clientWidth, h: el.clientHeight };
   }
 
+  /* ---------------- click-time verification ---------------- */
+
+  private armed = new Map<string, { verdict: ClickVerdict; dispose: () => void }>();
+
+  /**
+   * Closes the race between "point computed" and "real click arrives": the app may have moved the
+   * map or drawn something on top in between. Same idea as Playwright's hit-target interception:
+   * a capture-phase listener re-runs the hit test at the exact pixel of the real pointerdown, and if
+   * the target is no longer what is there, the whole click is swallowed so the caller can retry.
+   */
+  armClick(q: FeatureQuery, opts: ActionPointOptions = {}): string {
+    const token = Math.random().toString(36).slice(2);
+    const verdict: ClickVerdict = { fired: false, ok: false };
+    const ignore = new Set(opts.ignoreLayers ?? []);
+    let blocking = false;
+    const swallow = (e: Event) => {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    };
+    const onDown = (e: Event) => {
+      if (verdict.fired) return blocking ? swallow(e) : undefined;
+      verdict.fired = true;
+      const me = e as MouseEvent;
+      const surface = this.adapter.surface();
+      const rect = surface.getBoundingClientRect();
+      if (me.target !== surface) {
+        verdict.reason = `pointer event landed on ${describeEl(me.target as Element)}, not the map canvas`;
+      } else {
+        const hits = this.adapter.queryFeatures({ at: { x: me.clientX - rect.left, y: me.clientY - rect.top } }).filter((h) => !ignore.has(h.layer));
+        const layers = this.layersOf(q);
+        const mine = hits.find((h) => (!layers || layers.includes(h.layer)) && this.matches(h, q));
+        if (!mine) verdict.reason = 'target was no longer under the pointer when the click arrived';
+        else if (!opts.force && this.entityKey(hits[0]) !== this.entityKey(mine)) {
+          verdict.reason = `target was covered by ${describe({ ...hits[0], geometryType: hits[0].geometry.type })} when the click arrived`;
+        } else verdict.ok = true;
+      }
+      if (!verdict.ok) {
+        blocking = true;
+        swallow(e);
+      }
+    };
+    const onRest = (e: Event) => {
+      if (blocking) swallow(e);
+    };
+    const downs = ['pointerdown', 'mousedown'];
+    const rest = ['pointerup', 'mouseup', 'click', 'dblclick', 'contextmenu', 'auxclick'];
+    downs.forEach((t) => window.addEventListener(t, onDown, true));
+    rest.forEach((t) => window.addEventListener(t, onRest, true));
+    this.armed.set(token, {
+      verdict,
+      dispose: () => {
+        downs.forEach((t) => window.removeEventListener(t, onDown, true));
+        rest.forEach((t) => window.removeEventListener(t, onRest, true));
+      },
+    });
+    return token;
+  }
+
+  disarmClick(token: string): ClickVerdict {
+    const a = this.armed.get(token);
+    if (!a) return { fired: false, ok: false, reason: 'unknown token' };
+    a.dispose();
+    this.armed.delete(token);
+    return a.verdict;
+  }
+
   /* ---------------- diagnostics ---------------- */
 
   /** What IS there, for failure messages: same-layer features, layer visibility, off-screen matches. */
@@ -188,6 +269,17 @@ export class Engine<W = unknown> {
       lines.push(`layer "${id}": ${rendered.length} feature(s) rendered in viewport`);
       for (const f of rendered.slice(0, 8)) lines.push(`  - ${describe(f)}`);
       if (rendered.length > 8) lines.push(`  … ${rendered.length - 8} more`);
+      // Near misses: for each property the query constrains, what values ARE present.
+      for (const k of Object.keys(q.where ?? {})) {
+        const values = [...new Set(rendered.map((f) => JSON.stringify(f.properties[k])))];
+        lines.push(
+          `  "${k}" wanted ${showWant(q.where![k])}; rendered values: ` +
+            (values.length ? values.slice(0, 10).join(', ') + (values.length > 10 ? ', …' : '') : '(none)'),
+        );
+      }
+      if (q.id !== undefined && rendered.length) {
+        lines.push(`  id wanted ${JSON.stringify(q.id)}; rendered ids: ${rendered.slice(0, 15).map((f) => JSON.stringify(f.id)).join(', ')}`);
+      }
       const data = await this.adapter.queryData?.(id);
       if (data) {
         const offscreen = data.filter((f) => this.matches(f, q));
@@ -199,6 +291,20 @@ export class Engine<W = unknown> {
           );
         }
       }
+    }
+    if (q.at) {
+      const at = this.adapter.project(q.at as W);
+      const under = this.adapter.queryFeatures({ at });
+      lines.push(
+        `at ${JSON.stringify(q.at)} = pixel (${Math.round(at.x)},${Math.round(at.y)}): ` +
+          (under.length ? under.slice(0, 5).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; ') : 'nothing rendered there'),
+      );
+      const { at: _at, ...rest } = q;
+      const nearest = this.find(rest)
+        .filter((f) => f.pixel)
+        .map((f) => ({ f, d: Math.hypot(f.pixel!.x - at.x, f.pixel!.y - at.y) }))
+        .sort((a, b) => a.d - b.d)[0];
+      if (nearest) lines.push(`  nearest match without "at": ${describe(nearest.f)}, ${Math.round(nearest.d)}px away`);
     }
     if (!layers) lines.push(`rendered layers with features: ${[...new Set(this.adapter.queryFeatures({}).map((f) => f.layer))].join(', ')}`);
     return lines.join('\n');
@@ -288,6 +394,30 @@ function distToRing(p: Pt, ring: Pt[]): number {
     best = Math.min(best, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
   }
   return best;
+}
+
+function showWant(v: unknown): string {
+  const op = v as WhereOp | null;
+  if (op && typeof op === 'object' && op.matches !== undefined && Object.keys(op).every((k) => k === 'matches' || k === 'flags')) {
+    return `/${op.matches}/${op.flags ?? ''}`;
+  }
+  return JSON.stringify(v);
+}
+
+function testWhere(actual: unknown, want: unknown): boolean {
+  if (want === null || typeof want !== 'object') return (actual ?? null) === want;
+  const op = want as WhereOp;
+  const present = actual !== undefined && actual !== null;
+  if (op.exists !== undefined && op.exists !== present) return false;
+  if ('eq' in op && (actual ?? null) !== op.eq) return false;
+  if ('ne' in op && (actual ?? null) === op.ne) return false;
+  if (op.in && !op.in.includes((actual ?? null) as any)) return false;
+  if (op.matches !== undefined && !(present && new RegExp(op.matches, op.flags).test(String(actual)))) return false;
+  for (const [k, cmp] of [['gt', (a: number, b: number) => a > b], ['gte', (a: number, b: number) => a >= b], ['lt', (a: number, b: number) => a < b], ['lte', (a: number, b: number) => a <= b]] as const) {
+    const bound = op[k];
+    if (bound !== undefined && !(typeof actual === 'number' && cmp(actual, bound))) return false;
+  }
+  return true;
 }
 
 const avg = (n: number[]) => n.reduce((s, v) => s + v, 0) / n.length;

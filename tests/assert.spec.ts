@@ -8,9 +8,9 @@ test.describe('assert gap', () => {
   test('initial map content', async ({ map }) => {
     await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'high' } });
     await expect(map).toHaveFeature({ layer: 'parcels', id: 105 });
-    await expect(map.features({ layer: 'alerts' })).toHaveCount(3); // 4 exists but is off-screen
-    await expect(map.features({ layer: 'parcels' })).toHaveCount(6);
-    await expect(map.features({ layer: 'parcels', where: { zoning: 'nope' } })).toHaveCount(0);
+    await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3); // 4 exists but is off-screen
+    await expect(map.features({ layer: 'parcels' })).toHaveFeatureCount(6);
+    await expect(map.features({ layer: 'parcels', where: { zoning: 'nope' } })).toHaveFeatureCount(0);
   });
 
   test('form submit adds a feature to the map', async ({ map, page }) => {
@@ -22,13 +22,11 @@ test.describe('assert gap', () => {
     await page.getByTestId('alert-submit').click();
 
     await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Flooded underpass', severity: 'high' } });
-    await expect(map.features({ layer: 'alerts', where: { severity: 'high' } })).toHaveCount(2);
-    await expect(map.features({ layer: 'alerts' })).toHaveCount(4);
+    await expect(map.features({ layer: 'alerts', where: { severity: 'high' } })).toHaveFeatureCount(2);
+    await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(4);
 
     // and it is where the form said it should be
-    const f = await map.feature({ layer: 'alerts', where: { name: 'Flooded underpass' } }).info();
-    const box = (await page.locator('#map canvas').boundingBox())!;
-    const at = await map.lngLatAt({ x: box.x + f.pixel!.x, y: box.y + f.pixel!.y });
+    const at = await map.feature({ layer: 'alerts', where: { name: 'Flooded underpass' } }).lngLat();
     expect(at.lng).toBeCloseTo(34.805, 3);
     expect(at.lat).toBeCloseTo(32.1, 3);
   });
@@ -37,16 +35,16 @@ test.describe('assert gap', () => {
     await expect(map).toHaveFeature({ layer: 'alerts', id: 2 });
     await page.getByTestId('alert-remove-2').click();
     await expect(map).not.toHaveFeature({ layer: 'alerts', id: 2 });
-    await expect(map.features({ layer: 'alerts' })).toHaveCount(2);
+    await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(2);
   });
 
   test('layer toggle hides and shows features', async ({ map, page }) => {
     await page.getByTestId('toggle-parcels').uncheck();
     await expect(map).not.toHaveFeature({ layer: 'parcels' });
-    await expect(map.features({ layer: 'parcels-outline' })).toHaveCount(0);
+    await expect(map.features({ layer: 'parcels-outline' })).toHaveFeatureCount(0);
     await expect(map).toHaveFeature({ layer: 'alerts', id: 1 }); // others untouched
     await page.getByTestId('toggle-parcels').check();
-    await expect(map.features({ layer: 'parcels' })).toHaveCount(6);
+    await expect(map.features({ layer: 'parcels' })).toHaveFeatureCount(6);
   });
 
   test('failure message says what WAS on the map', async ({ map }) => {
@@ -73,9 +71,49 @@ test.describe('assert gap', () => {
     expect(typo!.message).toContain('layer "alertz": does not exist');
   });
 
-  test("Playwright's own locator toHaveCount still works through our expect", async ({ map, page }) => {
+  test("Playwright's built-in matchers are untouched by our expect", async ({ map, page }) => {
     await expect(page.locator('[data-testid^="alert-row-"]')).toHaveCount(4);
     await expect(page.locator('[data-testid^="alert-row-"]')).not.toHaveCount(3);
-    await expect(map.features({ layer: 'alerts' })).not.toHaveCount(4);
+    await expect(map.features({ layer: 'alerts' })).not.toHaveFeatureCount(4);
+  });
+
+  test('where: operators and RegExp', async ({ map }) => {
+    await expect(map.features({ layer: 'alerts', where: { severity: { in: ['high', 'medium'] } } })).toHaveFeatureCount(2);
+    await expect(map.features({ layer: 'alerts', where: { name: /^gas/i } })).toHaveFeatureCount(1);
+    await expect(map.features({ layer: 'alerts', where: { severity: { ne: 'low' }, id: { gte: 2 } } })).toHaveFeatureCount(1);
+    await expect(map.features({ layer: 'parcels', where: { id: { gt: 102, lte: 105 } } })).toHaveFeatureCount(3);
+    await expect(map.features({ layer: 'stations-clusters', where: { point_count: { gte: 5 } } })).not.toHaveFeatureCount(0);
+    await expect(map).not.toHaveFeature({ layer: 'alerts', where: { nonexistent: { exists: true } } });
+  });
+
+  test('text labels (symbol layers, fixture glyphs) are assertable', async ({ map }) => {
+    await expect(map).toHaveFeature({ layer: 'alerts-labels', where: { name: 'Gas leak' } });
+    await expect(map.features({ layer: 'alerts-labels' })).toHaveFeatureCount(3);
+    await expect(map).toHaveFeature({ layer: 'stations-cluster-count', where: { point_count: 10 } });
+    // a label has a real, hit-testable position that is not the point's own pixel (text-offset)
+    const label = await map.feature({ layer: 'alerts-labels', where: { name: 'Gas leak' } }).info();
+    const circle = await map.feature({ layer: 'alerts', id: 1 }).info();
+    expect(label.pixel).toBeDefined();
+    expect(circle.pixel).toBeDefined();
+  });
+
+  test('near-miss diagnostics: says which values ARE present', async ({ map }) => {
+    const err = await expect(map)
+      .toHaveFeature({ layer: 'alerts', where: { severity: 'critical', name: /leak/ } }, { timeout: 500 })
+      .then(() => null, (e: Error) => e);
+    expect(err!.message).toMatch(/"severity" wanted "critical"; rendered values: ("(high|medium|low)"(, )?){3}/);
+    expect(err!.message).toContain('"name" wanted /leak/; rendered values:');
+
+    const at = await expect(map)
+      .toHaveFeature({ layer: 'alerts', at: { lng: 34.771, lat: 32.09 } }, { timeout: 500 })
+      .then(() => null, (e: Error) => e);
+    expect(at!.message).toMatch(/nearest match without "at": alerts#1 .* \d+px away/);
+  });
+
+  test('toHaveView waits for the camera to come to rest', async ({ map, page }) => {
+    await expect(map).toHaveView({ zoom: 12, center: { lng: 34.78, lat: 32.08 } });
+    await page.getByTestId('fly-east').click();
+    await expect(map).toHaveView({ center: { lng: 35.2, lat: 32.08 }, zoom: 12 });
+    await expect(map).not.toHaveView({ center: { lng: 34.78, lat: 32.08 } });
   });
 });

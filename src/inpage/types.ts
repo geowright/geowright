@@ -79,10 +79,26 @@ export interface CanvasAdapter<W = unknown> {
 
 export type WhereValue = string | number | boolean | null;
 
+/** Serializable property predicate. The Playwright side also accepts a RegExp and converts it. */
+export interface WhereOp {
+  eq?: WhereValue;
+  ne?: WhereValue;
+  gt?: number;
+  gte?: number;
+  lt?: number;
+  lte?: number;
+  in?: WhereValue[];
+  /** RegExp source, tested against String(value). */
+  matches?: string;
+  flags?: string;
+  /** true: property must be present; false: must be absent. */
+  exists?: boolean;
+}
+
 export interface FeatureQuery {
   layer?: string | string[];
   id?: string | number;
-  where?: Record<string, WhereValue>;
+  where?: Record<string, WhereValue | WhereOp>;
   /** Only features rendered under this world location (hit test). Disambiguates e.g. vertex handles. */
   at?: LngLat;
 }
@@ -92,8 +108,12 @@ export interface FeatureSummary {
   id?: string | number;
   properties: Record<string, unknown>;
   geometryType: string;
-  /** Representative pixel (surface-relative), if on screen. */
+  /** Representative pixel on the feature, relative to the surface (canvas). Undefined if off-screen. */
   pixel?: Pt;
+  /** Same pixel in client (viewport) coordinates — what page.mouse wants. */
+  client?: Pt;
+  /** World coordinate under that pixel (for maps: { lng, lat }). */
+  world?: unknown;
 }
 
 export type ActionPointFailure =
@@ -108,6 +128,14 @@ export type ActionPointFailure =
 export type ActionPointResult =
   | { ok: true; client: Pt; surface: Pt; feature: FeatureSummary }
   | { ok: false; reason: ActionPointFailure; message: string };
+
+export interface ClickVerdict {
+  /** A pointer event actually reached the page while armed. */
+  fired: boolean;
+  /** The target was still the topmost hit at the exact moment and pixel of the real event. */
+  ok: boolean;
+  reason?: string;
+}
 
 export interface ActionPointOptions {
   /** Skip the topmost-hit check (still requires the point to be on the feature). */

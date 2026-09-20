@@ -4,13 +4,41 @@ import { fileURLToPath } from 'node:url';
 import type {
   ActionPointOptions,
   ActionPointResult,
-  FeatureQuery,
-  FeatureSummary,
+  ClickVerdict,
+  FeatureQuery as WireQuery,
+  FeatureSummary as WireSummary,
   LayerInfo,
   LngLat,
+  WhereOp,
+  WhereValue,
 } from '../inpage/types';
 
-export type { FeatureQuery, FeatureSummary, LngLat };
+export type { LngLat, WhereOp };
+
+/** Query as written in tests: like the wire format, but `where` values may also be a RegExp. */
+export interface FeatureQuery extends Omit<WireQuery, 'where'> {
+  where?: Record<string, WhereValue | RegExp | WhereOp>;
+}
+
+export interface FeatureSummary extends Omit<WireSummary, 'world'> {
+  /** lng/lat under the feature's representative pixel. */
+  lngLat?: LngLat;
+}
+
+function toWire(q: FeatureQuery): WireQuery {
+  if (!q.where) return q as WireQuery;
+  const where: WireQuery['where'] = {};
+  for (const [k, v] of Object.entries(q.where)) where[k] = v instanceof RegExp ? { matches: v.source, flags: v.flags.replace(/[gy]/g, '') } : v;
+  return { ...q, where };
+}
+
+const fromWire = (f: WireSummary): FeatureSummary => {
+  const { world, ...rest } = f;
+  return { ...rest, lngLat: world as LngLat | undefined };
+};
+
+const show = (q: FeatureQuery) =>
+  JSON.stringify(q, (_k, v) => (v instanceof RegExp ? String(v) : v));
 
 /* ------------------------------------------------------------------ in-page bundle */
 
@@ -34,6 +62,11 @@ export interface MapwrightOptions {
   mapId?: string;
   /** Default timeout for actions and waits (ms). Assertions use Playwright's expect timeout. */
   timeout?: number;
+  /**
+   * Layers that never count as occluders for any action (basemap labels, highlight overlays...).
+   * A feature's OWN label (same source feature, different layer) is already never an occluder.
+   */
+  ignoreLayers?: string[];
 }
 
 export interface ActionOptions extends ActionPointOptions {
@@ -53,7 +86,7 @@ export interface DrawOptions {
    *  - 'none'        : leave the shape open
    */
   finish?: 'click-last' | 'click-first' | 'dblclick' | 'enter' | 'none';
-  /** Pause between vertices (ms) so consecutive clicks are never read as a double-click. */
+  /** Optional pause between vertices (ms) for draw tools that debounce clicks. Default 0. */
   vertexDelay?: number;
 }
 
@@ -64,10 +97,22 @@ const POLL = [0, 30, 60, 100, 100, 200, 300, 500];
 export class MapHandle {
   readonly mapId: string;
   readonly timeout: number;
+  readonly ignoreLayers: string[];
 
   constructor(readonly page: Page, opts: MapwrightOptions = {}) {
     this.mapId = opts.mapId ?? 'main';
     this.timeout = opts.timeout ?? 10_000;
+    this.ignoreLayers = opts.ignoreLayers ?? [];
+  }
+
+  /** @internal */
+  async _find(q: FeatureQuery): Promise<FeatureSummary[]> {
+    return (await this._call<WireSummary[]>('find', toWire(q))).map(fromWire);
+  }
+
+  /** @internal */
+  _explain(q: FeatureQuery): Promise<string> {
+    return this._call<string>('explain', toWire(q)).catch((e) => `(could not inspect the map: ${(e as Error).message.split('\n')[0]})`);
   }
 
   /** @internal RPC into the in-page engine; (re)injects it on demand, e.g. after navigation. */
@@ -208,14 +253,14 @@ export class MapHandle {
 
   private async _drawPath(kind: string, vertices: LngLat[], opts: DrawOptions): Promise<void> {
     const finish = opts.finish ?? 'click-last';
-    const delay = opts.vertexDelay ?? 60;
+    const delay = opts.vertexDelay ?? 0;
     await step(`map.draw.${kind}(${vertices.length} vertices, finish: ${finish})`, async () => {
       const pts: { x: number; y: number }[] = [];
       for (const v of vertices) pts.push(await this._pointAt(v, opts, `map.draw.${kind} vertex`));
       for (const p of pts) {
         await this.page.mouse.move(p.x, p.y, { steps: 5 });
         await this.page.mouse.click(p.x, p.y);
-        await this.page.waitForTimeout(delay);
+        if (delay) await this.page.waitForTimeout(delay);
       }
       const last = pts[pts.length - 1];
       const first = pts[0];
@@ -235,39 +280,57 @@ export class FeatureHandle {
   constructor(readonly map: MapHandle, readonly query: FeatureQuery) {}
 
   toString() {
-    return `map.feature(${JSON.stringify(this.query)})`;
+    return `map.feature(${show(this.query)})`;
   }
 
-  /** @internal Resolve the action point with auto-waiting. */
-  async _actionPoint(what: string, opts: ActionOptions): Promise<Extract<ActionPointResult, { ok: true }>> {
+  private pointOpts(opts: ActionOptions): ActionPointOptions {
+    return { force: opts.force, ignoreLayers: [...this.map.ignoreLayers, ...(opts.ignoreLayers ?? [])] };
+  }
+
+  /** @internal Run `act` once the feature is actionable; `act` may ask for a retry. */
+  async _withActionPoint(what: string, opts: ActionOptions, act: (p: { x: number; y: number }) => Promise<{ retry: string } | void>): Promise<void> {
     const timeout = opts.timeout ?? this.map.timeout;
     let panned = false;
     try {
-      return await this.map._retry<Extract<ActionPointResult, { ok: true }>>(what, timeout, async () => {
-        const r = await this.map._call<ActionPointResult>('actionPoint', this.query, { force: opts.force, ignoreLayers: opts.ignoreLayers });
-        if (r.ok) return { value: r };
-        if (opts.autoPan && !panned && (r.reason === 'not-found' || r.reason === 'offscreen')) {
-          if (await this.map._call<boolean>('reveal', this.query)) {
-            panned = true;
-            await this.map._call('waitForIdle', 2000);
-            return { retry: 'auto-panned to feature' };
+      await this.map._retry<true>(what, timeout, async () => {
+        const r = await this.map._call<ActionPointResult>('actionPoint', toWire(this.query), this.pointOpts(opts));
+        if (!r.ok) {
+          if (opts.autoPan && !panned && (r.reason === 'not-found' || r.reason === 'offscreen')) {
+            if (await this.map._call<boolean>('reveal', toWire(this.query))) {
+              panned = true;
+              await this.map._call('waitForIdle', 2000);
+              return { retry: 'auto-panned to feature' };
+            }
           }
+          return { retry: `${r.reason}: ${r.message}` };
         }
-        return { retry: `${r.reason}: ${r.message}` };
+        return (await act(r.client)) ?? { value: true };
       });
     } catch (e) {
       if (!(e instanceof MapwrightError)) throw e;
-      const explain = await this.map._call<string>('explain', this.query).catch(() => '');
+      const explain = await this.map._explain(this.query);
+      await attach(`map state — ${what}`, explain);
       throw new MapwrightError(`${e.message}\n\nWhat is on the map:\n${indent(explain)}`);
     }
   }
 
   async click(opts: ActionOptions & { button?: 'left' | 'right' | 'middle'; clickCount?: number } = {}): Promise<void> {
-    await step(`${this}.click()`, async () => {
-      const p = (await this._actionPoint(`${this}.click()`, opts)).client;
-      await this.map.page.mouse.move(p.x, p.y);
-      await this.map.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount });
-    });
+    const what = `${this}.${opts.button === 'right' ? 'rightClick' : opts.clickCount === 2 ? 'dblclick' : 'click'}()`;
+    await step(what, () =>
+      this._withActionPoint(what, opts, async (p) => {
+        // Arm an in-page check that re-runs the hit test at the instant the REAL event arrives.
+        const token = await this.map._call<string>('armClick', toWire(this.query), this.pointOpts(opts));
+        let verdict: ClickVerdict;
+        try {
+          await this.map.page.mouse.move(p.x, p.y);
+          await this.map.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount });
+        } finally {
+          verdict = await this.map._call<ClickVerdict>('disarmClick', token);
+        }
+        if (!verdict.fired) return { retry: 'the click never reached the page (is something outside the document covering it?)' };
+        if (!verdict.ok) return { retry: `click was intercepted and cancelled: ${verdict.reason}` };
+      }),
+    );
   }
 
   rightClick(opts: ActionOptions = {}): Promise<void> {
@@ -279,25 +342,32 @@ export class FeatureHandle {
   }
 
   async hover(opts: ActionOptions = {}): Promise<void> {
-    await step(`${this}.hover()`, async () => {
-      const p = (await this._actionPoint(`${this}.hover()`, opts)).client;
-      await this.map.page.mouse.move(p.x, p.y, { steps: 4 });
-    });
+    const what = `${this}.hover()`;
+    await step(what, () => this._withActionPoint(what, opts, async (p) => void (await this.map.page.mouse.move(p.x, p.y, { steps: 4 }))));
   }
 
   /** Drag this feature (e.g. a vertex handle) to a location with real mouse input. */
   async dragTo(to: LngLat, opts: ActionOptions & { steps?: number } = {}): Promise<void> {
-    await step(`${this}.dragTo(${fmt(to)})`, async () => {
-      const a = (await this._actionPoint(`${this}.dragTo()`, opts)).client;
-      const b = await this.map._pointAt(to, { ...opts, autoPan: false, force: true }, `${this}.dragTo(to)`);
-      await this.map._drag(a, b, opts.steps);
-    });
+    const what = `${this}.dragTo(${fmt(to)})`;
+    await step(what, () =>
+      this._withActionPoint(what, opts, async (a) => {
+        const b = await this.map._pointAt(to, { ...opts, autoPan: false, force: true }, `${what} destination`);
+        await this.map._drag(a, b, opts.steps);
+      }),
+    );
+  }
+
+  /** lng/lat of the point on the feature that an action would use. */
+  async lngLat(opts: { timeout?: number } = {}): Promise<LngLat> {
+    const f = await this.info(opts);
+    if (!f.lngLat) throw new MapwrightError(`${this}.lngLat(): feature is rendered but not inside the viewport`);
+    return f.lngLat;
   }
 
   /** The resolved feature (auto-waits until exactly one matches). */
   async info(opts: { timeout?: number } = {}): Promise<FeatureSummary> {
     return this.map._retry<FeatureSummary>(`${this}.info()`, opts.timeout ?? this.map.timeout, async () => {
-      const found = await this.map._call<FeatureSummary[]>('find', this.query);
+      const found = await this.map._find(this.query);
       if (found.length === 1) return { value: found[0] };
       return { retry: found.length === 0 ? 'no rendered feature matches' : `strict mode violation: ${found.length} features match` };
     });
@@ -308,12 +378,12 @@ export class FeatureSetHandle {
   constructor(readonly map: MapHandle, readonly query: FeatureQuery) {}
 
   toString() {
-    return `map.features(${JSON.stringify(this.query)})`;
+    return `map.features(${show(this.query)})`;
   }
 
-  /** Snapshot, no waiting (like locator.count()). Prefer expect(...).toHaveCount(). */
+  /** Snapshot, no waiting (like locator.count()). Prefer expect(...).toHaveFeatureCount(). */
   all(): Promise<FeatureSummary[]> {
-    return this.map._call('find', this.query);
+    return this.map._find(this.query);
   }
 
   async count(): Promise<number> {
@@ -339,7 +409,7 @@ async function pollFeatures(
       // Let the map settle first so a half-loaded frame is never the basis of a verdict —
       // this matters most for `.not`, which would otherwise pass on a map that has not caught up.
       await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
-      found = await map._call<FeatureSummary[]>('find', query);
+      found = await map._find(query);
       pass = predicate(found);
       error = undefined;
       if (pass !== isNot) break;
@@ -353,20 +423,28 @@ async function pollFeatures(
   return { pass, found, error };
 }
 
+export interface ViewExpectation {
+  center?: LngLat;
+  zoom?: number;
+  bearing?: number;
+  pitch?: number;
+}
+
 export const expect = baseExpect.extend({
+  /** At least one rendered feature matches. Retries; `.not` waits for none. */
   async toHaveFeature(map: MapHandle, query: FeatureQuery, options?: { timeout?: number }) {
-    if (!(map instanceof MapHandle)) throw new Error('toHaveFeature: receiver must be a mapwright MapHandle');
+    if (!(map instanceof MapHandle)) throw new Error('toHaveFeature: receiver must be a MapHandle — expect(map).toHaveFeature(...)');
     const timeout = options?.timeout ?? this.timeout;
     const { pass, found, error } = await pollFeatures(map, query, timeout, this.isNot, (f) => f.length > 0);
-    const failed = pass === this.isNot;
-    const explain = failed ? await map._call<string>('explain', query).catch((e) => String(e)) : '';
+    const explain = pass === this.isNot ? await map._explain(query) : '';
+    if (explain) await attach('map state — toHaveFeature', explain);
     return {
       pass,
       name: 'toHaveFeature',
       expected: query,
       actual: found,
       message: () =>
-        `expect(map).${this.isNot ? 'not.' : ''}toHaveFeature(${JSON.stringify(query)})\n\n` +
+        `expect(map).${this.isNot ? 'not.' : ''}toHaveFeature(${show(query)})\n\n` +
         `Expected: ${this.isNot ? 'no' : 'at least one'} rendered feature matching, within ${timeout}ms\n` +
         `Received: ${found.length} match(es)${error ? `  (last error: ${error})` : ''}\n` +
         (this.isNot ? found.slice(0, 5).map((f) => `  - ${fmtFeature(f)}`).join('\n') + '\n' : '') +
@@ -374,27 +452,67 @@ export const expect = baseExpect.extend({
     };
   },
 
-  async toHaveCount(received: unknown, expected: number, options?: { timeout?: number }) {
-    // Same name as Playwright's locator matcher on purpose (API feel); delegate for everything else.
-    if (!(received instanceof FeatureSetHandle)) {
-      const e = this.isNot ? baseExpect(received as any).not : baseExpect(received as any);
-      await e.toHaveCount(expected, options);
-      return { pass: !this.isNot, message: () => '' };
-    }
+  /**
+   * Exactly N rendered features match. Deliberately NOT named toHaveCount: expect.extend is keyed
+   * by name, and shadowing Playwright's locator matcher makes its failures point into this file.
+   */
+  async toHaveFeatureCount(received: FeatureSetHandle, expected: number, options?: { timeout?: number }) {
+    if (!(received instanceof FeatureSetHandle)) throw new Error('toHaveFeatureCount: receiver must be map.features(...)');
     const timeout = options?.timeout ?? this.timeout;
     const { pass, found, error } = await pollFeatures(received.map, received.query, timeout, this.isNot, (f) => f.length === expected);
-    const failed = pass === this.isNot;
-    const explain = failed ? await received.map._call<string>('explain', received.query).catch((e) => String(e)) : '';
+    const explain = pass === this.isNot ? await received.map._explain(received.query) : '';
+    if (explain) await attach('map state — toHaveFeatureCount', explain);
     return {
       pass,
-      name: 'toHaveCount',
+      name: 'toHaveFeatureCount',
       expected,
       actual: found.length,
       message: () =>
-        `expect(${received}).${this.isNot ? 'not.' : ''}toHaveCount(${expected})\n\n` +
+        `expect(${received}).${this.isNot ? 'not.' : ''}toHaveFeatureCount(${expected})\n\n` +
         `Expected: ${this.isNot ? 'not ' : ''}${expected}\nReceived: ${found.length}${error ? `  (last error: ${error})` : ''}\n` +
         found.slice(0, 8).map((f) => `  - ${fmtFeature(f)}`).join('\n') +
         `\n\nWhat is on the map:\n${indent(explain)}`,
+    };
+  },
+
+  /** Camera matches (only the given fields), once the map has stopped moving. Retries. */
+  async toHaveView(map: MapHandle, expected: ViewExpectation, options?: { timeout?: number; zoomTolerance?: number; degreesTolerance?: number }) {
+    if (!(map instanceof MapHandle)) throw new Error('toHaveView: receiver must be a MapHandle');
+    const timeout = options?.timeout ?? this.timeout;
+    const zt = options?.zoomTolerance ?? 0.01;
+    const dt = options?.degreesTolerance ?? 0.0005;
+    const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
+    const deadline = Date.now() + timeout;
+    let view: Awaited<ReturnType<MapHandle['viewState']>> | undefined;
+    let pass = false;
+    for (let i = 0; ; i++) {
+      try {
+        const moving = await map._call<boolean>('isMoving');
+        view = await map.viewState();
+        pass =
+          !moving &&
+          (expected.zoom === undefined || near(view.zoom, expected.zoom, zt)) &&
+          (expected.bearing === undefined || near(view.bearing, expected.bearing, 0.1)) &&
+          (expected.pitch === undefined || near(view.pitch, expected.pitch, 0.1)) &&
+          (expected.center === undefined || (near(view.center.lng, expected.center.lng, dt) && near(view.center.lat, expected.center.lat, dt)));
+        if (pass !== this.isNot) break;
+      } catch {
+        /* map not registered yet: retry */
+      }
+      const wait = POLL[Math.min(i, POLL.length - 1)];
+      if (Date.now() + wait >= deadline) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    const actual = view && { center: view.center, zoom: view.zoom, bearing: view.bearing, pitch: view.pitch };
+    return {
+      pass,
+      name: 'toHaveView',
+      expected,
+      actual,
+      message: () =>
+        `expect(map).${this.isNot ? 'not.' : ''}toHaveView(${JSON.stringify(expected)})\n\n` +
+        `Expected: ${JSON.stringify(expected)} (±${zt} zoom, ±${dt}°), map at rest, within ${timeout}ms\n` +
+        `Received: ${JSON.stringify(actual)}`,
     };
   },
 });
@@ -421,6 +539,15 @@ async function step<T>(title: string, body: () => Promise<T>): Promise<T> {
     inTest = false;
   }
   return inTest ? test.step(title, body, { box: true }) : body();
+}
+
+/** Put the "what is on the map" text into the HTML report / trace as an attachment. */
+async function attach(name: string, body: string): Promise<void> {
+  try {
+    await test.info().attach(name, { body, contentType: 'text/plain' });
+  } catch {
+    /* not running under @playwright/test */
+  }
 }
 
 const fmt = (l: LngLat) => `[${+l.lng.toFixed(5)}, ${+l.lat.toFixed(5)}]`;

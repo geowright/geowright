@@ -24,6 +24,8 @@ setWorkerUrl('/maplibre/maplibre-gl-worker.mjs');
 
 const style: StyleSpecification = {
   version: 8,
+  // Glyphs are served by the app itself (demo/public/glyphs, Noto Sans, OFL) — still no external network.
+  glyphs: location.origin + '/glyphs/{fontstack}/{range}.pbf',
   sources: {
     basemap: {
       type: 'raster',
@@ -116,6 +118,19 @@ const style: StyleSpecification = {
       },
     },
     {
+      id: 'stations-cluster-count',
+      type: 'symbol',
+      source: 'stations',
+      filter: ['has', 'point_count'],
+      layout: {
+        'text-field': ['to-string', ['get', 'point_count']],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': 13,
+        'text-allow-overlap': true,
+      },
+      paint: { 'text-color': '#ffffff' },
+    },
+    {
       id: 'alerts',
       type: 'circle',
       source: 'alerts',
@@ -125,6 +140,20 @@ const style: StyleSpecification = {
         'circle-stroke-width': 2,
         'circle-stroke-color': '#ffffff',
       },
+    },
+    {
+      // Default collision behaviour on purpose: labels that collide are hidden, like a real app.
+      id: 'alerts-labels',
+      type: 'symbol',
+      source: 'alerts',
+      layout: {
+        'text-field': ['get', 'name'],
+        'text-font': ['Noto Sans Regular'],
+        'text-size': 12,
+        'text-offset': [0, 1.5],
+        'text-anchor': 'top',
+      },
+      paint: { 'text-color': '#263238', 'text-halo-color': '#ffffff', 'text-halo-width': 1.5 },
     },
   ],
 };
@@ -431,8 +460,8 @@ map.on('load', () => {
   map.addImage('station-icon', makeStationIcon());
 
   wireToggle('toggle-parcels', ['parcels', 'parcels-outline']);
-  wireToggle('toggle-alerts', ['alerts']);
-  wireToggle('toggle-stations', ['stations-clusters', 'stations-points']);
+  wireToggle('toggle-alerts', ['alerts', 'alerts-labels']);
+  wireToggle('toggle-stations', ['stations-clusters', 'stations-cluster-count', 'stations-points']);
   wireToggle('toggle-roads', ['roads']);
 
   const adapter = new TerraDrawMapLibreGLAdapter({ map });
