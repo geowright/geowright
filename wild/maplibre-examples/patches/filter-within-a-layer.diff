@@ -1,0 +1,10 @@
+--- upstream/test/examples/filter-within-a-layer.html (v6.10.0)
++++ wild/maplibre-examples/examples/filter-within-a-layer.html
+@@ -122,6 +122,7 @@
+         center: [-117, 32],
+         zoom: 0,
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         // add a clustered GeoJSON source for a sample set of earthquakes

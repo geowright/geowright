@@ -1,0 +1,10 @@
+--- upstream/test/examples/measure-distances.html (v6.10.0)
++++ wild/maplibre-examples/examples/measure-distances.html
+@@ -49,6 +49,7 @@
+         center: [2.3399, 48.8555],
+         zoom: 12
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     const distanceContainer = document.getElementById('distance');
+ 

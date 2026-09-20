@@ -1,0 +1,10 @@
+--- upstream/test/examples/display-a-globe-with-a-fill-extrusion-layer.html (v6.10.0)
++++ wild/maplibre-examples/examples/display-a-globe-with-a-fill-extrusion-layer.html
+@@ -24,6 +24,7 @@
+         style: 'https://demotiles.maplibre.org/style.json',
+         center: [30.0, 40.0],
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.addControl(new maplibregl.GlobeControl(), 'top-right');
+ 

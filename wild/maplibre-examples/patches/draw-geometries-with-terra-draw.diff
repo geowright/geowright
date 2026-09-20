@@ -1,0 +1,10 @@
+--- upstream/test/examples/draw-geometries-with-terra-draw.html (v6.10.0)
++++ wild/maplibre-examples/examples/draw-geometries-with-terra-draw.html
+@@ -32,6 +32,7 @@
+         center: [-91.874, 42.76], // starting position
+         zoom: 12 // starting zoom
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     // By default, all terra-draw drawing modes are enabled.
+     // you can disable some of modes in the constructor options if you want.

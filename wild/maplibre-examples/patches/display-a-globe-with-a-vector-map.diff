@@ -1,0 +1,10 @@
+--- upstream/test/examples/display-a-globe-with-a-vector-map.html (v6.10.0)
++++ wild/maplibre-examples/examples/display-a-globe-with-a-vector-map.html
+@@ -26,6 +26,7 @@
+         zoom: 2,
+         center: [0, 0],
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('style.load', () => {
+         map.setProjection({

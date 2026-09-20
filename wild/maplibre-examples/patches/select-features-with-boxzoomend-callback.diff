@@ -1,0 +1,10 @@
+--- upstream/test/examples/select-features-with-boxzoomend-callback.html (v6.10.0)
++++ wild/maplibre-examples/examples/select-features-with-boxzoomend-callback.html
+@@ -54,6 +54,7 @@
+             }
+         }
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     function setSelectedIds(ids) {
+         selectedCountElement.textContent = String(ids.length);

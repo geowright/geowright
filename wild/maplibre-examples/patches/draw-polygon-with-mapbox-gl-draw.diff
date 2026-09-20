@@ -1,0 +1,10 @@
+--- upstream/test/examples/draw-polygon-with-mapbox-gl-draw.html (v6.10.0)
++++ wild/maplibre-examples/examples/draw-polygon-with-mapbox-gl-draw.html
+@@ -93,6 +93,7 @@
+         center: [-91.874, 42.76], // starting position
+         zoom: 12 // starting zoom
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     // https://github.com/mapbox/mapbox-gl-draw/issues/1357
+     // https://github.com/mapbox/mapbox-gl-draw/pull/1078 - reverted

@@ -1,0 +1,10 @@
+--- upstream/test/examples/show-polygon-information-on-click.html (v6.10.0)
++++ wild/maplibre-examples/examples/show-polygon-information-on-click.html
+@@ -31,6 +31,7 @@
+         center: [-100.04, 38.907],
+         zoom: 3
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         // Add a source for the state polygons.

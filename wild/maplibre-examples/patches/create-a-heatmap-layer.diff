@@ -1,0 +1,10 @@
+--- upstream/test/examples/create-a-heatmap-layer.html (v6.10.0)
++++ wild/maplibre-examples/examples/create-a-heatmap-layer.html
+@@ -27,6 +27,7 @@
+         center: [-120, 50],
+         zoom: 2
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         // Add a geojson point source.

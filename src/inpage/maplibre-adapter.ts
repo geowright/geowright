@@ -69,10 +69,74 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     const layers = q.layers?.filter((id) => this.map.getLayer(id));
     if (q.layers && layers!.length === 0) return [];
     const opts = layers ? { layers } : {};
-    const raw: MapGeoJSONFeature[] = q.at
-      ? this.map.queryRenderedFeatures([q.at.x, q.at.y], opts)
-      : this.map.queryRenderedFeatures(opts);
-    return raw.map(toRendered);
+    if (q.at) return this.map.queryRenderedFeatures([q.at.x, q.at.y], opts).map(toRendered);
+    if (this.map.getProjection?.()?.type !== 'globe') return this.map.queryRenderedFeatures(opts).map(toRendered);
+    return this.queryGlobe(opts);
+  }
+
+  /**
+   * On a GLOBE, MapLibre's viewport-wide queryRenderedFeatures is wrong in both directions (verified on
+   * 6.10 with its own globe example, zoom 2: the no-geometry query and a full-viewport box both return
+   * 24 countries; point queries find 83; smaller boxes return 187 — they include the FAR side).
+   * Point queries are right. So: ask in a 4x4 grid of boxes (a superset), drop duplicate pieces, and keep
+   * a piece only if some vertex of it is on the near side and inside the viewport — the same public
+   * project/unproject round-trip as isOnSurface(). Actions verify by point hit tests anyway.
+   */
+  private queryGlobe(opts: { layers?: string[] }): RenderedFeature[] {
+    const canvas = this.map.getCanvas();
+    const w = canvas.clientWidth, h = canvas.clientHeight, N = 4;
+    const seen = new Set<string>();
+    const out: RenderedFeature[] = [];
+    const nearSide = (f: RenderedFeature) => {
+      const coords: number[][] = [];
+      const walk = (c: any): void => (typeof c[0] === 'number' ? void coords.push(c) : c.forEach(walk));
+      walk(f.geometry.coordinates);
+      const step = Math.max(1, Math.floor(coords.length / 40));
+      for (let i = 0; i < coords.length; i += step) {
+        const p = this.map.project(coords[i] as [number, number]);
+        if (p.x >= 0 && p.y >= 0 && p.x <= w && p.y <= h && this.isOnSurface({ lng: coords[i][0], lat: coords[i][1] })) return true;
+      }
+      return false;
+    };
+    const take = (raw: MapGeoJSONFeature, check: boolean) => {
+      const f = toRendered(raw);
+      const first = JSON.stringify(f.geometry.coordinates).slice(0, 80);
+      const key = `${f.layer}|${f.id ?? ''}|${JSON.stringify(f.properties)}|${first}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (!check || nearSide(f)) out.push(f);
+    };
+    for (let i = 0; i < N; i++) {
+      for (let j = 0; j < N; j++) {
+        for (const raw of this.map.queryRenderedFeatures([[(i * w) / N, (j * h) / N], [((i + 1) * w) / N, ((j + 1) * h) / N]], opts)) take(raw, true);
+      }
+    }
+    // fill-extrusion on a globe: BOX queries return nothing at all for it (verified: MapLibre's own globe +
+    // fill-extrusion example, 3 extrusions plainly drawn, box query 0, point query hits). Only point queries
+    // see them, so sweep a grid of points over those layers. A point hit IS the near side: no check needed.
+    const extrusions = (opts.layers ?? this.map.getLayersOrder()).filter((id) => this.map.getLayer(id)?.type === 'fill-extrusion' && this.map.getLayoutProperty(id, 'visibility') !== 'none');
+    if (extrusions.length) {
+      const probe = (x: number, y: number) => {
+        if (x < 0 || y < 0 || x > w || y > h) return;
+        for (const raw of this.map.queryRenderedFeatures([x, y], { layers: extrusions })) take(raw, false);
+      };
+      for (let x = 8; x < w; x += 16) for (let y = 8; y < h; y += 16) probe(x, y);
+      // Small ones slip through a 16px grid: also ask exactly where the source says their footprints are.
+      for (const id of extrusions) {
+        const layer = this.map.getLayer(id)!;
+        for (const sf of this.map.querySourceFeatures(layer.source, { sourceLayer: layer.sourceLayer })) {
+          const g = sf.geometry;
+          const rings = g.type === 'Polygon' ? [g.coordinates[0]] : g.type === 'MultiPolygon' ? g.coordinates.map((poly) => poly[0]) : [];
+          for (const ring of rings) {
+            const c = ring.reduce((a, v) => [a[0] + v[0] / ring.length, a[1] + v[1] / ring.length], [0, 0]);
+            if (!this.isOnSurface({ lng: c[0], lat: c[1] })) continue;
+            const p = this.map.project(c as [number, number]);
+            probe(p.x, p.y);
+          }
+        }
+      }
+    }
+    return out;
   }
 
   async queryData(layerId: string): Promise<RenderedFeature[] | null> {

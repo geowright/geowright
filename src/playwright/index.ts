@@ -450,16 +450,20 @@ export class MapHandle {
     await step(`map.dragAt(${fmt(from)} -> ${fmt(to)})`, async () => {
       const a = await this._pointAt(from, opts, 'map.dragAt(from)');
       const b = await this._pointAt(to, { ...opts, autoPan: false }, 'map.dragAt(to)');
-      await this._drag(a, b, opts.steps);
+      await this._drag(a, b, opts.steps, opts.modifiers);
     });
   }
 
   /** @internal */
-  async _drag(a: { x: number; y: number }, b: { x: number; y: number }, steps = 12): Promise<void> {
+  async _drag(a: { x: number; y: number }, b: { x: number; y: number }, steps = 12, modifiers?: Modifier[]): Promise<void> {
     await this.page.mouse.move(a.x, a.y, { steps: 3 });
-    await this.page.mouse.down();
-    await this.page.mouse.move(b.x, b.y, { steps });
-    await this.page.mouse.up();
+    // The keys go down BEFORE the button (shift+drag = MapLibre box zoom, not a pan). Until an earlier phase drags
+    // accepted `modifiers` in their type and silently ignored them — found on MapLibre's boxzoom example.
+    await withModifiers(this.page, modifiers, async () => {
+      await this.page.mouse.down();
+      await this.page.mouse.move(b.x, b.y, { steps });
+      await this.page.mouse.up();
+    });
   }
 
   /** @internal lngLat -> client pixel, waiting until it is in view, uncovered and the map is still. */
@@ -752,7 +756,7 @@ export class FeatureHandle {
     await step(what, () =>
       this._withActionPoint(what, opts, async (a) => {
         const b = await this.map._pointAt(to, { ...opts, autoPan: false, force: true }, `${what} destination`);
-        await this.map._drag(a, b, opts.steps);
+        await this.map._drag(a, b, opts.steps, opts.modifiers);
       }),
     );
   }
@@ -769,7 +773,7 @@ export class FeatureHandle {
       this._withActionPoint(what, opts, async (a) => {
         const from = await this.map.lngLatAt(a);
         const b = await this.map._pointAt({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true }, `${what} destination`);
-        await this.map._drag(a, b, opts.steps);
+        await this.map._drag(a, b, opts.steps, opts.modifiers);
       }),
     );
   }
