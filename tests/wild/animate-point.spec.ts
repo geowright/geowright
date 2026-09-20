@@ -91,7 +91,11 @@ test.describe('wild: animate-a-point', () => {
     // the cause of the rare `ambiguous` above. `from: 'data'` proves the source answered.
     const map = await wild.open(example('animate-a-point'), { routes: DEMOTILES, waitForIdle: false });
     await expect(map).toHaveFeature({ layer: 'point' }, { timeout: 15_000 });
-    const g = await map._call<{ ok: boolean; from?: string; geometry?: { type: string } }>('geometry', { layer: 'point' });
-    expect(g).toMatchObject({ ok: true, from: 'data', geometry: { type: 'Point' } });
+    // Polled: the source is re-set on every frame, so at any ONE instant the point may be between two tile generations
+    // (0 or 2 rendered pieces -> ok: false). A single look here failed 1 in 20 on the first 20x — my spec, not the library.
+    await expect(async () => {
+      const g = await map._call<{ ok: boolean; from?: string; geometry?: { type: string } }>('geometry', { layer: 'point' });
+      expect(g).toMatchObject({ ok: true, from: 'data', geometry: { type: 'Point' } });
+    }).toPass({ timeout: 15_000 });
   });
 });
