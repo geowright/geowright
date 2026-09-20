@@ -19,9 +19,11 @@ jobs:
   # the SwiftShader flag set and the zero-flake claim on a 4-vCPU hosted runner.
   linux:
     runs-on: ubuntu-latest
-    # 128 tests: suite ~6 min + 5x ~27 min on a 2-worker hosted runner. A 30 min limit CANCELLED the
-    # job once the suite grew (2026-09-20) — a cancelled flake check looks like neither pass nor fail.
-    timeout-minutes: 60
+    # History: 128 tests = suite ~6 min + 5x ~27 min on a 2-worker hosted runner; a 30 min limit once
+    # CANCELLED the job (a cancelled flake check looks like neither pass nor fail). an earlier phase doubled the
+    # suite (258 tests with the wild apps, terrain + globe in software GL), so the repeat went 5x -> 2x:
+    # the 20x bar is run on the Mac, Linux is the different-machine / slower-frames evidence.
+    timeout-minutes: 75
     env:
       CI: 'true'
     steps:
@@ -43,8 +45,8 @@ jobs:
       - run: npm run typecheck
       - name: Full suite
         run: npx playwright test
-      - name: Flake check (5x; the 20x bar runs on the Mac)
-        run: npx playwright test --repeat-each=5
+      - name: Flake check (2x; the 20x bar runs on the Mac)
+        run: npx playwright test --repeat-each=2
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
