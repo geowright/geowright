@@ -992,17 +992,22 @@ ${indent(explain)}`,
     const deadline = Date.now() + timeout;
     let view: Awaited<ReturnType<MapHandle['viewState']>> | undefined;
     let pass = false;
+    let settled = false;
     for (let i = 0; ; i++) {
       try {
         const moving = await map._call<boolean>('isMoving');
         view = await map.viewState();
+        settled = !moving;
         pass =
-          !moving &&
+          settled &&
           (expected.zoom === undefined || near(view.zoom, expected.zoom, zt)) &&
           (expected.bearing === undefined || near(view.bearing, expected.bearing, 0.1)) &&
           (expected.pitch === undefined || near(view.pitch, expected.pitch, 0.1)) &&
           (expected.center === undefined || (near(view.center.lng, expected.center.lng, dt) && near(view.center.lat, expected.center.lat, dt)));
-        if (pass !== this.isNot) break;
+        // A verdict needs the map AT REST, in both polarities. `.not.toHaveView(start)` used to be
+        // satisfied by a map that was merely still animating away from `start` — so the next line of
+        // the test read a mid-animation camera. Found on Linux CI (slower frames), not on the Mac.
+        if (settled && pass !== this.isNot) break;
       } catch {
         /* map not registered yet: retry */
       }
@@ -1010,6 +1015,7 @@ ${indent(explain)}`,
       if (Date.now() + wait >= deadline) break;
       await new Promise((r) => setTimeout(r, wait));
     }
+    if (!settled) pass = this.isNot; // never came to rest: fail, whichever way the assertion was written
     const actual = view && { center: view.center, zoom: view.zoom, bearing: view.bearing, pitch: view.pitch };
     return {
       pass,
@@ -1019,7 +1025,7 @@ ${indent(explain)}`,
       message: () =>
         `expect(map).${this.isNot ? 'not.' : ''}toHaveView(${JSON.stringify(expected)})\n\n` +
         `Expected: ${JSON.stringify(expected)} (±${zt} zoom, ±${dt}°), map at rest, within ${timeout}ms\n` +
-        `Received: ${JSON.stringify(actual)}`,
+        `Received: ${settled ? JSON.stringify(actual) : `the map never came to rest within ${timeout}ms (last seen: ${JSON.stringify(actual)})`}`,
     };
   },
 });

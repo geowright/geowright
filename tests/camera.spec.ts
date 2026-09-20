@@ -58,6 +58,10 @@ test.describe('camera: rotated + pitched', () => {
 });
 
 test.describe('camera: globe projection', () => {
+  // A whole-world globe at 1280x720 in SOFTWARE GL costs seconds per frame when the CPU is contended
+  // (measured in a failed 20x: single page.evaluate round-trips of 5–10s while 400 foreign simulator
+  // processes were running). test.slow() triples the timeout; it is not a retry and not a sleep.
+  test.slow();
   test('near side: feature and location actions work', async ({ map, page }) => {
     await page.getByTestId('camera-preset').selectOption('globe-6');
     await expect(map).toHaveView({ zoom: 6 });
