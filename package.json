@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit",
     "test": "playwright test",
     "test:compat": "playwright test -c playwright.compat.config.ts",
-    "build:node": "esbuild src/playwright/index.ts src/playwright/tiles.ts --bundle --platform=node --format=esm --packages=external --outdir=dist",
+    "build:node": "esbuild src/playwright/index.ts src/playwright/tiles.ts --bundle --platform=node --format=esm --packages=external --outdir=dist && esbuild src/cli/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/cli.js",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "npm run build:inpage && npm run build:node && npm run build:types",
     "pack:local": "npm run build && npm pack --pack-destination dist"
@@ -40,6 +40,9 @@
     "@types/geojson": "^7946.0.16"
   },
   "description": "Grey-box Playwright testing for canvas maps (MapLibre GL JS). Early prototype.",
+  "bin": {
+    "geowright": "./dist/cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/types/playwright/index.d.ts",
@@ -55,6 +58,7 @@
   "files": [
     "dist/index.js",
     "dist/tiles.js",
+    "dist/cli.js",
     "dist/inpage.js",
     "dist/inpage-agent.js",
     "dist/types",

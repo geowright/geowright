@@ -1,0 +1,88 @@
+# Recipes
+
+Short answers to "how do I…", each taken from an app in [`wild/`](../wild/README.md) that somebody else wrote.
+The reasoning behind them is in [DESIGN.md](DESIGN.md).
+
+## Start: `npx geowright init`
+
+```sh
+npm i -D geowright @playwright/test && npx playwright install chromium
+npx geowright init            # [--dir tests] [--url /] [--force]
+```
+
+Writes `geowright.fixture.ts` (a `map` fixture), `geowright.webgl.ts` (the software-WebGL launch flags) and `map.spec.ts`
+(a first spec that prints `map.snapshot()` — read it once: it tells you your layer ids and property names). It looks at
+your `package.json`, recognises react-map-gl, `@vis.gl/react-maplibre`, svelte-maplibre-gl and vue-maplibre-gl, and prints
+the hook in the form that wrapper needs. It never overwrites a file without `--force`.
+
+## The one line, per wrapper
+
+Test / development builds only — the line exposes the map instance to every script on the page ([SECURITY.md](../SECURITY.md)).
+
+```ts
+// plain MapLibre GL JS / Mapbox GL JS v1
+const map = new maplibregl.Map({ … });
+if (import.meta.env.MODE !== 'production') (window.__geowright_maps ??= {}).main = map;
+```
+```jsx
+// react-map-gl, @vis.gl/react-maplibre
+<Map onLoad={(e) => ((window.__geowright_maps ??= {}).main = e.target)} … />
+```
+```svelte
+<!-- svelte-maplibre-gl -->
+<MapLibre onload={(e) => ((window.__geowright_maps ??= {}).main = e.target)} … />
+```
+```vue
+<!-- vue-maplibre-gl: a Vue TEMPLATE cannot see `window` — reach it through the map's own document -->
+<mgl-map @map:load="e => ((e.map.getContainer().ownerDocument.defaultView.__geowright_maps ??= {}).main = e.map)" … />
+<!-- in <script setup> the plain form works:  const onLoad = (e) => ((window.__geowright_maps ??= {}).main = e.map) -->
+```
+
+Two maps on a page: register them under two names and pass `geowright(page, { mapId: 'left' })`.
+
+## "no map registered" although the line is there
+
+Wrappers call `onLoad` on MapLibre's `load` event, and `load` needs **every declared source**. If a data request is
+blocked or fails in the test, `load` never fires and the map is never registered. Look at the network, not at the hook:
+answer every request the app makes with `page.route` (the [harness](../tests/wild/harness.ts) fails a test listing the
+URLs nobody answered — copy that idea).
+
+## The map never becomes idle
+
+An animated source, a `setData` loop, a rotating camera: `waitForIdle()` times out and says which of these it saw. Do
+not wait for idle on such a page — assertions and actions retry by themselves. To act on a feature that never stops
+moving: `click({ moving: 'allow' })` (README, "Features that never stop moving").
+
+## Layer ids I do not control
+
+svelte-maplibre-gl generates `svmlgl-layer-0…` from a counter that shifts when a layer is added. Address layers by
+what they are: `{ layerType: 'circle', source: 'earthquakes' }`, or give your layers explicit ids.
+
+## Features without ids
+
+Identity is id + properties, and id-less features with identical properties are told apart by where they are drawn. To
+pick one of several look-alikes, say where: `map.feature({ layer: 'poi', where: { icon: 'music' }, at: { lng, lat } })`.
+
+## Labels of the basemap cover my features
+
+If your layers are inserted below the basemap's labels (the usual advice), labels ARE on top of them. geowright then
+picks another pixel of the feature that is not under a label; if there is none it fails with `occluded`, naming the label
+layer. To say "labels do not count": `geowright(page, { ignoreLayers: [/* label layer ids */] })`, or per action.
+
+## An offline basemap
+
+Tests should not depend on a tile server. `routeVectorTiles(page, '**/tiles/**', { <source-layer>: <GeoJSON> })` cuts real
+vector tiles from GeoJSON inside `page.route`; [`tests/wild/basemap.ts`](../tests/wild/basemap.ts) builds a whole
+OpenMapTiles-shaped basemap that way (style, sprite, glyphs, a synthetic city — `{ dense: true }` for production-like
+label density). For a REAL basemap on your own machine only: `scripts/fetch-real-basemap.sh` +
+`GEOWRIGHT_REAL_BASEMAP=1` (the data is ODbL: cached outside the repository, never committed).
+
+## Slow pages (terrain, a globe, software GL in CI)
+
+`test.slow()` — geowright's default action timeout follows the test's timeout (a third of it, at least 10 s). An action's
+`timeout` is wall-clock.
+
+## Old versions
+
+MapLibre GL JS 2–6 and Mapbox GL JS 1.13 are tested (`npm run test:compat`; README, "Supported map library versions").
+What a version cannot do is said in failure messages and in the snapshot (`note: …`), not guessed.

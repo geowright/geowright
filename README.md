@@ -13,6 +13,14 @@ Closes two gaps a DOM-only Playwright suite has on a WebGL map:
 
 Actions are **real input** (`page.mouse` at projected pixels), never `map.fire()`. The adapter uses MapLibre's **public API only**.
 
+## Start
+
+```sh
+npm i -D geowright @playwright/test && npx playwright install chromium
+npx geowright init      # a fixture, the software-WebGL flags, a first spec that prints map.snapshot(), and the hook for YOUR wrapper
+```
+More: [docs/RECIPES.md](docs/RECIPES.md).
+
 ## App side: one line, no dependency
 
 ```ts
