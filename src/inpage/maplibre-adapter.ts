@@ -1,5 +1,5 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { extrusionHeight, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
+import { extrusionBase, extrusionHeight, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
 import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
 
 /**
@@ -205,16 +205,25 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
       let frames = 0;
       const started = performance.now();
       const onRender = () => frames++;
+      // How often did a source START loading new data while we waited? (public 'sourcedataloading'; tile events are
+      // not counted.) Once is a load. Again and again is the app calling setData in a loop — most of those updates are
+      // abandoned before they finish, which is why counting finished 'sourcedata' events saw nothing.
+      const replaced = new Map<string, number>();
+      const onSourceData = (e: { sourceId?: string; tile?: unknown }) => {
+        if (e.sourceId && !e.tile) replaced.set(e.sourceId, (replaced.get(e.sourceId) ?? 0) + 1);
+      };
       const finish = (v: boolean) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         this.map.off('idle', onIdle);
         this.map.off('render', onRender);
-        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), pending: this.pendingSources() };
+        this.map.off('sourcedataloading', onSourceData as any);
+        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), pending: this.pendingSources(), replaced: [...replaced].filter(([, n]) => n >= 2).map(([id, n]) => ({ id, n })) };
         resolve(v);
       };
       this.map.on('render', onRender);
+      this.map.on('sourcedataloading', onSourceData as any);
       const onIdle = () => {
         // 'idle' does not look at tile state of sources that are still fetching after an error
         // retry etc.; areTilesLoaded() is the public belt-and-braces check.
@@ -227,7 +236,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     });
   }
 
-  private lastWait?: { frames: number; ms: number; moving: boolean; loaded: boolean; pending: { id: string; type: string }[] };
+  private lastWait?: { frames: number; ms: number; moving: boolean; loaded: boolean; pending: { id: string; type: string }[]; replaced: { id: string; n: number }[] };
 
   /** Sources that are not loaded right now (public isSourceLoaded), with their type. */
   private pendingSources(): { id: string; type: string }[] {
@@ -253,8 +262,6 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     if (!w) return undefined;
     if (w.moving) return 'the camera is moving (an animation or a gesture in progress)';
     const never = 'Such a map NEVER becomes idle: do not wait for idle here; retrying assertions and actions work without it';
-    const tiled = w.pending.filter((p) => p.type !== 'geojson');
-    if (tiled.length) return `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`;
     // Deterministic, whatever the frame rate: an animated canvas source or a video source repaints the map for ever.
     const sources = this.map.getStyle()?.sources ?? {};
     const animated = Object.keys(sources).filter((id) => {
@@ -262,8 +269,13 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
       return spec.type === 'video' || (spec.type === 'canvas' && spec.animate !== false);
     });
     if (animated.length) return `source(s) ${animated.join(', ')}: an animated canvas / video source repaints the map on every frame. ${never}`;
-    // A GeoJSON source that is "loading" for seconds on end is not the network: it is being re-set faster than it settles.
-    if (w.pending.length && w.frames >= 2) return `the app keeps replacing the data of GeoJSON source(s) ${w.pending.map((p) => p.id).join(', ')} (setData in a requestAnimationFrame loop or a timer: ${w.frames} frames rendered in ${Math.round(w.ms)}ms with the camera at rest). ${never}`;
+    // OBSERVED, not inferred: the data of a source was replaced again and again while we waited. (The first version
+    // inferred it from "a GeoJSON source is pending and frames are rendered" and blamed a setData loop on an app that
+    // merely loaded slowly on an overloaded machine. A wrong diagnosis is worse than none.)
+    if (w.replaced.length) return `the app keeps replacing the data of source(s) ${w.replaced.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`;
+    const tiled = w.pending.filter((p) => ['vector', 'raster', 'raster-dem'].includes(p.type));
+    if (tiled.length) return `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`;
+    if (w.pending.length) return `source(s) ${w.pending.map((p) => p.id).join(', ')} have not finished loading`;
     // (loaded() stays false for a map with an animated source, so it cannot be a condition here)
     if (w.frames >= 2) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image / canvas / video source). ${never}`;
     return w.loaded ? undefined : 'the style or a source has not finished loading';
@@ -283,9 +295,16 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
    * Public API only (project/unproject); perspective makes it approximate, the hit test makes it safe.
    */
   lift(f: RenderedFeature, at: Pt): number {
+    return this.liftOf(extrusionHeight(this.map, f), at);
+  }
+
+  liftBase(f: RenderedFeature, at: Pt): number {
+    return this.liftOf(extrusionBase(this.map, f), at);
+  }
+
+  private liftOf(height: number, at: Pt): number {
     const pitch = this.map.getPitch();
     if (!pitch) return 0;
-    const height = extrusionHeight(this.map, f);
     if (!height) return 0;
     const metres = this.map.unproject([at.x, at.y]).distanceTo(this.map.unproject([at.x + 10, at.y]));
     return metres > 0 ? height * (10 / metres) * Math.sin((pitch * Math.PI) / 180) : 0;

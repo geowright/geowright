@@ -107,6 +107,8 @@ export interface CanvasAdapter<W = unknown> {
    * the building towers into it). An estimate is enough: candidates are verified by the hit test.
    */
   lift?(f: RenderedFeature, at: Pt): number;
+  /** Optional, with `lift`: the same for the BOTTOM of the drawn volume, when it does not start on the ground. */
+  liftBase?(f: RenderedFeature, at: Pt): number;
   /**
    * Optional: if the surface repeats its content horizontally (a zoomed-out web-mercator map shows the
    * world several times), the period in pixels. The same feature drawn in two copies is ONE feature.

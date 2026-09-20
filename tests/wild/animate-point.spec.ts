@@ -6,7 +6,9 @@ import { DEMOTILES, example, expect, test } from './harness';
 // and for an instant the dot is rendered from two tile generations, 30px apart — two id-less, property-identical
 // pieces that do not touch. The engine asks the source data ("one feature? then it is one") and that removes most
 // of it, not all: recorded as an open issue in the design notes. Either way the action refuses; it never mis-clicks.
-const REFUSED = /unstable: feature position changed between two animation frames|ambiguous: strict mode violation: query resolved to 2 features: point \{\}/;
+// Since an earlier phase an action's timeout is wall-clock: on an overloaded machine the refusal can also be "the page did not
+// answer in the time that was left" — equally true, equally not a click.
+const REFUSED = /unstable: feature position changed between two animation frames|ambiguous: strict mode violation: query resolved to 2 features: point \{\}|the page did not answer "actionPoint" in the time that was left/;
 
 test.describe('wild: animate-a-point', () => {
   test('the point is on the map and never becomes idle (waitForIdle must be opted out)', async ({ wild }) => {
@@ -15,7 +17,9 @@ test.describe('wild: animate-a-point', () => {
     // this is the point of the example: the animation must NOT stop. A regression that breaks the
     // requestAnimationFrame loop would make the map go idle - catch that.
     // …and the error says WHY, instead of leaving the reader to guess that the app is slow
-    await expect(map.waitForIdle({ timeout: 2500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — the app keeps replacing the data of GeoJSON source\(s\) point \(setData in a requestAnimationFrame loop.* NEVER becomes idle/);
+    // (the second alternative is what a starved page gives: fewer than two data replacements were SEEN inside the wait —
+    //  the library then says only what it knows, not what it guesses)
+    await expect(map.waitForIdle({ timeout: 2500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — (the app keeps replacing the data of source\(s\) point \(\d+ times in \d+ms\) — setData in a requestAnimationFrame loop or a timer\. Such a map NEVER becomes idle|source\(s\) point have not finished loading)/);
   });
 
   test('the point stays on the radius-20 circle around the origin at any sampled instant', async ({ wild }) => {

@@ -406,6 +406,9 @@ export class Engine<W = unknown> {
     if (skipped.offview) return fail('offscreen', 'the feature is on the map, but that part of the map is outside the browser window (the map is larger than the viewport and cannot be scrolled fully into it)');
     // Found on a dense 3D city: a building whose footprint is below the viewport edge with a sliver of wall in view.
     // "not found" sent the reader looking for a missing feature; what is true is that it is (almost) off screen.
+    const b = pieces.map((p) => this.box(p));
+    const geometryOutside = b.every((v) => v.x1 < 0 || v.y1 < 0 || v.x0 > size.w || v.y0 > size.h);
+    if (geometryOutside) return fail('offscreen', 'the geometry of the feature is outside the viewport. It is an extrusion and part of it may reach into view, but none of the estimated roof / wall points hit-tests back to it: at most a sliver is visible. Move the camera, or pass { autoPan: true }.');
     if (stats.outside > cands.length) return fail('offscreen', `most of the feature is outside the viewport (${stats.outside} of ${stats.outside + cands.length} candidate points), and none of the points inside hit-tests back to it: only a sliver is in view. Move the camera, or pass { autoPan: true }.`);
     return fail('not-found', 'feature matched but no candidate pixel hit-tests back to it');
   }
@@ -437,7 +440,10 @@ export class Engine<W = unknown> {
           // An extruded polygon is drawn ABOVE its footprint: the roof first, then half-way up the walls,
           // then the ground. Every lifted copy of the footprint lies inside the building's silhouette.
           const lift = this.adapter.lift?.(piece, rings[0][0]) ?? 0;
-          const tiers = lift > 1 ? [1, 0.5, 0] : [0];
+          // A part that floats (real OSM building:part: a slab from 120m to 132m) is drawn between its base and its
+          // top only: half-way up from the GROUND is thin air. Found on a real basemap; the synthetic city has no bases.
+          const base = lift > 1 ? Math.min(1, (this.adapter.liftBase?.(piece, rings[0][0]) ?? 0) / lift) : 0;
+          const tiers = lift > 1 ? (base > 0 ? [1, (1 + base) / 2, base, 0] : [1, 0.5, 0]) : [0];
           tiers.forEach((t, tier) => {
             for (const c of scoredPolygonCandidates(t ? rings.map((r) => r.map((p) => ({ x: p.x, y: p.y - lift * t }))) : rings, size)) poly.push({ ...c, tier });
           });
