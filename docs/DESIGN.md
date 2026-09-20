@@ -198,7 +198,36 @@ still on screen. Action points for extrusions are lifted toward wherever the sha
 horizontal axis, which camera pitch does not foreshorten, times the sine of the pitch angle). MapLibre
 exposes no public 3D projection to compute this exactly, but an estimate is sufficient because every
 candidate is still verified by the real hit test — a wrong estimate produces a retry, never a wrong
-click.
+click. Real data added one case the generated city never had: building PARTS that float (a roof slab from 120 m to
+132 m, `fill-extrusion-base`). "Half-way up from the ground" is thin air for those, so the tiers run between the
+base and the top; and an extrusion whose footprint is outside the viewport, with at most a sliver reaching into it,
+is reported as off-screen with that explanation rather than as "not found".
+
+**Whole pixels.** Real input is dispatched with fractional coordinates (a `pointerdown` at 339.6, 641.4), but map
+libraries handle `click` and `mousedown` — MouseEvents, whose coordinates the browser truncates (339, 641). For a long
+time candidates were verified exactly where they were computed, fractions included, and nothing noticed: features are
+usually many pixels wide. A dense, label-heavy basemap noticed. The edge of a point-of-interest label ran between the
+two positions; the hit test at the fractional pixel said "the building is on top", MapLibre's own click handler, one
+truncation later, said "the label is". Candidates are now snapped to whole client pixels BEFORE they are verified, the
+snapshot lists whole pixels, and for shapes thinner than a pixel (a country squeezed against the limb of a globe) the
+four whole pixels around a candidate are tried as well. The general lesson: verify the pixel the application will see,
+not the pixel you computed.
+
+**Targets that never stop moving.** The two-frame stability check refuses a perpetually animated feature for ever —
+correct, and stricter than a person, who can click a slowly moving dot. `{ moving: 'allow' }` drops the two checks a
+moving target cannot pass (map at rest, same pixel two frames running) and keeps every other one; what protects against
+acting on the wrong thing is the click-time verification, which swallows a late press before the application sees it.
+Measured before designing: on a light page the freshest pixel is good enough (a 9 px dot at up to 200 px/s: 20 of 20
+first try; at 400 px/s: 0 of 20, every press swallowed, none delivered elsewhere). On MapLibre's own "animate a point"
+example — a full-screen basemap in software GL, ~14 frames a second — it never hit once in 30 s, because input arrives
+200–500 ms after the pixel was computed. So the pointer LEADS: velocity and acceleration are measured over three frames
+(a straight-line lead of 300 ms leaves a 114 px circle by 5 px), the click-time check is armed before the pixel is
+computed (every round trip after it is lateness), and how far to lead is learnt from each miss — the verdict reports
+where the target was when the event arrived; lead + lateness is that attempt's measured latency, and the median of the
+last few is used (a full-gain correction chased frame-sized jitter and never settled). Result on that example under five
+parallel workers: click 30 of 30. `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
+boundary, so its lateness jitters by whole frames — more than the ~175 ms that dot spends under any pixel (14 of 30
+there); it is dependable when a frame is short compared with the target's dwell time.
 
 **Bounded search.** Candidate generation is cheap per candidate but not free in aggregate: a large,
 mostly-covered polygon (a country outline mostly hidden under smaller regions on top of it) produced
@@ -396,10 +425,20 @@ idle is the secondary, supporting mechanism, not the primary one.
 
 Some real applications intentionally never idle at all — a `requestAnimationFrame` loop that replaces
 `setData` every frame, a streaming line, an always-animating canvas source. An explicit
-`waitForIdle()` call against such a map is a trap: it will simply time out, with a message that
-currently says only that the map did not become idle, not that the map may be animating on purpose.
+`waitForIdle()` call against such a map is a trap: it will simply time out. The error therefore says WHY, as far as
+public API can tell: an animated canvas or video source (read from the style — independent of frame rate), a source
+whose data the application keeps replacing (counted `sourcedataloading` events: OBSERVED, not inferred — a first
+version inferred a `setData` loop from "a GeoJSON source is pending and frames are rendered" and blamed one on an
+application that was merely loading slowly on an overloaded machine; a wrong diagnosis is worse than none), continuous
+repainting with nothing loading, tiles still loading, or a moving camera.
 Assertions are unaffected, since their own idle wait is bounded rather than blocking; only an explicit,
 unconditional wait for idle needs to be opted out for a map like this.
+
+**Timeouts mean what they say.** The default action timeout is a third of the test's timeout (at least 10 s) and is
+read when used, so `test.slow()` scales it — a page that is slow enough to need `test.slow()` needed every geowright
+timeout raised by hand before. And an action's `timeout` is wall-clock: a side-effect-free round trip into a busy page
+(finding the pixel) is abandoned at the deadline — measured before: 33 s for `{ timeout: 2000 }` on an overloaded
+machine. Real input is never abandoned half-way.
 
 **No fixed sleeps remain anywhere in the library or its own tests.** The one that used to exist — a
 short pause between vertices while drawing a shape, to avoid an unintended double-click — turned out to
@@ -549,6 +588,23 @@ layers where a real basemap style commonly has well over a hundred, and label de
 much lower — occlusion caused by dense basemap labelling, expected going in to be a significant source
 of friction, was as a result barely exercised.
 
+### Label realism
+
+The synthetic basemap has an opt-in `dense` variant — 71 layers, 21 label layers, about 340 labels in view, all
+generated — for one question: what happens to an application's features when basemap labels are drawn ON TOP of them,
+which is where an application that inserts its layers below the labels (the usual advice; MapLibre's 3D-buildings
+example does it) actually lives. Of 60 buildings, 40 were clickable at their best pixel and 19 only at another one,
+because a house number, a point-of-interest name, a street name or a neighbourhood label covered the best; every click
+landed on the building that was asked for — after the whole-pixel fix described under actionability, which this
+fixture is what found.
+
+A REAL basemap is available too, but only on a developer's own machine: a script caches a small OpenFreeMap extract
+(OpenStreetMap data, ODbL) outside the repository — never committed, never in CI — and an opt-in spec set runs the same
+example against it, still without touching the network. 120 layers, 25 label layers, ~300 labels and 1,025 real
+buildings in view: 25 buildings → 19 clicked on target (9 of them at a pixel other than the best one, under transit and
+street labels or behind a neighbour), 4 honestly occluded, 2 off-screen slivers. Real data found what generated data
+could not: the floating building parts mentioned under actionability.
+
 ### Scoreboard
 
 31 applications not written for this project — 23 official MapLibre examples, 3 React (react-map-gl)
@@ -694,30 +750,19 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
 
 **What is still wrong, as of this writing:**
 
-- A feature that is continuously moving (a perpetually animated point, for example) can be asserted
-  against, but the two-frame stability check will refuse to ever click it — correct, cautious behavior,
-  but stricter than a real user, who could click a slowly moving target without difficulty.
-- A map that intentionally never idles turns an explicit, unconditional wait for idle into a plain
-  timeout, with a generic message rather than one that recognizes the map may be animating on purpose.
-- An action's configured timeout bounds when new *attempts* may start, not the wall-clock duration of
-  one already-in-flight step; under heavy contention a single slow step can run well past the timeout
-  that was requested for the whole action.
-- The default action timeout does not scale automatically alongside a test's own extended timeout
-  setting, so slow-rendering scenarios (terrain, globe, a long intro animation) currently need their
-  timeout raised explicitly rather than inheriting one.
-- The rare "ambiguous instead of unstable" mislabeling described under identity remains unresolved, and
-  identity disambiguation by asking the source directly only works for GeoJSON sources — a vector-tile
-  source cannot be asked this kind of question at all.
-- Two id-less, property-identical shapes that visually touch on screen are still treated as a single
-  feature; contact alone cannot tell them apart.
-- The globe query workaround is a grid-based heuristic, not an exact fix, and a small extrusion
-  positioned awkwardly relative to the query grid can still be missed.
-- Synthetic basemaps under-represent both the label density and the total layer count of a real
-  basemap style, so occlusion caused by dense basemap labelling — expected to be a significant source
-  of friction — has been only lightly exercised so far.
-- On a basemap with many layers, the text snapshot's character budget can be spent describing basemap
-  layers before it reaches an application's own layers, without yet prioritizing the layers a caller is
-  more likely to care about.
-- Touch input (tap, one-finger drag, double tap, pinch, two-finger rotate) is covered, including under
-  mobile device emulation at a fractional device pixel ratio; drawing tools have not been exercised
-  under touch input at all.
+- `hover({ moving: 'allow' })` is only dependable when a frame of the page is short compared with the time the target
+  spends under one pixel; `click` holds up under contention, hover does not (a `mousemove` is frame-aligned).
+- A target moving faster than roughly its own diameter per input latency cannot be clicked at all; the action times
+  out honestly (every late press is swallowed), it does not mis-click.
+- Identity disambiguation by asking the source only works for GeoJSON sources; a vector-tile source cannot be asked.
+  (A rare "ambiguous instead of unstable" on MapLibre's animated point had a plain cause: its source holds a bare
+  GeoJSON geometry, which was read as "no features", so nothing could be learnt from it. Fixed; the statistical
+  confirmation under contention is still owed.)
+- Two id-less, property-identical shapes that visually touch on screen are still treated as a single feature.
+- The globe query workaround is a grid-based heuristic: an extrusion narrower than 16 px whose footprint centre is
+  off-screen or on the far side can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
+- The version matrix covers the core on six versions; globe, terrain, extrusions, touch, drawing tools and the
+  third-party applications run on MapLibre 6 only.
+- Real-basemap realism exists only as an opt-in, local cache: no real basemap data can be committed under the
+  repository's permissive-licenses-only rule.
+- Drawing tools have not been exercised under touch input.
