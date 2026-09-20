@@ -286,7 +286,7 @@ export class Engine<W = unknown> {
         if (offscreen.length && !this.find(q).length) {
           lines.push(
             `  ${offscreen.length} matching feature(s) exist in the source but are not rendered ` +
-              `(off-screen, hidden layer, or filtered out): ` +
+              `(off-screen, hidden layer, filtered out${info.type === 'symbol' ? ', or hidden by label/icon collision' : ''}): ` +
               offscreen.slice(0, 3).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; '),
           );
         }

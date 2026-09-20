@@ -97,6 +97,19 @@ test.describe('assert gap', () => {
     expect(circle.pixel).toBeDefined();
   });
 
+  test('a label hidden by collision is explained, not just "missing"', async ({ map, page }) => {
+    // Two alerts 3px apart: the second label collides with the first and MapLibre hides it.
+    await page.getByTestId('alert-name').fill('Twin of gas leak');
+    await page.getByTestId('alert-lng').fill('34.7702');
+    await page.getByTestId('alert-lat').fill('32.0851');
+    await page.getByTestId('alert-submit').click();
+    await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Twin of gas leak' } }); // circle is there
+    await expect(map.features({ layer: 'alerts-labels', where: { name: /gas leak/i } })).toHaveFeatureCount(1); // one label lost
+    const hidden = (await map.features({ layer: 'alerts-labels' }).all()).some((f) => f.properties.name === 'Gas leak') ? 'Twin of gas leak' : 'Gas leak';
+    const err = await expect(map).toHaveFeature({ layer: 'alerts-labels', where: { name: hidden } }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    expect(err!.message).toContain('or hidden by label/icon collision');
+  });
+
   test('near-miss diagnostics: says which values ARE present', async ({ map }) => {
     const err = await expect(map)
       .toHaveFeature({ layer: 'alerts', where: { severity: 'critical', name: /leak/ } }, { timeout: 500 })
