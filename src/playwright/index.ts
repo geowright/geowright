@@ -1,4 +1,4 @@
-import { expect as baseExpect, test, type Page } from '@playwright/test';
+import { expect as baseExpect, test, type Locator, type Page } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -13,6 +13,7 @@ import type {
   FeatureSummary as WireSummary,
   LayerInfo,
   LngLat,
+  Overlay,
   SnapshotOptions,
   WhereOp,
   WhereValue,
@@ -87,6 +88,14 @@ export interface GeowrightOptions {
    * Trade-off: it adds DOM to the page under test. Off by default.
    */
   mirror?: boolean | { max?: number };
+}
+
+/** Which marker / popup: at a location, and/or pointing at a feature. */
+export interface OverlayWhere {
+  at?: LngLat;
+  feature?: FeatureQuery;
+  /** How far (px) the overlay's anchor may be from `at`. Default 8. */
+  tolerancePx?: number;
 }
 
 export type Modifier = 'Shift' | 'Control' | 'Alt' | 'Meta';
@@ -235,6 +244,53 @@ export class MapHandle {
 
   layers(): Promise<LayerInfo[]> {
     return this._call('layers');
+  }
+
+  /**
+   * Client (viewport) pixel of a location, once it is inside the view and the map is still. The
+   * bridge to plain Playwright for DOM things on the map: `page.mouse`, `locator.dragTo`, markers.
+   */
+  clientPoint(at: LngLat, opts: { timeout?: number } = {}): Promise<{ x: number; y: number }> {
+    return this._pointAt(at, { ...opts, force: true }, 'map.clientPoint');
+  }
+
+  /* ---- DOM overlays: MapLibre Marker / Popup ---- */
+
+  /**
+   * A normal Playwright Locator for the DOM marker at a location (or on a feature). Markers are
+   * elements, so everything Playwright can do applies — click(), hover(), toBeVisible(), dragTo().
+   * Auto-waits until exactly one marker is there; the locator is then bound to that element's
+   * position in the document (resolve again after markers are added or removed).
+   */
+  marker(where: OverlayWhere, opts: { timeout?: number } = {}): Promise<Locator> {
+    return this._overlay('marker', where, opts);
+  }
+
+  /** Locator for a popup; with no `where`, the only popup on the map. */
+  popup(where: OverlayWhere = {}, opts: { timeout?: number } = {}): Promise<Locator> {
+    return this._overlay('popup', where, opts);
+  }
+
+  /** @internal */
+  _overlays(kind: Overlay['kind'], where: OverlayWhere): Promise<(Overlay & { distance?: number })[]> {
+    return this._call('overlaysAt', kind, { ...where, feature: where.feature && toWire(where.feature) });
+  }
+
+  private async _overlay(kind: Overlay['kind'], where: OverlayWhere, opts: { timeout?: number }): Promise<Locator> {
+    const what = `map.${kind}(${JSON.stringify(where)})`;
+    const found = await step(what, () =>
+      this._retry<Overlay>(what, opts.timeout ?? this.timeout, async () => {
+        if (await this._call<boolean>('isMoving')) return { retry: 'map is moving' };
+        const list = await this._overlays(kind, where);
+        if (list.length === 1) return { value: list[0] };
+        if (list.length === 0) {
+          const all = await this._overlays(kind, {});
+          return { retry: `no ${kind} there; ${all.length} ${kind}(s) on the map${all.length ? ': ' + all.slice(0, 5).map((o) => `"${o.text.slice(0, 40)}" @(${Math.round(o.rect.x)},${Math.round(o.rect.y)})`).join(', ') : ''}` };
+        }
+        return { retry: `strict mode violation: ${list.length} ${kind}s match` };
+      }),
+    );
+    return this.page.locator(found.selector).nth(found.index);
   }
 
   /** lng/lat under a client (viewport) pixel. */
@@ -702,6 +758,43 @@ ${indent(explain)}`,
         `Expected: ${JSON.stringify(expected)}\n` +
         `Received: ${verdict.ok ? 'matching geometry' : verdict.reason}\n` +
         `Geometry on the map (${verdict.from ?? 'n/a'}): ${JSON.stringify(verdict.actual)}`,
+    };
+  },
+
+  /**
+   * A popup is open AND anchored where it should be: at a location, or with its tip on a feature
+   * (its anchor pixel hit-tests to the feature). Optional `text`. Retries; `.not` waits for none.
+   * For the popup's content use the Locator: `await map.popup({ feature: q })`.
+   */
+  async toHavePopup(map: MapHandle, where: OverlayWhere & { text?: string | RegExp } = {}, options?: { timeout?: number }) {
+    if (!(map instanceof MapHandle)) throw new Error('toHavePopup: receiver must be a MapHandle');
+    const timeout = options?.timeout ?? this.timeout;
+    const { text, ...loc } = where;
+    const deadline = Date.now() + timeout;
+    let matching: Overlay[] = [];
+    let all: Overlay[] = [];
+    let pass = false;
+    for (let i = 0; ; i++) {
+      try {
+        const moving = await map._call<boolean>('isMoving');
+        all = await map._overlays('popup', {});
+        matching = (await map._overlays('popup', loc)).filter((p) => text === undefined || (typeof text === 'string' ? p.text.includes(text) : text.test(p.text)));
+        pass = !moving && matching.length > 0;
+        if (pass !== this.isNot) break;
+      } catch {
+        /* map not registered yet: retry */
+      }
+      const wait = POLL[Math.min(i, POLL.length - 1)];
+      if (Date.now() + wait >= deadline) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    return {
+      pass,
+      name: 'toHavePopup',
+      message: () =>
+        `expect(map).${this.isNot ? 'not.' : ''}toHavePopup(${show(where as FeatureQuery)})\n\n` +
+        `Expected: ${this.isNot ? 'no' : 'a'} popup ${loc.at ? `anchored within ${loc.tolerancePx ?? 8}px of ${fmt(loc.at)}` : ''}${loc.feature ? ` pointing at ${show(loc.feature)}` : ''}${text !== undefined ? ` with text ${text}` : ''}, within ${timeout}ms\n` +
+        `Received: ${matching.length} matching; popups on the map: ${all.length ? all.map((p) => `"${p.text.slice(0, 60)}" anchored @(${Math.round(p.anchor?.x ?? p.rect.x)},${Math.round(p.anchor?.y ?? p.rect.y)})`).join('; ') : 'none'}`,
     };
   },
 

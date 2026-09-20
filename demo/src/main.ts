@@ -1,6 +1,7 @@
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   Map as MlMap,
+  Marker,
   Popup,
   setWorkerUrl,
   type StyleSpecification,
@@ -403,6 +404,44 @@ let sensorData = SENSORS;
 (document.querySelector('[data-testid="sensor-mute-503"]') as HTMLButtonElement).addEventListener('click', () => {
   const muted = !!map.getFeatureState({ source: 'sensors', id: 503 }).muted;
   map.setFeatureState({ source: 'sensors', id: 503 }, { muted: !muted });
+});
+
+// ---------------------------------------------------------------------------
+// DOM markers (maplibregl.Marker): real apps mix these with canvas features
+// ---------------------------------------------------------------------------
+
+const markerInfoEl = document.querySelector('[data-testid="marker-info"]') as HTMLElement;
+function buildMarkers(): Marker[] {
+  // custom element, own popup, draggable: reports where it was dropped
+  const hqEl = document.createElement('div');
+  hqEl.className = 'hq-marker';
+  hqEl.dataset.testid = 'marker-hq';
+  hqEl.textContent = 'HQ';
+  hqEl.style.cssText = 'background:#4527a0;color:#fff;font:bold 11px system-ui;padding:3px 6px;border-radius:10px;cursor:pointer;';
+  const hq = new Marker({ element: hqEl, draggable: true })
+    .setLngLat([34.84, 32.12])
+    .setPopup(new Popup({ offset: 14 }).setHTML('<div data-testid="hq-popup"><strong>Depot HQ</strong></div>'));
+  hq.on('dragend', () => {
+    const l = hq.getLngLat();
+    markerInfoEl.textContent = `hq moved to ${l.lng.toFixed(4)},${l.lat.toFixed(4)}`;
+  });
+  // default pins sitting ON canvas features: over the middle of parcel 103, and hiding tiny parcel 106
+  const onParcel = new Marker({ color: '#c62828' }).setLngLat([34.805, 32.1]);
+  const onTiny = new Marker({ color: '#2e7d32' }).setLngLat([34.8, 32.0595]);
+  for (const [name, m] of [['pin-103', onParcel], ['pin-106', onTiny]] as const) {
+    m.getElement().dataset.testid = `marker-${name}`;
+    m.getElement().addEventListener('click', (ev) => {
+      ev.stopPropagation(); // a marker click is not a map click
+      markerInfoEl.textContent = `${name} clicked`;
+    });
+  }
+  return [hq, onParcel, onTiny];
+}
+let markers: Marker[] | undefined;
+(document.querySelector('[data-testid="toggle-markers"]') as HTMLInputElement).addEventListener('change', (ev) => {
+  const on = (ev.target as HTMLInputElement).checked;
+  markers ??= buildMarkers();
+  for (const m of markers) on ? m.addTo(map) : m.remove();
 });
 
 // ---------------------------------------------------------------------------

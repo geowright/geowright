@@ -95,6 +95,11 @@ export interface CanvasAdapter<W = unknown> {
    */
   pixelContribution?(layer: string, at: Pt): number | undefined;
   /**
+   * Optional: DOM things the library positions over the surface (MapLibre: Marker, Popup). They are
+   * ordinary elements — tests act on them with ordinary locators — but WHERE they sit is map state.
+   */
+  overlays?(): Overlay[];
+  /**
    * Optional: false when `world` has a pixel but is NOT what is drawn there — the far side of a
    * globe, beyond the horizon, behind the camera. Acting on that pixel would hit something else.
    */
@@ -227,4 +232,17 @@ export interface GeometryVerdict {
   actual?: Geometry;
   /** 'data': the full shape from the source. 'rendered': merged render pieces — may be tile-clipped. */
   from?: 'data' | 'rendered';
+}
+
+/** A DOM overlay positioned by the library (marker, popup). */
+export interface Overlay {
+  kind: 'marker' | 'popup';
+  /** CSS selector for this kind, and the element's index among ALL matches in the document. */
+  selector: string;
+  index: number;
+  /** Bounding box, surface-relative CSS pixels. */
+  rect: { x: number; y: number; width: number; height: number };
+  /** The pixel the overlay points at (popup tip; marker anchor if it can be known), surface-relative. */
+  anchor?: Pt;
+  text: string;
 }

@@ -6,6 +6,7 @@ import type {
   EntityView,
   GeometryExpectation,
   GeometryVerdict,
+  Overlay,
   SnapshotOptions,
   WhereOp,
   FeatureQuery,
@@ -209,6 +210,33 @@ export class Engine<W = unknown> {
     const r = this.actionPointOnce(q, {});
     if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
     return { ok: true, diff: this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
+  }
+
+  /* ---------------- DOM overlays (markers, popups) ---------------- */
+
+  /**
+   * Overlays of a kind, optionally only those AT a location or ON a feature, nearest first.
+   *  - `at`: distance from the location's pixel to the overlay's anchor (popups) or box (markers)
+   *  - `feature`: the overlay's anchor pixel (or box centre-bottom) hit-tests to that feature
+   */
+  overlaysAt(kind: Overlay['kind'], o: { at?: unknown; feature?: FeatureQuery; tolerancePx?: number } = {}): (Overlay & { distance?: number })[] {
+    const tol = o.tolerancePx ?? 8;
+    let list: (Overlay & { distance?: number })[] = (this.adapter.overlays?.() ?? []).filter((v) => v.kind === kind);
+    const toBox = (p: Pt, r: Overlay['rect']) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.width)), Math.max(r.y - p.y, 0, p.y - (r.y + r.height)));
+    if (o.at) {
+      const p = this.adapter.project(o.at as W);
+      list = list.map((v) => ({ ...v, distance: v.anchor ? Math.hypot(v.anchor.x - p.x, v.anchor.y - p.y) : toBox(p, v.rect) })).filter((v) => v.distance! <= tol);
+      list.sort((x, y) => x.distance! - y.distance!);
+    }
+    if (o.feature) {
+      const q = o.feature;
+      const layers = this.layersOf(q);
+      list = list.filter((v) => {
+        const p = v.anchor ?? { x: v.rect.x + v.rect.width / 2, y: v.rect.y + v.rect.height };
+        return this.adapter.queryFeatures({ layers, at: p }).some((f) => this.matches(f, q));
+      });
+    }
+    return list;
   }
 
   /* ---------------- geometry ---------------- */

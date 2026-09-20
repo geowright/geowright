@@ -1,6 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
 import { paintVisibility } from './maplibre-paint';
-import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Pt, RenderedFeature, Visibility } from './types';
+import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
 
 /**
  * MapLibre GL JS adapter. PUBLIC API ONLY — no underscore fields. (MapGrab, the archived prior
@@ -171,6 +171,40 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     let diff = 0;
     for (let i = 0; i < withLayer.length; i++) diff += Math.abs(withLayer[i] - without[i]);
     return diff;
+  }
+
+  /**
+   * Markers and popups, found by MapLibre's documented CSS classes inside this map's container
+   * (there is no public `map.getMarkers()`). A popup's anchor pixel follows from its
+   * `maplibregl-popup-anchor-<side>` class: the tip sits on that side of its box.
+   */
+  overlays(): Overlay[] {
+    const container = this.map.getContainer();
+    const origin = this.map.getCanvas().getBoundingClientRect();
+    const out: Overlay[] = [];
+    for (const [kind, selector] of [['marker', '.maplibregl-marker'], ['popup', '.maplibregl-popup']] as const) {
+      const all = [...document.querySelectorAll(selector)];
+      all.forEach((el, index) => {
+        if (!container.contains(el)) return;
+        const r = el.getBoundingClientRect();
+        const rect = { x: r.left - origin.left, y: r.top - origin.top, width: r.width, height: r.height };
+        const side = [...el.classList].find((c) => c.startsWith(`maplibregl-${kind}-anchor-`))?.slice(`maplibregl-${kind}-anchor-`.length);
+        let anchor: Pt | undefined;
+        if (side && kind === 'popup') {
+          anchor = {
+            x: side.includes('left') ? rect.x : side.includes('right') ? rect.x + rect.width : rect.x + rect.width / 2,
+            y: side.startsWith('top') ? rect.y : side.startsWith('bottom') ? rect.y + rect.height : rect.y + rect.height / 2,
+          };
+        }
+        // innerText-like: the popup's close button ("×") is chrome, not content
+        const text = [...(el.querySelector('.maplibregl-popup-content') ?? el).childNodes]
+          .filter((n) => !(n instanceof Element && n.classList.contains('maplibregl-popup-close-button')))
+          .map((n) => n.textContent ?? '')
+          .join(' ');
+        out.push({ kind, selector, index, rect, anchor, text: text.replace(/\s+/g, ' ').trim().slice(0, 200) });
+      });
+    }
+    return out;
   }
 
   subscribe(cb: () => void): () => void {

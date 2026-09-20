@@ -115,6 +115,18 @@ What is on the map:
 
 It also distinguishes: layer does not exist · layer hidden · feature exists in the source but is off-screen · occluded (names the occluder) · ambiguous (lists the matches). The same text is attached to the HTML report / trace as `map state — …`.
 
+### DOM markers and popups
+
+```ts
+const hq = await map.marker({ at: { lng: 34.84, lat: 32.12 } });   // a normal Playwright Locator
+await hq.click();
+await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 1 }, text: 'Gas leak' });   // open AND anchored on the feature
+await expect(await map.popup()).toContainText('Severity: high');
+const p = await map.clientPoint({ lng: 34.82, lat: 32.11 });      // lng/lat -> client pixel, for page.mouse
+```
+
+Feature actions never click through a marker: covered candidate pixels are skipped, and a fully covered feature fails with `dom-covered`, naming the element.
+
 ### Geometry and drawing
 
 `toHaveGeometry` compares the feature's **full** geometry as the map's source holds it (rendered geometry is
@@ -176,6 +188,6 @@ npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it 
 demo/             the system under test (Vite + MapLibre 6 + terra-draw; dense.html = 5k points; draw2.html = mapbox-gl-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   geowright(page), handles, expect matchers
-tests/            assert / act / draw / draw2 / dense / camera / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
+tests/            assert / act / draw / draw2 / dense / camera / overlays / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```
