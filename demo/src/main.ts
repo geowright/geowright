@@ -7,7 +7,7 @@ import {
   type GeoJSONSource,
   type MapGeoJSONFeature,
 } from 'maplibre-gl';
-import { TerraDraw, TerraDrawPolygonMode, TerraDrawSelectMode, TerraDrawRenderMode } from 'terra-draw';
+import { TerraDraw, TerraDrawPolygonMode, TerraDrawLineStringMode, TerraDrawRectangleMode, TerraDrawCircleMode, TerraDrawSelectMode, TerraDrawRenderMode } from 'terra-draw';
 import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter';
 import type { Feature, Point } from 'geojson';
 import { PARCELS, ALERTS, STATIONS, ROADS, SENSORS, SENSOR_ZONES, type Severity, type AlertProps } from './data';
@@ -524,8 +524,10 @@ const drawJsonEl = document.querySelector('[data-testid="draw-json"]') as HTMLEl
 
 function refreshDrawUI() {
   if (!terraDraw) return;
-  const polygons = terraDraw.getSnapshot().filter((f) => f.geometry.type === 'Polygon');
+  const all = terraDraw.getSnapshot();
+  const polygons = all.filter((f) => f.geometry.type === 'Polygon');
   drawCountEl.textContent = String(polygons.length);
+  drawCountEl.dataset.total = String(all.filter((f) => !f.properties.midPoint && !f.properties.selectionPoint && !f.properties.closingPoint).length);
   drawJsonEl.textContent = JSON.stringify(polygons.map((f) => ({ geometry: f.geometry, id: f.id })));
 }
 
@@ -534,6 +536,14 @@ function refreshDrawUI() {
   drawModeActive = true;
   terraDraw.setMode('polygon');
 });
+
+for (const mode of ['line', 'rectangle', 'circle'] as const) {
+  (document.querySelector(`[data-testid="draw-${mode}"]`) as HTMLButtonElement).addEventListener('click', () => {
+    if (!terraDraw) return;
+    drawModeActive = true;
+    terraDraw.setMode(mode === 'line' ? 'linestring' : mode);
+  });
+}
 
 (document.querySelector('[data-testid="draw-select"]') as HTMLButtonElement).addEventListener('click', () => {
   if (!terraDraw) return;
@@ -573,18 +583,16 @@ map.on('load', () => {
     adapter,
     modes: [
       new TerraDrawPolygonMode(),
+      new TerraDrawLineStringMode(),
+      new TerraDrawRectangleMode(), // default interaction: click, move, click
+      new TerraDrawCircleMode({ drawInteraction: 'click-drag' }), // press, drag, release
       new TerraDrawSelectMode({
-        flags: {
-          polygon: {
-            feature: {
-              draggable: true,
-              coordinates: {
-                draggable: true,
-                midpoints: true,
-              },
-            },
-          },
-        },
+        flags: Object.fromEntries(
+          ['polygon', 'linestring', 'rectangle', 'circle'].map((mode) => [
+            mode,
+            { feature: { draggable: true, coordinates: { draggable: true, midpoints: { draggable: true }, deletable: true } } },
+          ]),
+        ),
       }),
       new TerraDrawRenderMode({ modeName: 'static', styles: {} }),
     ],

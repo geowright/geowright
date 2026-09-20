@@ -45,6 +45,12 @@ await map.feature({ layer: 'alerts', id: 1 }).click({ modifiers: ['Shift'] });
 await map.wheelAt({ lng: 34.8, lat: 32.1 }, -600);                        // zooms around the pointer
 await map.feature({ layer: 'buildings', id: 1028 }).click({ autoPan: { lng: 35.2, lat: 32.09 } }); // tiled source
 await map.draw.polygon([a, b, c, d], { finish: 'click-first' });          // finish gesture is tool-specific
+await map.draw.rectangle(corner, opposite);                                // or { gesture: 'drag' }
+await map.draw.circle(center, edge, { gesture: 'drag' });
+await map.draw.cancel();                                                  // Escape
+await map.feature({ layer: 'td-point', where: { midPoint: true }, at: mid }).dragTo(to);   // insert a vertex
+await map.feature({ layer: 'td-polygon' }).dragBy({ dLng: -0.02, dLat: 0.01 });           // move the whole shape
+await expect(map.feature({ layer: 'td-polygon' })).toHaveGeometry([a, b, c, d], { tolerancePx: 2 });  // read from the MAP
 ```
 
 ### Queries
@@ -107,6 +113,15 @@ What is on the map:
 
 It also distinguishes: layer does not exist · layer hidden · feature exists in the source but is off-screen · occluded (names the occluder) · ambiguous (lists the matches). The same text is attached to the HTML report / trace as `map state — …`.
 
+### Geometry and drawing
+
+`toHaveGeometry` compares the feature's **full** geometry as the map's source holds it (rendered geometry is
+tile-clipped) against a GeoJSON geometry, a vertex list, or `{ circle: { center, edge } }` — in pixels, ring
+start/winding-insensitive. Draw helpers are input choreography, not a binding to one tool: `finish`
+(`click-last | click-first | dblclick | enter | none`) and `gesture` (`click-move-click | drag`) are explicit
+because draw tools disagree. Tested against terra-draw and mapbox-gl-draw. Note: tools with a drag threshold
+(terra-draw: 8px) offset drag-drawn shapes and whole-shape moves by that much — for real users too.
+
 ## Agents (Playwright MCP)
 
 Browser agents get an empty `region "Map"` from the accessibility snapshot. Two ways to fix that, both via
@@ -156,9 +171,9 @@ npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it 
 ## Layout
 
 ```
-demo/             the system under test (Vite + MapLibre 6 + terra-draw), no test code inside
+demo/             the system under test (Vite + MapLibre 6 + terra-draw; dense.html = 5k points; draw2.html = mapbox-gl-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   geowright(page), handles, expect matchers
-tests/            assert / act / draw / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
+tests/            assert / act / draw / draw2 / dense / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```

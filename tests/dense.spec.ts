@@ -52,13 +52,13 @@ test.describe('dense map', () => {
     const full = await dense.snapshot();
     expect(full.length).toBeLessThanOrEqual(8000);
     expect(full).toMatch(/\[assets\] 3240 circle entities/);
-    expect(full).toMatch(/… 3225 more not listed \(nearest to the view centre are listed\)\. Summary — .*kind: hydrant×834/);
+    expect(full).toMatch(/… 3225 more not listed \(nearest to the view centre are listed\)\. Summary of all \d+ — .*kind: hydrant×\d+, .*status: ok×\d+, warn×\d+, fault×75/);
     expect(full).toContain("snapshot('<mapId>', { filter: { layer: 'assets'");
 
     const tight = await dense.snapshot({ maxChars: 1500 });
     expect(tight.length).toBeLessThanOrEqual(1500);
     expect(tight).toMatch(/\[assets\] 3240 circle entities/); // counts and histograms survive, rows are what shrinks
-    expect(tight).toMatch(/Summary — .*kind: /);
+    expect(tight).toMatch(/Summary of all \d+ — .*kind: /);
 
     const one = await dense.snapshot({ filter: { layer: 'assets', where: { serial: 'SN-92872' } } });
     expect(one).toMatch(/\[assets\] 1 circle entity/);

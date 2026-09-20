@@ -6,6 +6,9 @@ import type {
   ActionPointOptions,
   ActionPointResult,
   ClickVerdict,
+  Geometry,
+  GeometryExpectation,
+  GeometryVerdict,
   FeatureQuery as WireQuery,
   FeatureSummary as WireSummary,
   LayerInfo,
@@ -15,7 +18,7 @@ import type {
   WhereValue,
 } from '../inpage/types';
 
-export type { LngLat, WhereOp };
+export type { Geometry, GeometryExpectation, LngLat, WhereOp };
 
 /** Query as written in tests: like the wire format, but `where` values may also be a RegExp. */
 export interface FeatureQuery extends Omit<WireQuery, 'where'> {
@@ -113,6 +116,18 @@ export interface DrawOptions {
   finish?: 'click-last' | 'click-first' | 'dblclick' | 'enter' | 'none';
   /** Optional pause between vertices (ms) for draw tools that debounce clicks. Default 0. */
   vertexDelay?: number;
+}
+
+export interface TwoPointDrawOptions {
+  timeout?: number;
+  /**
+   * How the app's tool takes the two points of a rectangle / circle. No standard here either:
+   *  - 'click-move-click' : click, move, click (terra-draw default)
+   *  - 'drag'             : press, move, release (terra-draw `drawInteraction: 'click-drag'`, most plugins)
+   */
+  gesture?: 'click-move-click' | 'drag';
+  /** Intermediate mouse moves; draw tools ignore a single jump. Default 8. */
+  steps?: number;
 }
 
 const POLL = [0, 30, 60, 100, 100, 200, 300, 500];
@@ -303,7 +318,32 @@ export class MapHandle {
   readonly draw = {
     polygon: (vertices: LngLat[], opts: DrawOptions = {}) => this._drawPath('polygon', vertices, opts),
     line: (vertices: LngLat[], opts: DrawOptions = {}) => this._drawPath('line', vertices, opts),
+    /** Rectangle from two opposite corners. */
+    rectangle: (corner: LngLat, opposite: LngLat, opts: TwoPointDrawOptions = {}) => this._drawTwoPoint('rectangle', corner, opposite, opts),
+    /** Circle from its centre and a point on its edge. */
+    circle: (center: LngLat, edge: LngLat, opts: TwoPointDrawOptions = {}) => this._drawTwoPoint('circle', center, edge, opts),
+    /** Abandon the shape in progress the way a user would: Escape (real key press). */
+    cancel: () => step('map.draw.cancel()', () => this.page.keyboard.press('Escape')),
   };
+
+  private async _drawTwoPoint(kind: string, from: LngLat, to: LngLat, opts: TwoPointDrawOptions): Promise<void> {
+    const gesture = opts.gesture ?? 'click-move-click';
+    const steps = opts.steps ?? 8;
+    await step(`map.draw.${kind}(${fmt(from)} -> ${fmt(to)}, ${gesture})`, async () => {
+      const a = await this._pointAt(from, opts, `map.draw.${kind} start`);
+      const b = await this._pointAt(to, opts, `map.draw.${kind} end`);
+      await this.page.mouse.move(a.x, a.y, { steps: 3 });
+      if (gesture === 'drag') {
+        await this.page.mouse.down();
+        await this.page.mouse.move(b.x, b.y, { steps });
+        await this.page.mouse.up();
+      } else {
+        await this.page.mouse.click(a.x, a.y);
+        await this.page.mouse.move(b.x, b.y, { steps });
+        await this.page.mouse.click(b.x, b.y);
+      }
+    });
+  }
 
   private async _drawPath(kind: string, vertices: LngLat[], opts: DrawOptions): Promise<void> {
     const finish = opts.finish ?? 'click-last';
@@ -413,6 +453,31 @@ export class FeatureHandle {
         await this.map._drag(a, b, opts.steps);
       }),
     );
+  }
+
+  /**
+   * Move the whole feature: press on it, drag by a lng/lat offset, release. The grab point is the
+   * feature's action point, so the pointer travels exactly (dLng, dLat). NOTE: draw tools that
+   * recognise a drag only after a pixel threshold (terra-draw: 8px) move the shape by that much
+   * less — for users too. Assert the result with a tolerance, or drag a vertex (absolute) instead.
+   */
+  async dragBy(delta: { dLng: number; dLat: number }, opts: ActionOptions & { steps?: number } = {}): Promise<void> {
+    const what = `${this}.dragBy(${+delta.dLng.toFixed(5)}, ${+delta.dLat.toFixed(5)})`;
+    await step(what, () =>
+      this._withActionPoint(what, opts, async (a) => {
+        const from = await this.map.lngLatAt(a);
+        const b = await this.map._pointAt({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true }, `${what} destination`);
+        await this.map._drag(a, b, opts.steps);
+      }),
+    );
+  }
+
+  /** The feature's full geometry as the MAP holds it (source data; falls back to rendered pieces). */
+  async geometry(opts: { timeout?: number } = {}): Promise<Geometry> {
+    return this.map._retry<Geometry>(`${this}.geometry()`, opts.timeout ?? this.map.timeout, async () => {
+      const r = await this.map._call<{ ok: true; geometry: Geometry } | { ok: false; message: string }>('geometry', toWire(this.query));
+      return r.ok ? { value: r.geometry } : { retry: r.message };
+    });
   }
 
   /** lng/lat of the point on the feature that an action would use. */
@@ -592,6 +657,50 @@ export const expect = baseExpect.extend({
 
 What is on the map:
 ${indent(explain)}`,
+    };
+  },
+
+  /**
+   * The feature's geometry ON THE MAP matches — read from the map's source, not from the app's own
+   * state, and compared in pixels. `expected`: a GeoJSON geometry, a list of lng/lat vertices
+   * (polygon ring if the feature is a polygon, else a line), or `{ circle: { center, edge } }`.
+   * Polygon rings may start at any vertex and wind either way. Retries.
+   */
+  async toHaveGeometry(received: FeatureHandle, expected: GeometryExpectation | LngLat[], options?: { timeout?: number; tolerancePx?: number }) {
+    if (!(received instanceof FeatureHandle)) throw new Error('toHaveGeometry: receiver must be map.feature(...)');
+    const timeout = options?.timeout ?? this.timeout;
+    const tolerancePx = options?.tolerancePx ?? 2;
+    const map = received.map;
+    const deadline = Date.now() + timeout;
+    let verdict: GeometryVerdict = { ok: false, reason: 'never checked' };
+    for (let i = 0; ; i++) {
+      try {
+        await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
+        let exp = expected as GeometryExpectation;
+        if (Array.isArray(expected)) {
+          const coords = expected.map((v) => [v.lng, v.lat]);
+          const found = await map._find(received.query);
+          exp = found[0]?.geometryType === 'Polygon' ? { type: 'Polygon', coordinates: [coords] } : { type: 'LineString', coordinates: coords };
+        }
+        verdict = await map._call<GeometryVerdict>('compareGeometry', toWire(received.query), exp, tolerancePx);
+        if (verdict.ok !== this.isNot) break;
+      } catch (e) {
+        verdict = { ok: false, reason: (e as Error).message.split('\n')[0] };
+      }
+      const wait = POLL[Math.min(i, POLL.length - 1)];
+      if (Date.now() + wait >= deadline) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    return {
+      pass: verdict.ok,
+      name: 'toHaveGeometry',
+      expected,
+      actual: verdict.actual,
+      message: () =>
+        `expect(${received}).${this.isNot ? 'not.' : ''}toHaveGeometry(…, { tolerancePx: ${tolerancePx} })\n\n` +
+        `Expected: ${JSON.stringify(expected)}\n` +
+        `Received: ${verdict.ok ? 'matching geometry' : verdict.reason}\n` +
+        `Geometry on the map (${verdict.from ?? 'n/a'}): ${JSON.stringify(verdict.actual)}`,
     };
   },
 

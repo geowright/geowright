@@ -4,6 +4,8 @@ import type {
   CanvasAdapter,
   ClickVerdict,
   EntityView,
+  GeometryExpectation,
+  GeometryVerdict,
   SnapshotOptions,
   WhereOp,
   FeatureQuery,
@@ -207,6 +209,63 @@ export class Engine<W = unknown> {
     const r = this.actionPointOnce(q, {});
     if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
     return { ok: true, diff: this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
+  }
+
+  /* ---------------- geometry ---------------- */
+
+  /**
+   * The feature's FULL geometry, read from the map — not from the app's own state. What the renderer
+   * returns is one clipped piece per internal tile, so it is never the full shape; sources that keep
+   * their data client-side (GeoJSON) can give it back whole. The data feature is matched to the
+   * rendered one by properties (the renderer's id may be a coerced, colliding number), then by id.
+   */
+  async geometry(q: FeatureQuery): Promise<{ ok: true; geometry: Geometry; from: 'data' | 'rendered' } | { ok: false; message: string }> {
+    const groups = [...this.group(q).values()];
+    if (groups.length === 0) return { ok: false, message: 'no rendered feature matches' };
+    if (groups.length > 1) return { ok: false, message: `strict mode violation: query resolved to ${groups.length} features` };
+    const f = groups[0][0];
+    const data = await this.adapter.queryData?.(f.layer);
+    const props = JSON.stringify(f.properties);
+    const sameProps = data?.filter((d) => JSON.stringify(d.properties) === props) ?? [];
+    const hit = sameProps.length === 1 ? sameProps[0] : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && String(d.id) === String(f.id));
+    if (hit) return { ok: true, geometry: hit.geometry, from: 'data' };
+    return { ok: true, geometry: f.geometry, from: 'rendered' };
+  }
+
+  /** Compare in PIXELS (what a user sees, and zoom-independent to reason about), vertex by vertex. */
+  async compareGeometry(q: FeatureQuery, expected: GeometryExpectation, tolerancePx: number): Promise<GeometryVerdict> {
+    const g = await this.geometry(q);
+    if (!g.ok) return { ok: false, reason: g.message };
+    const px = (c: number[]) => this.adapter.project(this.adapter.worldFromCoord(c));
+    const base = { actual: g.geometry, from: g.from };
+    const clipped = g.from === 'rendered' ? ' (NOTE: compared against RENDERED geometry, which may be clipped at tile borders — the source cannot return its data)' : '';
+    if ('circle' in expected) {
+      const parts = explode(g.geometry);
+      if (parts.length !== 1 || parts[0].kind !== 'polygon') return { ok: false, reason: `expected a circle polygon, got ${g.geometry.type}`, ...base };
+      const c = this.adapter.project(expected.circle.center as W);
+      const e = this.adapter.project(expected.circle.edge as W);
+      const r = Math.hypot(e.x - c.x, e.y - c.y);
+      const worst = Math.max(...parts[0].rings[0].map((v) => Math.abs(Math.hypot(px(v).x - c.x, px(v).y - c.y) - r)));
+      return worst <= tolerancePx ? { ok: true, ...base } : { ok: false, reason: `a vertex is ${worst.toFixed(1)}px off the expected circle of radius ${r.toFixed(1)}px (tolerance ${tolerancePx}px)${clipped}`, ...base };
+    }
+    if (expected.type !== g.geometry.type) return { ok: false, reason: `geometry type is ${g.geometry.type}, expected ${expected.type}`, ...base };
+    const A = explode(g.geometry), E = explode(expected);
+    if (A.length !== E.length) return { ok: false, reason: `${A.length} part(s), expected ${E.length}${clipped}`, ...base };
+    for (let i = 0; i < E.length; i++) {
+      const a = A[i], e = E[i];
+      const seqs: [Pt[], Pt[], boolean][] =
+        a.kind === 'point' && e.kind === 'point' ? [[[px(a.coord)], [px(e.coord)], false]]
+        : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(px), e.coords.map(px), false]]
+        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(px), openRing(e.rings[k]).map(px), true] as [Pt[], Pt[], boolean]) : [])
+        : [];
+      if (!seqs.length) return { ok: false, reason: `part ${i}: ring count or kind differs${clipped}`, ...base };
+      for (const [act, exp, cyclic] of seqs) {
+        if (act.length !== exp.length) return { ok: false, reason: `part ${i}: ${act.length} vertices, expected ${exp.length}${clipped}`, ...base };
+        const worst = sequenceDistance(act, exp, cyclic);
+        if (worst > tolerancePx) return { ok: false, reason: `part ${i}: a vertex is ${worst.toFixed(1)}px from where it was expected (tolerance ${tolerancePx}px)${clipped}`, ...base };
+      }
+    }
+    return { ok: true, ...base };
   }
 
   /* ---------------- click-time verification ---------------- */
@@ -512,7 +571,7 @@ export class Engine<W = unknown> {
         }
         const rest = list.slice(cap);
         if (rest.length) {
-          sec.push(`  … ${rest.length} more not listed${cap ? ' (nearest to the view centre are listed)' : ''}. ${histogram(rest.map((e) => e.byLayer.get(e.owner)![0].properties))}`);
+          sec.push(`  … ${rest.length} more not listed${cap ? ' (nearest to the view centre are listed)' : ''}. ${histogram(list.map((e) => e.byLayer.get(e.owner)![0].properties), list.length)}`);
           sec.push(`    to list specific ones: snapshot('<mapId>', { filter: { layer: '${l.id}', where: { <prop>: <value> } } })`);
         }
       }
@@ -625,6 +684,25 @@ function pointCandidates(c: Pt): Pt[] {
   return out;
 }
 
+const openRing = (ring: number[][]) => (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring);
+
+/** Largest vertex-to-vertex pixel distance under the best alignment. Rings may start anywhere and wind either way. */
+export function sequenceDistance(a: Pt[], b: Pt[], cyclic: boolean): number {
+  const n = a.length;
+  const worstFor = (shift: number, reversed: boolean) => {
+    let worst = 0;
+    for (let i = 0; i < n; i++) {
+      const j = ((reversed ? n - 1 - i : i) + shift) % n;
+      worst = Math.max(worst, Math.hypot(a[i].x - b[j].x, a[i].y - b[j].y));
+    }
+    return worst;
+  };
+  if (!cyclic) return worstFor(0, false);
+  let best = Infinity;
+  for (let s = 0; s < n; s++) best = Math.min(best, worstFor(s, false), worstFor(s, true));
+  return best;
+}
+
 function lineCandidates(pts: Pt[]): Pt[] {
   const c: Pt[] = [];
   for (let i = 0; i < pts.length - 1; i++) {
@@ -686,8 +764,8 @@ function fmtProps(p: Record<string, unknown>, max: number): string {
   return shown.join(' ') + (keys.length > max ? ` (+${keys.length - max} props)` : '');
 }
 
-/** "zoning: residential×20, commercial×15" for low-cardinality props; ranges for numbers. */
-function histogram(props: Record<string, unknown>[]): string {
+/** "zoning: residential×20, commercial×15" for low-cardinality props; ranges for numbers. Covers the WHOLE layer, listed rows included, so counts can be read off directly. */
+function histogram(props: Record<string, unknown>[], total: number): string {
   const keys = [...new Set(props.flatMap((p) => Object.keys(p)))].slice(0, 6);
   const parts: string[] = [];
   for (const k of keys) {
@@ -700,7 +778,7 @@ function histogram(props: Record<string, unknown>[]): string {
       parts.push(`${k}: ${Math.min(...(vals as number[]))}..${Math.max(...(vals as number[]))}`);
     }
   }
-  return parts.length ? `Summary — ${parts.join('; ')}` : '';
+  return parts.length ? `Summary of all ${total} — ${parts.join('; ')}` : '';
 }
 
 /**

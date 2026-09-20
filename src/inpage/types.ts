@@ -208,3 +208,18 @@ export interface EntityView {
   /** Set when no layer paints anything for this entity (opacity 0 etc.): rendered, not visible. */
   invisible?: string;
 }
+
+/** What `toHaveGeometry` compares against. Vertex order/start/winding of polygon rings do not matter. */
+export type GeometryExpectation =
+  | Geometry
+  /** Every vertex lies on the circle through `edge` around `center` (how draw tools build circles). */
+  | { circle: { center: LngLat; edge: LngLat } };
+
+export interface GeometryVerdict {
+  ok: boolean;
+  /** Why not, in pixels and vertex indices. */
+  reason?: string;
+  actual?: Geometry;
+  /** 'data': the full shape from the source. 'rendered': merged render pieces — may be tile-clipped. */
+  from?: 'data' | 'rendered';
+}

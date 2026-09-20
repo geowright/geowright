@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>geowright demo — second draw library (mapbox-gl-draw)</title>
+    <style>
+      html, body { margin: 0; height: 100%; font: 14px system-ui; }
+      #map { position: absolute; inset: 0 0 40px 0; }
+      #bar { position: absolute; left: 0; right: 0; bottom: 0; height: 40px; line-height: 40px; padding: 0 12px; background: #263238; color: #fff; }
+      #bar button { margin-right: 6px; }
+    </style>
+  </head>
+  <body>
+    <div id="map" role="region" aria-label="Map"></div>
+    <div id="bar">
+      <button data-testid="draw-polygon">Polygon</button>
+      <button data-testid="draw-line">Line</button>
+      <button data-testid="draw-select">Select</button>
+      Features: <span data-testid="draw-count">0</span>
+    </div>
+    <script type="module" src="/src/draw2.ts"></script>
+  </body>
+</html>

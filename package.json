@@ -15,6 +15,7 @@
     "pack:local": "npm run build && npm pack --pack-destination dist"
   },
   "devDependencies": {
+    "@mapbox/mapbox-gl-draw": "^1.5.2",
     "@maplibre/maplibre-gl-style-spec": "^26.4.4",
     "@playwright/mcp": "^0.0.82",
     "@playwright/test": "^1.63.0",
