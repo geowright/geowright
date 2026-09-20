@@ -19,7 +19,9 @@ jobs:
   # the SwiftShader flag set and the zero-flake claim on a 4-vCPU hosted runner.
   linux:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 128 tests: suite ~6 min + 5x ~27 min on a 2-worker hosted runner. A 30 min limit CANCELLED the
+    # job once the suite grew (2026-09-20) — a cancelled flake check looks like neither pass nor fail.
+    timeout-minutes: 60
     env:
       CI: 'true'
     steps:
