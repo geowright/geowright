@@ -102,6 +102,11 @@ export interface CanvasAdapter<W = unknown> {
    */
   lift?(f: RenderedFeature, at: Pt): number;
   /**
+   * Optional: a library-specific reason why a feature that EXISTS in the data is not drawn
+   * (MapLibre: "its icon image X is not in the style" — otherwise indistinguishable from a label collision).
+   */
+  whyNotRendered?(f: RenderedFeature): string | undefined;
+  /**
    * Optional: things the adapter could NOT work out and silently answered safely for (e.g. a style
    * expression newer than the bundled evaluator -> "visible"). Printed once in diagnostics/snapshot.
    */

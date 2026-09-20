@@ -67,3 +67,11 @@ test.describe('wild: filter-symbols-by-toggling-a-list', () => {
     },
   );
 });
+
+test('wild: filter-symbols-by-toggling-a-list › a missing sprite icon is named in the failure, not blamed on "collision"', async ({ wild }) => {
+  // the sprite lacks "bar_11": MapLibre silently draws nothing for that layer
+  const broken = brightBasemap([-77.04, 38.907], { icons: ['theatre_11', 'bicycle_11', 'music_11'] });
+  const map = await wild.open(example('filter-symbols-by-toggling-a-list'), { routes: broken });
+  const err = await expect(map).toHaveFeature({ layer: 'poi-bar' }, { timeout: 1500 }).then(() => null, (e: Error) => e);
+  expect(err?.message).toContain('its icon image "bar_11" is not in the style');
+});

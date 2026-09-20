@@ -1,5 +1,5 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { extrusionHeight, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
+import { extrusionHeight, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
 import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
 
 /**
@@ -159,6 +159,11 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     if (!height) return 0;
     const metres = this.map.unproject([at.x, at.y]).distanceTo(this.map.unproject([at.x + 10, at.y]));
     return metres > 0 ? height * (10 / metres) * Math.sin((pitch * Math.PI) / 180) : 0;
+  }
+
+  whyNotRendered(f: RenderedFeature): string | undefined {
+    const icon = missingIcon(this.map, f);
+    return icon ? `its icon image "${icon}" is not in the style (missing from the sprite / never added): MapLibre draws nothing for it` : undefined;
   }
 
   caveats(): string[] {

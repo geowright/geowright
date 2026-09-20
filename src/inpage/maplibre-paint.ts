@@ -158,3 +158,11 @@ export function extrusionHeight(map: MlMap, f: RenderedFeature): number {
   const h = evaluatorFor(map, f).value('paint', 'fill-extrusion-height');
   return typeof h === 'number' && h > 0 ? h : 0;
 }
+
+/** For a symbol layer: the icon this feature asks for, when the style does not have it (a typo, a sprite that failed to load). */
+export function missingIcon(map: MlMap, f: RenderedFeature): string | undefined {
+  if (map.getLayer(f.layer)?.type !== 'symbol') return undefined;
+  const v = evaluatorFor(map, f).value('layout', 'icon-image');
+  const name = v && typeof v === 'object' ? String(v.name ?? '') : typeof v === 'string' ? v : '';
+  return name && !map.hasImage(name) ? name : undefined;
+}

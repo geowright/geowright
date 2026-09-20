@@ -558,6 +558,8 @@ export class Engine<W = unknown> {
               `(off-screen, hidden layer, filtered out${info.type === 'symbol' ? ', or hidden by label/icon collision' : ''}): ` +
               offscreen.slice(0, 3).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; '),
           );
+          const why = [...new Set(offscreen.slice(0, 20).map((f) => this.adapter.whyNotRendered?.(f)).filter(Boolean))];
+          for (const w of why) lines.push(`  -> ${w}`);
         }
       }
     }
