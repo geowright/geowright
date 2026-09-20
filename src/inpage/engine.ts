@@ -29,13 +29,19 @@ export class Engine<W = unknown> {
     return true;
   }
 
-  /** Identity of a logical feature. Tiling returns the same feature as several pieces. */
+  /**
+   * Identity of a logical feature. Tiling returns the same feature as several pieces, so pieces
+   * must merge — but the renderer's `id` alone is NOT trustworthy: MapLibre coerces non-integer
+   * ids (terra-draw uses UUID strings) into colliding numbers like 0, 4, 75. Pieces of one feature
+   * always share identical properties, so id + properties is both safe and collision-free.
+   */
   private key(f: RenderedFeature): string {
-    return f.layer + '|' + (f.id !== undefined ? `id:${f.id}` : `props:${JSON.stringify(f.properties)}`);
+    return `${f.layer}|${f.id ?? ''}|${JSON.stringify(f.properties)}`;
   }
 
   /** Rendered features matching the query, grouped into logical features (pieces merged). */
-  private group(q: FeatureQuery, at?: Pt): Map<string, RenderedFeature[]> {
+  private group(q: FeatureQuery): Map<string, RenderedFeature[]> {
+    const at = q.at ? this.adapter.project(q.at as W) : undefined;
     const groups = new Map<string, RenderedFeature[]>();
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
       if (!this.matches(f, q)) continue;

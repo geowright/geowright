@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>mapwright demo</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <div id="sidebar">
+      <h1>mapwright demo</h1>
+
+      <section class="panel">
+        <h2>Camera</h2>
+        <div class="row">
+          <button data-testid="fly-home">Home</button>
+          <button data-testid="fly-east">Fly east</button>
+        </div>
+      </section>
+
+      <section class="panel">
+        <h2>Layers</h2>
+        <label class="row"><input type="checkbox" data-testid="toggle-parcels" checked /> Parcels</label>
+        <label class="row"><input type="checkbox" data-testid="toggle-alerts" checked /> Alerts</label>
+        <label class="row"><input type="checkbox" data-testid="toggle-stations" checked /> Stations</label>
+        <label class="row"><input type="checkbox" data-testid="toggle-roads" checked /> Roads</label>
+      </section>
+
+      <section class="panel">
+        <h2>Draw</h2>
+        <div class="row">
+          <button data-testid="draw-polygon">Polygon</button>
+          <button data-testid="draw-select">Select</button>
+          <button data-testid="draw-off">Off</button>
+          <button data-testid="draw-clear">Clear</button>
+        </div>
+        <div class="row">Polygons: <span data-testid="draw-count">0</span></div>
+        <pre data-testid="draw-json"></pre>
+      </section>
+
+      <section class="panel">
+        <h2>Add alert</h2>
+        <form id="alert-form">
+          <div class="row">
+            <label>Name<br /><input type="text" data-testid="alert-name" required /></label>
+          </div>
+          <div class="row">
+            <label
+              >Severity<br />
+              <select data-testid="alert-severity">
+                <option value="low">low</option>
+                <option value="medium" selected>medium</option>
+                <option value="high">high</option>
+              </select>
+            </label>
+          </div>
+          <div class="row">
+            <label>Lng<br /><input type="number" step="any" data-testid="alert-lng" required /></label>
+            <label>Lat<br /><input type="number" step="any" data-testid="alert-lat" required /></label>
+          </div>
+          <div class="row">
+            <button type="submit" data-testid="alert-submit">Add alert</button>
+          </div>
+        </form>
+      </section>
+
+      <section class="panel">
+        <h2>Alerts</h2>
+        <div id="alert-list"></div>
+      </section>
+
+      <footer data-testid="view-state">0.00000,0.00000,0.00</footer>
+    </div>
+
+    <div id="map"></div>
+
+    <div id="ctx-menu" data-testid="ctx-menu" class="hidden">
+      <div data-testid="ctx-coords"></div>
+      <button data-testid="ctx-add-alert">Add alert here</button>
+      <button data-testid="ctx-center-here">Center here</button>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -107,7 +107,10 @@ test.describe('act gap', () => {
     await map.feature({ layer: 'stations-clusters', where: { cluster_id: target.properties.cluster_id as number } }).click();
     await expect.poll(async () => (await map.viewState()).zoom).toBeGreaterThan(zoomBefore + 0.5);
     await map.waitForIdle();
-    await expect(map).toHaveFeature({ layer: 'stations-points' });
+    // The clicked cluster is gone; it broke into several smaller clusters and/or single stations.
+    await expect(map).not.toHaveFeature({ layer: 'stations-clusters', where: { cluster_id: target.properties.cluster_id as number } });
+    const pieces = (await clusters.count()) + (await map.features({ layer: 'stations-points' }).count());
+    expect(pieces).toBeGreaterThan(1);
   });
 
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {

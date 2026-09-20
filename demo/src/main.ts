@@ -1,0 +1,464 @@
+import 'maplibre-gl/dist/maplibre-gl.css';
+import {
+  Map as MlMap,
+  Popup,
+  setWorkerUrl,
+  type StyleSpecification,
+  type GeoJSONSource,
+  type MapGeoJSONFeature,
+} from 'maplibre-gl';
+import { TerraDraw, TerraDrawPolygonMode, TerraDrawSelectMode, TerraDrawRenderMode } from 'terra-draw';
+import { TerraDrawMapLibreGLAdapter } from 'terra-draw-maplibre-gl-adapter';
+import type { Feature, Point } from 'geojson';
+import { PARCELS, ALERTS, STATIONS, ROADS, type Severity, type AlertProps } from './data';
+
+// MapLibre 6 is ESM-only and resolves its worker relative to import.meta.url, which does
+// not survive Vite's bundling. We ship the worker (+ its shared chunk) verbatim under
+// demo/public/maplibre/ (see demo/scripts/copy-worker.mjs) and point at it explicitly.
+// This must happen before the first Map is constructed.
+setWorkerUrl('/maplibre/maplibre-gl-worker.mjs');
+
+// ---------------------------------------------------------------------------
+// Style
+// ---------------------------------------------------------------------------
+
+const style: StyleSpecification = {
+  version: 8,
+  sources: {
+    basemap: {
+      type: 'raster',
+      tiles: [location.origin + '/tiles/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      maxzoom: 14,
+    },
+    parcels: {
+      type: 'geojson',
+      data: PARCELS as unknown as GeoJSON.GeoJSON,
+      promoteId: 'id',
+    },
+    alerts: {
+      type: 'geojson',
+      data: ALERTS as unknown as GeoJSON.GeoJSON,
+      promoteId: 'id',
+    },
+    stations: {
+      type: 'geojson',
+      data: STATIONS as unknown as GeoJSON.GeoJSON,
+      cluster: true,
+      clusterRadius: 50,
+      clusterMaxZoom: 14,
+    },
+    roads: {
+      type: 'geojson',
+      data: ROADS as unknown as GeoJSON.GeoJSON,
+      promoteId: 'id',
+    },
+  },
+  layers: [
+    {
+      id: 'background',
+      type: 'background',
+      paint: { 'background-color': '#e9eef2' },
+    },
+    {
+      id: 'basemap',
+      type: 'raster',
+      source: 'basemap',
+    },
+    {
+      id: 'parcels',
+      type: 'fill',
+      source: 'parcels',
+      paint: {
+        'fill-color': ['match', ['get', 'zoning'], 'residential', '#8bc34a', 'commercial', '#42a5f5', '#cccccc'],
+        'fill-opacity': 0.6,
+      },
+    },
+    {
+      id: 'parcels-outline',
+      type: 'line',
+      source: 'parcels',
+      paint: {
+        'line-color': '#33475b',
+        'line-width': 1,
+      },
+    },
+    {
+      id: 'roads',
+      type: 'line',
+      source: 'roads',
+      paint: {
+        'line-color': '#6d6d6d',
+        'line-width': 4,
+      },
+    },
+    {
+      id: 'stations-clusters',
+      type: 'circle',
+      source: 'stations',
+      filter: ['has', 'point_count'],
+      paint: {
+        'circle-radius': 18,
+        'circle-color': '#5c6bc0',
+        'circle-opacity': 0.85,
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+      },
+    },
+    {
+      id: 'stations-points',
+      type: 'symbol',
+      source: 'stations',
+      filter: ['!', ['has', 'point_count']],
+      layout: {
+        'icon-image': 'station-icon',
+        'icon-allow-overlap': true,
+      },
+    },
+    {
+      id: 'alerts',
+      type: 'circle',
+      source: 'alerts',
+      paint: {
+        'circle-radius': 10,
+        'circle-color': ['match', ['get', 'severity'], 'high', '#d32f2f', 'medium', '#f9a825', 'low', '#1976d2', '#999999'],
+        'circle-stroke-width': 2,
+        'circle-stroke-color': '#ffffff',
+      },
+    },
+  ],
+};
+
+// ---------------------------------------------------------------------------
+// Map
+// ---------------------------------------------------------------------------
+
+const map = new MlMap({
+  container: 'map',
+  center: [34.78, 32.08],
+  zoom: 12,
+  style,
+  attributionControl: false,
+});
+
+// Test hook — required by the Playwright map-testing library.
+((window as any).__mapwright_maps ??= {}).main = map;
+
+// ---------------------------------------------------------------------------
+// Alert state + async CRUD
+// ---------------------------------------------------------------------------
+
+let alertFeatures: Feature<Point, AlertProps>[] = ALERTS.features.map((f) => ({ ...f }));
+
+function alertsSource(): GeoJSONSource {
+  return map.getSource('alerts') as GeoJSONSource;
+}
+
+function nextAlertId(): number {
+  return alertFeatures.reduce((max, f) => Math.max(max, f.properties!.id), 0) + 1;
+}
+
+function randomDelay(): number {
+  return 100 + Math.random() * 300;
+}
+
+function addAlertAsync(name: string, severity: Severity, lng: number, lat: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      const id = nextAlertId();
+      alertFeatures.push({
+        type: 'Feature',
+        id,
+        geometry: { type: 'Point', coordinates: [lng, lat] },
+        properties: { id, name, severity },
+      });
+      alertsSource().setData({ type: 'FeatureCollection', features: alertFeatures } as unknown as GeoJSON.GeoJSON);
+      renderAlertList();
+      resolve();
+    }, randomDelay());
+  });
+}
+
+function removeAlertAsync(id: number): Promise<void> {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      alertFeatures = alertFeatures.filter((f) => f.properties!.id !== id);
+      alertsSource().setData({ type: 'FeatureCollection', features: alertFeatures } as unknown as GeoJSON.GeoJSON);
+      renderAlertList();
+      resolve();
+    }, randomDelay());
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+}
+
+const alertListEl = document.getElementById('alert-list')!;
+
+function renderAlertList(): void {
+  alertListEl.innerHTML = alertFeatures
+    .map((f) => {
+      const p = f.properties!;
+      return `<div class="alert-row" data-testid="alert-row-${p.id}">
+        <span>${escapeHtml(p.name)} — <span class="sev-${p.severity}">${p.severity}</span></span>
+        <button data-testid="alert-remove-${p.id}">Remove</button>
+      </div>`;
+    })
+    .join('');
+}
+
+alertListEl.addEventListener('click', (ev) => {
+  const btn = (ev.target as HTMLElement).closest('button[data-testid^="alert-remove-"]') as HTMLButtonElement | null;
+  if (!btn) return;
+  const id = Number(btn.dataset.testid!.slice('alert-remove-'.length));
+  removeAlertAsync(id);
+});
+
+renderAlertList();
+
+const alertForm = document.getElementById('alert-form') as HTMLFormElement;
+alertForm.addEventListener('submit', (ev) => {
+  ev.preventDefault();
+  const name = (document.querySelector('[data-testid="alert-name"]') as HTMLInputElement).value;
+  const severity = (document.querySelector('[data-testid="alert-severity"]') as HTMLSelectElement).value as Severity;
+  const lng = parseFloat((document.querySelector('[data-testid="alert-lng"]') as HTMLInputElement).value);
+  const lat = parseFloat((document.querySelector('[data-testid="alert-lat"]') as HTMLInputElement).value);
+  addAlertAsync(name, severity, lng, lat).then(() => alertForm.reset());
+});
+
+// ---------------------------------------------------------------------------
+// Popup on click (alerts win over parcels), suppressed while drawing
+// ---------------------------------------------------------------------------
+
+let drawModeActive = false;
+let popup: Popup | null = null;
+
+map.on('click', (e) => {
+  if (drawModeActive) return;
+
+  const features = map.queryRenderedFeatures(e.point, { layers: ['alerts', 'parcels'] });
+
+  if (popup) {
+    popup.remove();
+    popup = null;
+  }
+
+  if (features.length === 0) return;
+
+  const alertFeature = features.find((f: MapGeoJSONFeature) => f.layer.id === 'alerts');
+  const parcelFeature = features.find((f: MapGeoJSONFeature) => f.layer.id === 'parcels');
+
+  let html: string | null = null;
+  if (alertFeature) {
+    const p = alertFeature.properties as any;
+    html = `<div data-testid="popup" data-kind="alert" data-id="${p.id}"><strong>${escapeHtml(p.name)}</strong><br/>Severity: ${p.severity}</div>`;
+  } else if (parcelFeature) {
+    const p = parcelFeature.properties as any;
+    html = `<div data-testid="popup" data-kind="parcel" data-id="${p.id}"><strong>Parcel ${p.id}</strong><br/>Owner: ${escapeHtml(p.owner)}<br/>Zoning: ${p.zoning}</div>`;
+  }
+
+  if (html) {
+    popup = new Popup().setLngLat(e.lngLat).setHTML(html).addTo(map);
+  }
+});
+
+// ---------------------------------------------------------------------------
+// Layer toggles
+// ---------------------------------------------------------------------------
+
+function wireToggle(testId: string, layerIds: string[]) {
+  const el = document.querySelector(`[data-testid="${testId}"]`) as HTMLInputElement;
+  el.addEventListener('change', () => {
+    const visibility = el.checked ? 'visible' : 'none';
+    for (const id of layerIds) map.setLayoutProperty(id, 'visibility', visibility);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Clusters
+// ---------------------------------------------------------------------------
+
+map.on('click', 'stations-clusters', async (e) => {
+  if (drawModeActive) return;
+  const features = map.queryRenderedFeatures(e.point, { layers: ['stations-clusters'] });
+  const clusterId = features[0]?.properties?.cluster_id;
+  if (clusterId == null) return;
+  const source = map.getSource('stations') as GeoJSONSource;
+  const zoom = await source.getClusterExpansionZoom(clusterId);
+  const coords = (features[0].geometry as Point).coordinates as [number, number];
+  map.easeTo({ center: coords, zoom });
+});
+
+// ---------------------------------------------------------------------------
+// Context menu
+// ---------------------------------------------------------------------------
+
+const ctxMenu = document.getElementById('ctx-menu')!;
+const ctxCoordsEl = ctxMenu.querySelector('[data-testid="ctx-coords"]') as HTMLElement;
+const ctxAddAlertBtn = ctxMenu.querySelector('[data-testid="ctx-add-alert"]') as HTMLButtonElement;
+const ctxCenterBtn = ctxMenu.querySelector('[data-testid="ctx-center-here"]') as HTMLButtonElement;
+let ctxLngLat: { lng: number; lat: number } | null = null;
+
+function closeCtxMenu() {
+  ctxMenu.classList.add('hidden');
+}
+
+map.on('contextmenu', (e) => {
+  e.preventDefault();
+  e.originalEvent.preventDefault();
+  ctxLngLat = { lng: e.lngLat.lng, lat: e.lngLat.lat };
+  ctxCoordsEl.textContent = `${e.lngLat.lng.toFixed(5)}, ${e.lngLat.lat.toFixed(5)}`;
+  ctxMenu.style.left = `${e.originalEvent.pageX}px`;
+  ctxMenu.style.top = `${e.originalEvent.pageY}px`;
+  ctxMenu.classList.remove('hidden');
+});
+
+ctxAddAlertBtn.addEventListener('click', () => {
+  if (ctxLngLat) {
+    addAlertAsync('Alert from menu', 'medium', ctxLngLat.lng, ctxLngLat.lat);
+  }
+  closeCtxMenu();
+});
+
+ctxCenterBtn.addEventListener('click', () => {
+  if (ctxLngLat) {
+    map.flyTo({ center: [ctxLngLat.lng, ctxLngLat.lat] });
+  }
+  closeCtxMenu();
+});
+
+document.addEventListener('click', (ev) => {
+  if (ctxMenu.classList.contains('hidden')) return;
+  if (ctxMenu.contains(ev.target as Node)) return;
+  closeCtxMenu();
+});
+
+document.addEventListener('keydown', (ev) => {
+  if (ev.key === 'Escape') closeCtxMenu();
+});
+
+// ---------------------------------------------------------------------------
+// Camera buttons + view state footer
+// ---------------------------------------------------------------------------
+
+(document.querySelector('[data-testid="fly-home"]') as HTMLButtonElement).addEventListener('click', () => {
+  map.flyTo({ center: [34.78, 32.08], zoom: 12 });
+});
+
+(document.querySelector('[data-testid="fly-east"]') as HTMLButtonElement).addEventListener('click', () => {
+  map.flyTo({ center: [35.2, 32.08], zoom: 12 });
+});
+
+const viewStateEl = document.querySelector('[data-testid="view-state"]') as HTMLElement;
+function updateViewState() {
+  const c = map.getCenter();
+  viewStateEl.textContent = `${c.lng.toFixed(5)},${c.lat.toFixed(5)},${map.getZoom().toFixed(2)}`;
+}
+map.on('move', updateViewState);
+updateViewState();
+
+// ---------------------------------------------------------------------------
+// Station icon (generated ImageData, no network)
+// ---------------------------------------------------------------------------
+
+function makeStationIcon(): ImageData {
+  const size = 24;
+  const canvas = document.createElement('canvas');
+  canvas.width = size;
+  canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  ctx.clearRect(0, 0, size, size);
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, 9, 0, Math.PI * 2);
+  ctx.fillStyle = '#2e7d32';
+  ctx.fill();
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = '#ffffff';
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(size / 2, size / 2, 3, 0, Math.PI * 2);
+  ctx.fillStyle = '#ffffff';
+  ctx.fill();
+  return ctx.getImageData(0, 0, size, size);
+}
+
+// ---------------------------------------------------------------------------
+// Terra Draw
+// ---------------------------------------------------------------------------
+
+let terraDraw: TerraDraw | undefined;
+
+const drawCountEl = document.querySelector('[data-testid="draw-count"]') as HTMLElement;
+const drawJsonEl = document.querySelector('[data-testid="draw-json"]') as HTMLElement;
+
+function refreshDrawUI() {
+  if (!terraDraw) return;
+  const polygons = terraDraw.getSnapshot().filter((f) => f.geometry.type === 'Polygon');
+  drawCountEl.textContent = String(polygons.length);
+  drawJsonEl.textContent = JSON.stringify(polygons.map((f) => ({ geometry: f.geometry, id: f.id })));
+}
+
+(document.querySelector('[data-testid="draw-polygon"]') as HTMLButtonElement).addEventListener('click', () => {
+  if (!terraDraw) return;
+  drawModeActive = true;
+  terraDraw.setMode('polygon');
+});
+
+(document.querySelector('[data-testid="draw-select"]') as HTMLButtonElement).addEventListener('click', () => {
+  if (!terraDraw) return;
+  drawModeActive = true;
+  terraDraw.setMode('select');
+});
+
+(document.querySelector('[data-testid="draw-off"]') as HTMLButtonElement).addEventListener('click', () => {
+  if (!terraDraw) return;
+  drawModeActive = false;
+  terraDraw.setMode('static');
+});
+
+(document.querySelector('[data-testid="draw-clear"]') as HTMLButtonElement).addEventListener('click', () => {
+  if (!terraDraw) return;
+  terraDraw.clear();
+  refreshDrawUI();
+});
+
+// ---------------------------------------------------------------------------
+// Wire up things that need the style to be loaded
+// ---------------------------------------------------------------------------
+
+map.on('load', () => {
+  map.addImage('station-icon', makeStationIcon());
+
+  wireToggle('toggle-parcels', ['parcels', 'parcels-outline']);
+  wireToggle('toggle-alerts', ['alerts']);
+  wireToggle('toggle-stations', ['stations-clusters', 'stations-points']);
+  wireToggle('toggle-roads', ['roads']);
+
+  const adapter = new TerraDrawMapLibreGLAdapter({ map });
+  terraDraw = new TerraDraw({
+    adapter,
+    modes: [
+      new TerraDrawPolygonMode(),
+      new TerraDrawSelectMode({
+        flags: {
+          polygon: {
+            feature: {
+              draggable: true,
+              coordinates: {
+                draggable: true,
+                midpoints: true,
+              },
+            },
+          },
+        },
+      }),
+      new TerraDrawRenderMode({ modeName: 'static', styles: {} }),
+    ],
+  });
+  terraDraw.start();
+  terraDraw.setMode('static');
+  terraDraw.on('change', refreshDrawUI);
+  terraDraw.on('finish', refreshDrawUI);
+  refreshDrawUI();
+});

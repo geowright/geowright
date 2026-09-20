@@ -1,0 +1,148 @@
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  font-family: system-ui, sans-serif;
+  font-size: 14px;
+  color: #1a1a1a;
+}
+
+#sidebar {
+  position: fixed;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 320px;
+  overflow-y: auto;
+  background: #f7f7f9;
+  border-right: 1px solid #ddd;
+  box-sizing: border-box;
+  padding: 12px;
+  z-index: 2;
+}
+
+#sidebar h1 {
+  font-size: 16px;
+  margin: 0 0 12px;
+}
+
+#sidebar h2 {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #555;
+  margin: 0 0 6px;
+}
+
+.panel {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #e2e2e6;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.row input[type='text'],
+.row input[type='number'] {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+button {
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+#alert-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.alert-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  background: white;
+  border: 1px solid #e2e2e6;
+  border-radius: 4px;
+  font-size: 12px;
+}
+
+.alert-row .sev-high {
+  color: #d32f2f;
+}
+.alert-row .sev-medium {
+  color: #f9a825;
+}
+.alert-row .sev-low {
+  color: #1976d2;
+}
+
+#map {
+  position: absolute;
+  left: 320px;
+  top: 0;
+  right: 0;
+  bottom: 0;
+}
+
+footer[data-testid='view-state'] {
+  position: sticky;
+  bottom: 0;
+  background: #f7f7f9;
+  padding-top: 8px;
+  font-size: 11px;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+}
+
+pre[data-testid='draw-json'] {
+  max-height: 140px;
+  overflow: auto;
+  background: white;
+  border: 1px solid #e2e2e6;
+  padding: 4px;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.maplibregl-popup-content {
+  font-size: 12px;
+}
+
+#ctx-menu {
+  position: absolute;
+  z-index: 5;
+  background: white;
+  border: 1px solid #bbb;
+  border-radius: 4px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 160px;
+}
+
+#ctx-menu.hidden {
+  display: none;
+}
+
+#ctx-menu [data-testid='ctx-coords'] {
+  font-size: 11px;
+  color: #555;
+  font-variant-numeric: tabular-nums;
+  padding: 2px 4px;
+}

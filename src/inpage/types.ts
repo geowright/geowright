@@ -83,6 +83,8 @@ export interface FeatureQuery {
   layer?: string | string[];
   id?: string | number;
   where?: Record<string, WhereValue>;
+  /** Only features rendered under this world location (hit test). Disambiguates e.g. vertex handles. */
+  at?: LngLat;
 }
 
 export interface FeatureSummary {
