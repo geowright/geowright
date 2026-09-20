@@ -9,6 +9,7 @@ import type {
   FeatureSummary as WireSummary,
   LayerInfo,
   LngLat,
+  SnapshotOptions,
   WhereOp,
   WhereValue,
 } from '../inpage/types';
@@ -179,6 +180,11 @@ export class MapHandle {
 
   viewState(): Promise<{ center: LngLat; zoom: number; bearing: number; pitch: number; bounds: Record<string, number>; size: { width: number; height: number } }> {
     return this._call('viewState');
+  }
+
+  /** Text snapshot of the map for humans and LLM agents (the canvas analogue of an aria snapshot). */
+  snapshot(opts?: SnapshotOptions): Promise<string> {
+    return this._call('snapshot', opts ?? {});
   }
 
   layers(): Promise<LayerInfo[]> {

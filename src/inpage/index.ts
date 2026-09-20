@@ -46,6 +46,7 @@ const api = {
   actionPoint: (mapId: string, q: any, opts: any) => engine(mapId).actionPoint(q, opts),
   armClick: (mapId: string, q: any, opts: any) => engine(mapId).armClick(q, opts),
   disarmClick: (mapId: string, token: string) => engine(mapId).disarmClick(token),
+  snapshot: (mapId: string, opts?: any) => engine(mapId).snapshot(opts),
   explain: (mapId: string, q: any) => engine(mapId).explain(q),
   reveal: (mapId: string, q: any) => engine(mapId).reveal(q),
   viewState: (mapId: string) => engine(mapId).adapter.getViewState(),

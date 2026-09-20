@@ -11,6 +11,7 @@
     "test": "playwright test"
   },
   "devDependencies": {
+    "@playwright/mcp": "^0.0.82",
     "@playwright/test": "^1.63.0",
     "@types/node": "^26.6.2",
     "esbuild": "^0.28.2",

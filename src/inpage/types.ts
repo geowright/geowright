@@ -45,6 +45,8 @@ export interface LayerInfo {
   type: string;
   visible: boolean;
   source?: string;
+  /** e.g. 'geojson' | 'vector' | 'raster'. Tells whether off-screen data can be known (geojson only). */
+  sourceType?: string;
 }
 
 export interface CanvasAdapter<W = unknown> {
@@ -142,4 +144,14 @@ export interface ActionPointOptions {
   force?: boolean;
   /** Layers that are allowed to be on top of the target (e.g. labels, highlight overlays). */
   ignoreLayers?: string[];
+}
+
+export interface SnapshotOptions {
+  /** Max features listed per layer before summarising the rest. Default 15. */
+  perLayer?: number;
+  /** Max property keys shown per feature. Default 6. */
+  maxProps?: number;
+  /** Only these layers. Default: every layer that has rendered features, minus `skipLayers`. */
+  layers?: string[];
+  skipLayers?: string[];
 }

@@ -3,6 +3,7 @@ import type {
   ActionPointResult,
   CanvasAdapter,
   ClickVerdict,
+  SnapshotOptions,
   WhereOp,
   FeatureQuery,
   FeatureSummary,
@@ -310,6 +311,142 @@ export class Engine<W = unknown> {
     return lines.join('\n');
   }
 
+  /* ---------------- text snapshot for agents ---------------- */
+
+  /**
+   * A text rendering of the surface for an LLM agent — the canvas equivalent of an accessibility
+   * snapshot. Design rules:
+   *  - one line per ENTITY, not per rendered feature: a circle + its label + its outline are one
+   *    thing; listed under the topmost layer that draws it, other layers noted once per layer
+   *  - every listed entity carries a client pixel the agent can click, or says why it cannot
+   *  - bounded: per-layer cap (nearest to the viewport centre first); the remainder is summarised
+   *    as value histograms, never silently dropped
+   *  - says what it cannot see: off-screen matches (geojson sources) and their direction
+   */
+  async snapshot(o: SnapshotOptions = {}): Promise<string> {
+    const perLayer = o.perLayer ?? 15;
+    const maxProps = o.maxProps ?? 6;
+    const a = this.adapter;
+    const view = a.getViewState() as any;
+    const surface = a.surface();
+    const rect = surface.getBoundingClientRect();
+    const size = this.surfaceSize();
+    const layers = a.listLayers();
+    const skip = new Set(o.skipLayers ?? []);
+    const only = o.layers && new Set(o.layers);
+    const n = (v: number, d = 5) => +v.toFixed(d);
+    const out: string[] = [];
+
+    out.push(`MAP (${a.kind}) canvas ${size.w}x${size.h} at client (${Math.round(rect.left)},${Math.round(rect.top)})${a.isMoving() ? '  ** MOVING: positions are changing, re-snapshot before acting **' : ''}`);
+    if (view.center) out.push(`view: center ${n(view.center.lng)},${n(view.center.lat)} zoom ${n(view.zoom, 2)} bearing ${n(view.bearing, 1)} pitch ${n(view.pitch, 1)}`);
+    if (view.bounds) out.push(`bounds: west ${n(view.bounds.west)} south ${n(view.bounds.south)} east ${n(view.bounds.east)} north ${n(view.bounds.north)}`);
+
+    // Group rendered features into entities. The OWNER layer is the entity's main body, not its
+    // decoration: circle/fill beat line (outlines), which beats symbol (labels). Ties: topmost.
+    const typeOf = new Map(layers.map((l) => [l.id, l.type]));
+    const rank = (layerId: string) => {
+      const t = typeOf.get(layerId);
+      return t === 'symbol' ? 0 : t === 'line' ? 1 : 2;
+    };
+    const entities = new Map<string, { owner: string; byLayer: Map<string, RenderedFeature[]> }>();
+    for (const f of a.queryFeatures({})) {
+      if (skip.has(f.layer) || (only && !only.has(f.layer))) continue;
+      const k = this.entityKey(f);
+      let e = entities.get(k);
+      if (!e) entities.set(k, (e = { owner: f.layer, byLayer: new Map() }));
+      if (!e.byLayer.has(f.layer)) e.byLayer.set(f.layer, []);
+      e.byLayer.get(f.layer)!.push(f);
+      if (rank(f.layer) > rank(e.owner)) e.owner = f.layer;
+    }
+    const byLayer = new Map<string, { pieces: RenderedFeature[]; also: Set<string> }[]>();
+    for (const e of entities.values()) {
+      if (!byLayer.has(e.owner)) byLayer.set(e.owner, []);
+      byLayer.get(e.owner)!.push({ pieces: e.byLayer.get(e.owner)!, also: new Set([...e.byLayer.keys()].filter((l) => l !== e.owner)) });
+    }
+
+    const visible = layers.filter((l) => l.visible);
+    const hidden = layers.filter((l) => !l.visible);
+    const drawn = new Set([...entities.values()].flatMap((e) => [...e.byLayer.keys()]));
+    const fmtLayer = (l: (typeof layers)[number]) => `${l.id}(${l.type}${l.sourceType ? ',' + l.sourceType : ''})`;
+    out.push(`layers with content, top to bottom: ${[...visible].reverse().filter((l) => drawn.has(l.id)).map(fmtLayer).join(' ')}`);
+    const empty = visible.filter((l) => !drawn.has(l.id) && l.source);
+    if (empty.length) out.push(`visible but empty in this view: ${empty.map((l) => l.id).join(' ')}`);
+    if (hidden.length) out.push(`hidden layers: ${hidden.map((l) => l.id).join(' ')}`);
+    out.push(`entities rendered in viewport: ${entities.size}. Pixels are CLIENT coordinates: click them directly.`);
+
+    const centre = { x: size.w / 2, y: size.h / 2 };
+    for (const l of [...visible].reverse()) {
+      const list = byLayer.get(l.id);
+      if (!list) continue;
+      const also = [...new Set(list.flatMap((e) => [...e.also]))];
+      out.push('');
+      out.push(`[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
+      const rows = list
+        .map((e) => {
+          const cands = this.candidates(e.pieces, size);
+          let pt: Pt | undefined;
+          let note = '';
+          const ek = this.entityKey(e.pieces[0]);
+          for (const c of cands.slice(0, 40)) {
+            const hits = a.queryFeatures({ at: c });
+            if (!hits.some((h) => this.entityKey(h) === ek)) continue;
+            pt ??= c;
+            const top = hits[0];
+            const el = document.elementFromPoint(rect.left + c.x, rect.top + c.y);
+            if (this.entityKey(top) === ek && el === surface) {
+              pt = c;
+              note = '';
+              break;
+            }
+            note = el !== surface ? ` covered-by-dom:${describeEl(el!)}` : ` covered-by:${top.layer}${top.id !== undefined ? '#' + top.id : ''}`;
+          }
+          return { e, pt, note, d: pt ? Math.hypot(pt.x - centre.x, pt.y - centre.y) : Infinity };
+        })
+        .sort((x, y) => x.d - y.d);
+      for (const r of rows.slice(0, perLayer)) {
+        const f = r.e.pieces[0];
+        const pos = r.pt ? `@(${Math.round(rect.left + r.pt.x)},${Math.round(rect.top + r.pt.y)})` : '@(edge: no clickable pixel in view)';
+        out.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${r.note} ${fmtProps(f.properties, maxProps)}`);
+      }
+      const rest = rows.slice(perLayer);
+      if (rest.length) out.push(`  … ${rest.length} more not listed. ${histogram(rest.map((r) => r.e.pieces[0].properties))}`);
+    }
+
+    // What the viewport hides (only knowable for sources that hold their full data client-side).
+    const seenSources = new Set<string>();
+    for (const l of visible) {
+      if (!l.source || seenSources.has(l.source) || skip.has(l.id) || (only && !only.has(l.id))) continue;
+      const data = await a.queryData?.(l.id);
+      if (!data) continue;
+      seenSources.add(l.source);
+      const renderedIds = new Set(a.queryFeatures({}).filter((f) => f.source === l.source).map((f) => this.entityKey(f)));
+      const off = data.filter((f) => !renderedIds.has(this.entityKey({ ...f, source: l.source })));
+      if (!off.length || view.bounds === undefined) continue;
+      const b = view.bounds;
+      const firstCoord = (f: RenderedFeature) => {
+        const first = explode(f.geometry)[0];
+        return first.kind === 'point' ? first.coord : first.kind === 'line' ? first.coords[0] : first.rings[0][0];
+      };
+      const inView = (c: number[]) => c[0] >= b.west && c[0] <= b.east && c[1] >= b.south && c[1] <= b.north;
+      const outside = off.filter((f) => !inView(firstCoord(f)));
+      const undrawn = off.length - outside.length;
+      out.push('');
+      if (undrawn) out.push(`[source ${l.source}] ${undrawn} feature(s) are inside the view but not drawn individually (clustered, filtered out, or label collision)`);
+      if (outside.length) {
+        const dirs = outside.slice(0, 5).map((f) => {
+          const c = firstCoord(f);
+          const ew = c[0] > b.east ? 'east' : c[0] < b.west ? 'west' : '';
+          const ns = c[1] > b.north ? 'north' : c[1] < b.south ? 'south' : '';
+          return `${f.id !== undefined ? '#' + f.id : ''} to the ${ns}${ns && ew ? '-' : ''}${ew} at ${n(c[0])},${n(c[1])} ${fmtProps(f.properties, 3)}`;
+        });
+        out.push(`[source ${l.source}] ${outside.length} feature(s) OUTSIDE the viewport (pan to see them): ${dirs.join(' | ')}${outside.length > 5 ? ' | …' : ''}`);
+      }
+    }
+    const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && l.sourceType !== 'raster');
+    if (blind.length) out.push(`\nnote: ${blind.map((l) => l.id).join(', ')} use tiled sources; features outside the viewport are unknowable from here.`);
+    return out.join('\n');
+  }
+
   /** Auto-pan ("scrollIntoView"): bring a not-rendered feature's data position into view. */
   async reveal(q: FeatureQuery): Promise<boolean> {
     if (!this.adapter.reveal || !this.adapter.queryData) return false;
@@ -394,6 +531,33 @@ function distToRing(p: Pt, ring: Pt[]): number {
     best = Math.min(best, Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy)));
   }
   return best;
+}
+
+function fmtProps(p: Record<string, unknown>, max: number): string {
+  const keys = Object.keys(p);
+  const shown = keys.slice(0, max).map((k) => {
+    let v = typeof p[k] === 'string' ? JSON.stringify(p[k]) : String(p[k]);
+    if (v.length > 42) v = v.slice(0, 40) + '…"';
+    return `${k}=${v}`;
+  });
+  return shown.join(' ') + (keys.length > max ? ` (+${keys.length - max} props)` : '');
+}
+
+/** "zoning: residential×20, commercial×15" for low-cardinality props; ranges for numbers. */
+function histogram(props: Record<string, unknown>[]): string {
+  const keys = [...new Set(props.flatMap((p) => Object.keys(p)))].slice(0, 6);
+  const parts: string[] = [];
+  for (const k of keys) {
+    const vals = props.map((p) => p[k]).filter((v) => v !== undefined && v !== null);
+    const distinct = new Map<string, number>();
+    for (const v of vals) distinct.set(String(v), (distinct.get(String(v)) ?? 0) + 1);
+    if (distinct.size > 0 && distinct.size <= 5) {
+      parts.push(`${k}: ${[...distinct].sort((a, b) => b[1] - a[1]).map(([v, c]) => `${v}×${c}`).join(', ')}`);
+    } else if (vals.length && vals.every((v) => typeof v === 'number')) {
+      parts.push(`${k}: ${Math.min(...(vals as number[]))}..${Math.max(...(vals as number[]))}`);
+    }
+  }
+  return parts.length ? `Summary — ${parts.join('; ')}` : '';
 }
 
 function showWant(v: unknown): string {

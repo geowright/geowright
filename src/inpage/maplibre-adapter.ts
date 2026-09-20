@@ -79,6 +79,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
         id,
         type: l.type,
         source: l.source || undefined,
+        sourceType: l.source ? this.map.getSource(l.source)?.type : undefined,
         visible: this.map.getLayoutProperty(id, 'visibility') !== 'none',
       };
     });
