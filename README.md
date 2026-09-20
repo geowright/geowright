@@ -117,6 +117,16 @@ A failure also attaches `map screenshot — <call>`: the map with every candidat
 
 It also distinguishes: layer does not exist · layer hidden · feature exists in the source but is off-screen · occluded (names the occluder) · ambiguous (lists the matches). The same text is attached to the HTML report / trace as `map state — …`.
 
+### Touch and keyboard
+
+```ts
+test.use({ hasTouch: true });
+await map.feature({ layer: 'alerts', id: 2 }).tap();               // Playwright touchscreen.tap, fully verified like click()
+await map.pinchAt({ lng, lat }, { scale: 2 });                     // ≈ +1 zoom      } two-finger gestures go through CDP:
+await map.twoFingerRotateAt({ lng, lat }, { degrees: 40 });        // ≈ -22° bearing } Chromium only (Playwright has tap() only)
+await map.keyboard.press('Shift+ArrowRight');                      // map focused, real key: MapLibre rotates 15°
+```
+
 ### DOM markers and popups
 
 ```ts
@@ -190,6 +200,6 @@ npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it 
 demo/             the system under test (Vite + MapLibre 6 + terra-draw; dense.html = 5k points; draw2.html = mapbox-gl-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   geowright(page), handles, expect matchers
-tests/            assert / act / draw / draw2 / dense / camera / overlays / artefacts / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
+tests/            assert / act / draw / draw2 / dense / camera / overlays / artefacts / touch-keyboard / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```

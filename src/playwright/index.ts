@@ -1,4 +1,4 @@
-import { expect as baseExpect, test, type Locator, type Page } from '@playwright/test';
+import { expect as baseExpect, test, type CDPSession, type Locator, type Page } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -454,6 +454,79 @@ export class MapHandle {
     });
   }
 
+  /* ---- touch (mobile map apps) ---- */
+
+  /**
+   * Real touch tap at a location. Needs a touch-enabled context (`test.use({ hasTouch: true })`).
+   * Playwright's touchscreen API has exactly one gesture: tap.
+   */
+  async tapAt(at: LngLat, opts: ActionOptions = {}): Promise<void> {
+    await step(`map.tapAt(${fmt(at)})`, async () => {
+      const p = await this._pointAt(at, opts, 'map.tapAt');
+      await this.page.touchscreen.tap(p.x, p.y);
+    });
+  }
+
+  /**
+   * Two-finger pinch around a location: `scale` 2 spreads the fingers to twice their distance
+   * (MapLibre: about +1 zoom), 0.5 pinches in. Multi-touch does not exist in Playwright's API, so
+   * this goes through CDP `Input.dispatchTouchEvent` — the same browser input layer Playwright's
+   * own mouse uses, real touch events for the page — and is therefore CHROMIUM ONLY.
+   * The map keeps moving after release (inertia): follow with `toHaveView` / `waitForIdle`.
+   */
+  async pinchAt(at: LngLat, o: { scale: number; steps?: number; startDistancePx?: number } & ActionOptions): Promise<void> {
+    await step(`map.pinchAt(${fmt(at)}, scale ${o.scale})`, async () => {
+      const c = await this._pointAt(at, o, 'map.pinchAt');
+      const d0 = (o.startDistancePx ?? 120) / 2;
+      await this._twoFingers(c, o.steps ?? 12, (t) => {
+        const d = d0 * (1 + (o.scale - 1) * t);
+        return [{ x: c.x - d, y: c.y }, { x: c.x + d, y: c.y }];
+      });
+    });
+  }
+
+  /** Two-finger rotate around a location, clockwise degrees of the FINGERS (the map's bearing follows them, negated). Chromium only. */
+  async twoFingerRotateAt(at: LngLat, o: { degrees: number; steps?: number; radiusPx?: number } & ActionOptions): Promise<void> {
+    await step(`map.twoFingerRotateAt(${fmt(at)}, ${o.degrees}°)`, async () => {
+      const c = await this._pointAt(at, o, 'map.twoFingerRotateAt');
+      const r = o.radiusPx ?? 80;
+      await this._twoFingers(c, o.steps ?? 16, (t) => {
+        const a = (o.degrees * t * Math.PI) / 180;
+        return [{ x: c.x - r * Math.cos(a), y: c.y - r * Math.sin(a) }, { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) }];
+      });
+    });
+  }
+
+  private cdp?: Promise<CDPSession>;
+  private async _twoFingers(_c: { x: number; y: number }, steps: number, at: (t: number) => { x: number; y: number }[]): Promise<void> {
+    const browser = this.page.context().browser();
+    if (browser && browser.browserType().name() !== 'chromium') {
+      throw new GeowrightError('multi-touch gestures need Chromium: Playwright has no multi-touch API (touchscreen.tap only), this uses CDP Input.dispatchTouchEvent');
+    }
+    const cdp = await (this.cdp ??= this.page.context().newCDPSession(this.page));
+    const points = (t: number) => at(t).map((p, id) => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, id }));
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0) });
+    for (let i = 1; i <= steps; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(i / steps) });
+    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  }
+
+  /* ---- keyboard ---- */
+
+  /**
+   * Real key presses with the MAP focused (MapLibre: arrows pan 100px, +/- zoom, Shift+arrows
+   * rotate / pitch). Focus is moved the way Playwright's own `locator.press` does it.
+   */
+  readonly keyboard = {
+    press: (key: string) =>
+      step(`map.keyboard.press(${key})`, async () => {
+        const canvas = await this.page.evaluateHandle((id) => (window as any).__geowright_maps?.[id]?.getCanvas?.() as HTMLElement | undefined, this.mapId);
+        const el = canvas.asElement();
+        if (!el) throw new GeowrightError(`map.keyboard.press: no map registered as "${this.mapId}"`);
+        await el.focus();
+        await this.page.keyboard.press(key);
+      }),
+  };
+
   /* ---- drawing ---- */
 
   readonly draw = {
@@ -589,6 +662,24 @@ export class FeatureHandle {
   async hover(opts: ActionOptions = {}): Promise<void> {
     const what = `${this}.hover()`;
     await step(what, () => this._withActionPoint(what, opts, async (p) => void (await this.map.page.mouse.move(p.x, p.y, { steps: 4 }))));
+  }
+
+  /** Real touch tap on the feature (touch-enabled context). Same actionability and click-time verification as click(). */
+  async tap(opts: ActionOptions = {}): Promise<void> {
+    const what = `${this}.tap()`;
+    await step(what, () =>
+      this._withActionPoint(what, opts, async (p) => {
+        const token = await this.map._call<string>('armClick', toWire(this.query), this.pointOpts(opts));
+        let verdict: ClickVerdict;
+        try {
+          await this.map.page.touchscreen.tap(p.x, p.y);
+        } finally {
+          verdict = await this.map._call<ClickVerdict>('disarmClick', token);
+        }
+        if (!verdict.fired) return { retry: 'the tap never reached the page' };
+        if (!verdict.ok) return { retry: `tap was intercepted and cancelled: ${verdict.reason}` };
+      }),
+    );
   }
 
   /** Drag this feature (e.g. a vertex handle) to a location with real mouse input. */
