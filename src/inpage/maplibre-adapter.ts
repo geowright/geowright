@@ -154,7 +154,11 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     if (typeof source.getData === 'function') data = await source.getData();
     else data = (source.serialize?.() as { data?: GeoJSON.GeoJSON | string } | undefined)?.data;
     if (!data || typeof data === 'string') return null;
-    const feats = data.type === 'FeatureCollection' ? data.features : data.type === 'Feature' ? [data] : [];
+    // A source may hold a bare GEOMETRY ({ type: 'Point', … } — MapLibre's "animate a point" example does):
+    // MapLibre renders it as one feature without properties, so that is what it is here too. Until an earlier phase it
+    // was read as "no features", which silently disabled every question the engine asks the source.
+    const feats: GeoJSON.Feature[] =
+      data.type === 'FeatureCollection' ? data.features : data.type === 'Feature' ? [data] : [{ type: 'Feature', properties: {}, geometry: data }];
     const promoteId = (source as any).promoteId as string | undefined; // public option, echoed on the source
     return feats
       .filter((f) => f.geometry && f.geometry.type !== 'GeometryCollection')
@@ -198,13 +202,19 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
   waitForIdle(timeoutMs: number): Promise<boolean> {
     return new Promise((resolve) => {
       let done = false;
+      let frames = 0;
+      const started = performance.now();
+      const onRender = () => frames++;
       const finish = (v: boolean) => {
         if (done) return;
         done = true;
         clearTimeout(timer);
         this.map.off('idle', onIdle);
+        this.map.off('render', onRender);
+        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), pending: this.pendingSources() };
         resolve(v);
       };
+      this.map.on('render', onRender);
       const onIdle = () => {
         // 'idle' does not look at tile state of sources that are still fetching after an error
         // retry etc.; areTilesLoaded() is the public belt-and-braces check.
@@ -215,6 +225,41 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
       this.map.on('idle', onIdle);
       this.map.triggerRepaint();
     });
+  }
+
+  private lastWait?: { frames: number; ms: number; moving: boolean; loaded: boolean; pending: { id: string; type: string }[] };
+
+  /** Sources that are not loaded right now (public isSourceLoaded), with their type. */
+  private pendingSources(): { id: string; type: string }[] {
+    const sources = this.map.getStyle()?.sources ?? {};
+    return Object.keys(sources)
+      .filter((id) => {
+        try {
+          return !this.map.isSourceLoaded(id);
+        } catch {
+          return false;
+        }
+      })
+      .map((id) => ({ id, type: String((sources[id] as { type?: string }).type) }));
+  }
+
+  /**
+   * Why the last waitForIdle() timed out. A map that renders frame after frame while the camera is at rest and
+   * every tile is loaded is being ANIMATED by the app (setData / setPaintProperty in a requestAnimationFrame loop,
+   * an animated image/canvas/video source): it will never be idle, by design.
+   */
+  idleDiagnosis(): string | undefined {
+    const w = this.lastWait;
+    if (!w) return undefined;
+    if (w.moving) return 'the camera is moving (an animation or a gesture in progress)';
+    const never = 'Such a map NEVER becomes idle: do not wait for idle here; retrying assertions and actions work without it';
+    const tiled = w.pending.filter((p) => p.type !== 'geojson');
+    if (tiled.length) return `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`;
+    // A GeoJSON source that is "loading" for seconds on end is not the network: it is being re-set faster than it settles.
+    if (w.pending.length && w.frames >= 3) return `the app keeps replacing the data of GeoJSON source(s) ${w.pending.map((p) => p.id).join(', ')} (setData in a requestAnimationFrame loop or a timer: ${w.frames} frames rendered in ${Math.round(w.ms)}ms with the camera at rest). ${never}`;
+    // (loaded() stays false for a map with an animated source, so it cannot be a condition here)
+    if (w.frames >= 3) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image / canvas / video source). ${never}`;
+    return w.loaded ? undefined : 'the style or a source has not finished loading';
   }
 
   visibility(f: RenderedFeature): Visibility {

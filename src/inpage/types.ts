@@ -81,6 +81,12 @@ export interface CanvasAdapter<W = unknown> {
   isMoving(): boolean;
   /** Resolves true once fully settled, false on timeout. Must not hang if already idle. */
   waitForIdle(timeoutMs: number): Promise<boolean>;
+  /**
+   * Optional: after a waitForIdle() that timed out — WHY, as far as the library can tell. The case that matters:
+   * a surface that repaints continuously on purpose (an animation) will never be idle, and waiting for it is a
+   * mistake in the test, not slowness in the app.
+   */
+  idleDiagnosis?(): string | undefined;
   /** Optional: call `cb` whenever the rendered content may have changed and has settled. Returns unsubscribe. */
   subscribe?(cb: () => void): () => void;
   /**
@@ -207,7 +213,7 @@ export type ActionPointFailure =
 
 export type ActionPointResult =
   /** `why`: which candidate pixel was chosen and what was skipped before it — for traces. */
-  | { ok: true; client: Pt; surface: Pt; feature: FeatureSummary; why: string }
+  | { ok: true; client: Pt; surface: Pt; feature: FeatureSummary; why: string; /** with `moving`: px per ms, measured over two frames */ velocity?: Pt }
   | { ok: false; reason: ActionPointFailure; message: string };
 
 export interface ClickVerdict {
@@ -216,6 +222,8 @@ export interface ClickVerdict {
   /** The target was still the topmost hit at the exact moment and pixel of the real event. */
   ok: boolean;
   reason?: string;
+  /** On a miss, when the target could be located at that instant: where it was, relative to the pointer (px). */
+  offset?: Pt;
 }
 
 export interface ActionPointOptions {
@@ -223,6 +231,16 @@ export interface ActionPointOptions {
   force?: boolean;
   /** Layers that are allowed to be on top of the target (e.g. labels, highlight overlays). */
   ignoreLayers?: string[];
+  /**
+   * 'allow': act on a target that never stops moving (an animated feature, a camera that keeps panning).
+   * The "map is not moving" and "same pixel two frames in a row" checks are skipped; the pixel is taken from
+   * the freshest rendered frame, and the ONLY guard is the verification at the instant the real event
+   * arrives: if the target is no longer under the pointer by then, the input is swallowed (click, tap) or
+   * discarded (hover) and the action tries again. It can take several attempts; it never acts on the wrong thing.
+   */
+  moving?: 'allow';
+  /** @internal with `moving`: aim this many ms ahead along the target's measured velocity (learnt from misses). */
+  leadMs?: number;
 }
 
 export interface SnapshotOptions {

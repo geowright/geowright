@@ -238,6 +238,7 @@ export class Engine<W = unknown> {
    *  5. the pixel is not covered by a DOM element (popup, control, sidebar overlay)
    */
   async actionPoint(q: FeatureQuery, opts: ActionPointOptions = {}): Promise<ActionPointResult> {
+    if (opts.moving === 'allow') return this.movingActionPoint(q, opts);
     if (this.adapter.isMoving()) return fail('moving', 'map is moving (camera animation or user gesture in progress)');
     // Look-alikes, or ONE id-less feature caught in two tile generations? On 'ambiguous', ask the source — now,
     // while the split is visible — and look again.
@@ -257,6 +258,58 @@ export class Engine<W = unknown> {
       return fail('unstable', 'feature position changed between two animation frames');
     }
     return second;
+  }
+
+  /**
+   * { moving: 'allow' }: a person can click a slowly moving dot, and so can we — by giving up the two checks
+   * that a moving target can never pass (map at rest, same pixel two frames running) and keeping every other
+   * one. What protects against acting on the wrong thing is the verification at the instant the real event
+   * arrives (armClick / armHover), which the Playwright side turns into "swallowed, try again".
+   *
+   * Aiming. Measured first: on a small page the pixel from the freshest frame is good enough up to ~200px/s
+   * for a 9px dot (20/20 first try) — and on MapLibre's own "animate a point" (full-screen basemap in software
+   * GL, 114px/s, 10px dot) it NEVER hit in 30s, because real input arrives later than the dot's radius allows.
+   * So the pointer leads the target: velocity is measured here over two frames, and how many ms to lead by is
+   * learnt by the caller from each miss (the verdict says where the target was when the event arrived).
+   */
+  private async movingActionPoint(q: FeatureQuery, opts: ActionPointOptions): Promise<ActionPointResult> {
+    const look = async () => {
+      const t = await new Promise<number>((r) => requestAnimationFrame(() => r(performance.now())));
+      let r = this.actionPointOnce(q, opts);
+      if (!r.ok && r.reason === 'ambiguous') {
+        await this.learnIdentity(q);
+        r = this.actionPointOnce(q, opts);
+      }
+      return { t, r };
+    };
+    // Three looks, one frame apart: velocity AND acceleration, so that a lead follows a curve (a straight-line
+    // lead of 300ms leaves a 114px-radius circle by 5px; a 10px dot is then half missed before latency jitter).
+    const a = await look();
+    if (!a.r.ok) return a.r;
+    const m = await look();
+    if (!m.r.ok) return m.r;
+    const b = await look();
+    if (!b.r.ok) return b.r;
+    const d1 = Math.max(1, m.t - a.t), d2 = Math.max(1, b.t - m.t);
+    const v1 = { x: (m.r.surface.x - a.r.surface.x) / d1, y: (m.r.surface.y - a.r.surface.y) / d1 };
+    const v2 = { x: (b.r.surface.x - m.r.surface.x) / d2, y: (b.r.surface.y - m.r.surface.y) / d2 };
+    const acc = { x: (v2.x - v1.x) / ((d1 + d2) / 2), y: (v2.y - v1.y) / ((d1 + d2) / 2) };
+    const velocity = { x: v2.x + (acc.x * d2) / 2, y: v2.y + (acc.y * d2) / 2 }; // at the time of the last look
+    const lead = opts.leadMs ?? 0;
+    let surface = { x: b.r.surface.x + velocity.x * lead + (acc.x * lead * lead) / 2, y: b.r.surface.y + velocity.y * lead + (acc.y * lead * lead) / 2 };
+    const rect = this.adapter.surface().getBoundingClientRect();
+    const size = this.surfaceSize();
+    // Where it WILL be cannot be hit-tested now; it must at least be a pixel of the map that a pointer can reach.
+    const reachable = surface.x >= 2 && surface.y >= 2 && surface.x <= size.w - 2 && surface.y <= size.h - 2 && topElementAt(rect.left + surface.x, rect.top + surface.y) === this.adapter.surface();
+    if (!reachable) surface = b.r.surface;
+    const speed = Math.hypot(velocity.x, velocity.y) * 1000;
+    return {
+      ...b.r,
+      surface: round(surface),
+      client: round({ x: rect.left + surface.x, y: rect.top + surface.y }),
+      velocity,
+      why: `${b.r.why}; moving: 'allow' — target moves at ${Math.round(speed)}px/s, aimed ${Math.round(reachable ? lead : 0)}ms ahead of where it was drawn; the real event is verified when it arrives`,
+    };
   }
 
   /**
@@ -550,7 +603,10 @@ export class Engine<W = unknown> {
         const hits = this.adapter.queryFeatures({ at: { x: me.clientX - rect.left, y: me.clientY - rect.top } }).filter((h) => !ignore.has(h.layer));
         const layers = this.layersOf(q);
         const mine = hits.find((h) => (!layers || layers.includes(h.layer)) && this.matches(h, q));
-        if (!mine) verdict.reason = 'target was no longer under the pointer when the click arrived';
+        if (!mine) {
+          verdict.reason = 'target was no longer under the pointer when the click arrived';
+          if (opts.moving === 'allow') verdict.offset = this.offsetFrom({ x: me.clientX - rect.left, y: me.clientY - rect.top }, q, opts);
+        }
         else if (!opts.force && !this.sameEntity(this.topVisible(hits)!, [mine])) {
           const top = this.topVisible(hits)!;
           verdict.reason = `target was covered by ${describe({ ...top, geometryType: top.geometry.type })} when the click arrived`;
@@ -576,6 +632,46 @@ export class Engine<W = unknown> {
       },
     });
     return token;
+  }
+
+  /**
+   * The hover counterpart of armClick, for moving targets: was the target under the pointer at the LAST real
+   * mousemove? Nothing is swallowed — a pointer that arrives late has merely hovered whatever is there, as a
+   * person's would — but the caller learns that it missed and tries again.
+   */
+  armHover(q: FeatureQuery, opts: ActionPointOptions = {}): string {
+    const token = Math.random().toString(36).slice(2);
+    const verdict: ClickVerdict = { fired: false, ok: false };
+    const ignore = new Set(opts.ignoreLayers ?? []);
+    const onMove = (e: Event) => {
+      verdict.fired = true;
+      const me = e as MouseEvent;
+      const surface = this.adapter.surface();
+      const rect = surface.getBoundingClientRect();
+      verdict.ok = false;
+      if (me.target !== surface && !isMirrorNode(me.target)) {
+        verdict.reason = `the pointer is over ${describeEl(me.target as Element)}, not the map canvas`;
+        return;
+      }
+      const hits = this.adapter.queryFeatures({ at: { x: me.clientX - rect.left, y: me.clientY - rect.top } }).filter((h) => !ignore.has(h.layer));
+      const layers = this.layersOf(q);
+      const mine = hits.find((h) => (!layers || layers.includes(h.layer)) && this.matches(h, q));
+      if (!mine) {
+        verdict.reason = 'target was no longer under the pointer when it arrived';
+        verdict.offset = this.offsetFrom({ x: me.clientX - rect.left, y: me.clientY - rect.top }, q, opts);
+      }
+      else if (!opts.force && !this.sameEntity(this.topVisible(hits)!, [mine])) verdict.reason = 'target was covered by another feature when the pointer arrived';
+      else (verdict.ok = true), (verdict.reason = undefined);
+    };
+    window.addEventListener('mousemove', onMove, true);
+    this.armed.set(token, { verdict, dispose: () => window.removeEventListener('mousemove', onMove, true) });
+    return token;
+  }
+
+  /** Where the (moving) target is drawn right now, relative to where the pointer arrived. */
+  private offsetFrom(pointer: Pt, q: FeatureQuery, opts: ActionPointOptions): Pt | undefined {
+    const now = this.actionPointOnce(q, { ...opts, force: true });
+    return now.ok ? { x: now.surface.x - pointer.x, y: now.surface.y - pointer.y } : undefined;
   }
 
   disarmClick(token: string): ClickVerdict {
@@ -832,12 +928,20 @@ export class Engine<W = unknown> {
     // shrink the cap and re-render. Hit tests are cached per entity: shrinking costs nothing.
     const located = new Map<string, ReturnType<Engine<W>['locate']>>();
     const header = out.splice(0);
-    const sections = (cap: number): string[] => {
+    // A basemap is a tiled source with many layers on it. Its rows are the least interesting thing on the page to
+    // whoever asked for a snapshot of an APP, and until an earlier phase they ate the budget first (top-down order): "… 54
+    // more not listed" for every basemap layer and zero rows for the app's own. Now basemap layers give up their
+    // rows first; the app's layers shrink only when that was not enough. Counts and histograms are never dropped.
+    const perSource = new Map<string, number>();
+    for (const l of layers) if (l.source) perSource.set(l.source, (perSource.get(l.source) ?? 0) + 1);
+    const isBasemap = (l: (typeof layers)[number]) => !!l.source && l.sourceType !== 'geojson' && (perSource.get(l.source) ?? 0) >= 8;
+    const sections = (appCap: number, baseCap: number): string[] => {
       const sec: string[] = [];
       for (const l of [...visible].reverse()) {
         const list = byLayer.get(l.id);
         if (!list) continue;
         const also = [...new Set(list.flatMap((e) => [...e.byLayer.keys()].filter((x) => x !== e.owner)))];
+        const cap = isBasemap(l) ? baseCap : appCap;
         sec.push('');
         const colours = list.map((e) => this.adapter.colour?.(e.byLayer.get(e.owner)![0]));
         const driven = colours.some((c) => c?.dataDriven);
@@ -912,12 +1016,13 @@ export class Engine<W = unknown> {
     // Budget: shrink the per-layer cap until the text fits; as a last resort cut it, and say so.
     const maxChars = o.maxChars ?? 8000;
     const footer = out;
-    let cap = perLayer;
+    let cap = perLayer, baseCap = perLayer;
     let text = '';
     for (;;) {
-      text = [...header, ...sections(cap), ...footer].join('\n');
-      if (text.length <= maxChars || cap === 0) break;
-      cap = Math.floor(cap / 2);
+      text = [...header, ...sections(cap, baseCap), ...footer].join('\n');
+      if (text.length <= maxChars || (cap === 0 && baseCap === 0)) break;
+      if (baseCap > 0) baseCap = Math.floor(baseCap / 2);
+      else cap = Math.floor(cap / 2);
     }
     if (text.length > maxChars) text = text.slice(0, Math.max(0, maxChars - 60)) + `\n… cut to fit maxChars=${maxChars}; use layers/filter to narrow.`;
     return text;

@@ -43,14 +43,12 @@ test.describe('wild: select-features-with-boxzoomend-callback', () => {
     await expect(page.locator('#selected-count')).not.toHaveText('0');
   });
 
-  // FRICTION / surprising: the app's own `#selected-count` and `earthquakes-selected`'s filter (read
-  // via page.evaluate — geowright cannot report a layer's setFilter state, so this one look is
-  // reported here too) agree the selection is non-empty, but no query (geowright's, or MapLibre's own
-  // queryRenderedFeatures, tried three ways, with a 1.5s grace period) ever finds a rendered feature
-  // on 'earthquakes-selected' after the filter changes. This reproduces with plain MapLibre — it is a
-  // property of this example/MapLibre 6.10 (a freshly-added `boxZoom` callback example, per its
-  // `og:created: 2026-02-25`), not a geowright gap. A team relying on `setFilter` to re-highlight an
-  // already-loaded GeoJSON layer at runtime should know queries can go stale like this.
+  // The example's highlight layer NEVER draws anything, although its counter says features are selected. The cause
+  // (verified in an earlier phase against raw MapLibre 3.6 / 4.7 / 5.24 / 6.10, no test library in the page): the source uses
+  // `promoteId: 'id'` with STRING ids, queryRenderedFeatures() reports those strings as `feature.id`, and the example
+  // feeds them into `['in', ['id'], ['literal', ids]]` — but a layer filter's `['id']` does not see promoted string
+  // ids (0 matches on every version; `['get', 'id']` matches). The earlier explanation here ("queries go stale after
+  // setFilter") was wrong: nothing is stale, the filter matches nothing. This behavior is documented in the design notes.
   test('surprising: the selected-highlight layer never becomes queryable, even though the DOM says it is populated', async ({ wild, page }) => {
     const map = await wild.open(example('select-features-with-boxzoomend-callback'), { routes });
     await shiftDrag(map, page, { lng: -110, lat: 47 }, { lng: -85, lat: 26 });

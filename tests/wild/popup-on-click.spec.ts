@@ -56,4 +56,17 @@ test.describe('wild: display-a-popup-on-click', () => {
       await expect(map.features({ layer: 'places', where: { icon: 'theatre' } })).toHaveFeatureCount(2);
     },
   );
+
+  test('snapshot under a tight budget: the basemap gives up its rows first, the app layer keeps its own', async ({ wild }) => {
+    const map = await wild.open(example('display-a-popup-on-click'), { routes });
+    const snap = await map.snapshot({ maxChars: 3900 });
+    expect(snap.length).toBeLessThanOrEqual(3900);
+    // all nine places still have a row each (a clickable pixel + their properties) …
+    expect(snap).toContain('[places] 9 symbol entities');
+    expect(snap.match(/^  - Point @\(\d+,\d+\).* description=/gm)?.length).toBe(9);
+    // … while the basemap's busiest layer (40 streets, on a tiled source with 8+ layers) has given up most or all of its
+    // rows. Before an earlier phase it was the other way round: top-down order spent the budget on the basemap first.
+    const unlisted = Number(/\[highway-minor\] 40 line entities[\s\S]*?… (\d+) more not listed/.exec(snap)?.[1]);
+    expect(unlisted).toBeGreaterThanOrEqual(33);
+  });
 });

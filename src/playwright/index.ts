@@ -172,11 +172,40 @@ export interface TwoPointDrawOptions {
 
 const POLL = [0, 30, 60, 100, 100, 200, 300, 500];
 
+/**
+ * Aiming at a moving target. The pointer arrives some ms after the pixel was computed; how many is not
+ * knowable in advance (it is the page's frame time plus the input pipeline), but every miss measures it:
+ * the target was `offset` px from the pointer, moving at `velocity` px/ms, so the pointer was late by
+ * offset·v/|v|² ms. Closed loop on a scalar; direction comes fresh from the page on every attempt.
+ */
+/** A side-effect-free round trip into the page outlived the action's deadline. */
+class DeadlineError extends Error {}
+
+class Aim {
+  leadMs = 0;
+  velocity?: { x: number; y: number };
+  private measured: number[] = [];
+  /** Returns a note for the retry message. */
+  learn(verdict: ClickVerdict): string {
+    const v = this.velocity, o = verdict.offset;
+    const v2 = v ? v.x * v.x + v.y * v.y : 0;
+    if (!v || !o || v2 < 1e-6) return '';
+    const late = (o.x * v.x + o.y * v.y) / v2;
+    // lead + late IS this attempt's measured latency. The median of the last few, not a full-gain correction:
+    // a mousemove is delivered on a frame boundary, so under load single measurements jump by whole frames
+    // (seen: "-749ms late" right after "+268ms"), and chasing each one never settles.
+    this.measured.push(this.leadMs + late);
+    const recent = this.measured.slice(-5).sort((x, y) => x - y);
+    this.leadMs = Math.max(0, Math.min(800, recent[Math.floor(recent.length / 2)]));
+    return ` (it was ${Math.round(Math.hypot(o.x, o.y))}px away: the pointer was ${Math.round(late)}ms late; now leading by ${Math.round(this.leadMs)}ms)`;
+  }
+}
+
 /* ------------------------------------------------------------------ MapHandle */
 
 export class MapHandle {
   readonly mapId: string;
-  readonly timeout: number;
+  private readonly fixedTimeout?: number;
   readonly ignoreLayers: string[];
   private readonly mirrorOpt: GeowrightOptions['mirror'];
   private readonly failureScreenshots: boolean;
@@ -185,8 +214,25 @@ export class MapHandle {
     this.mirrorOpt = opts.mirror;
     this.failureScreenshots = opts.failureScreenshots ?? true;
     this.mapId = opts.mapId ?? 'main';
-    this.timeout = opts.timeout ?? 10_000;
+    this.fixedTimeout = opts.timeout;
     this.ignoreLayers = opts.ignoreLayers ?? [];
+  }
+
+  /**
+   * Default timeout for actions and waits. An explicit `geowright(page, { timeout })` wins. Otherwise 10s — a
+   * third of Playwright's default 30s test timeout — and it SCALES with the test's timeout: `test.slow()` triples
+   * Playwright's budget precisely because the page is slow (software GL, terrain, a globe's first paint), and a
+   * default that stayed at 10s made every such spec set its own. Read when used, so `test.slow()` may come later.
+   */
+  get timeout(): number {
+    if (this.fixedTimeout !== undefined) return this.fixedTimeout;
+    let testTimeout = 0;
+    try {
+      testTimeout = test.info().timeout; // 0 = no timeout (debugging): keep the plain default
+    } catch {
+      /* not under @playwright/test */
+    }
+    return Math.max(10_000, Math.round(testTimeout / 3));
   }
 
   /** @internal */
@@ -263,6 +309,24 @@ export class MapHandle {
     }
   }
 
+  /**
+   * @internal `_call`, but gives up at `deadline`. ONLY for calls without side effects on the page (queries,
+   * waits): the abandoned evaluate keeps running in the page and its answer is dropped. Never wrap real input.
+   */
+  async _callBy<T>(deadline: number, method: string, ...args: unknown[]): Promise<T> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const late = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new DeadlineError(`the page did not answer "${method}" in the time that was left (a busy main thread: heavy rendering, or an overloaded machine)`)), Math.max(1, deadline - Date.now()));
+    });
+    const call = this._call<T>(method, ...args);
+    call.catch(() => {}); // if it loses the race, its eventual failure must not become an unhandled rejection
+    try {
+      return await Promise.race([call, late]);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** @internal RPC into the in-page engine; (re)injects it on demand, e.g. after navigation. */
   async _call<T>(method: string, ...args: unknown[]): Promise<T> {
     const run = () =>
@@ -283,15 +347,20 @@ export class MapHandle {
   }
 
   /** @internal poll `attempt` until it returns a value or the timeout elapses. */
-  async _retry<T>(what: string, timeout: number, attempt: () => Promise<{ value: T } | { retry: string }>): Promise<T> {
+  async _retry<T>(what: string, timeout: number, attempt: (deadline: number) => Promise<{ value: T } | { retry: string }>): Promise<T> {
     const deadline = Date.now() + timeout;
     let last = 'never attempted';
     for (let i = 0; ; i++) {
       try {
-        const r = await attempt();
+        const r = await attempt(deadline);
         if ('value' in r) return r.value;
         last = r.retry;
       } catch (e) {
+        if (e instanceof DeadlineError) {
+          // `timeout` is a wall-clock promise. One slow round trip into a busy page used to run on for as long as it
+          // liked (measured: 33s for { timeout: 2000 } on an overloaded machine); it is abandoned instead.
+          throw new GeowrightError(`${what}: timed out after ${timeout}ms — ${e.message}; before that: ${last}`);
+        }
         // "no map registered yet" and navigation races are retryable; they surface on timeout.
         last = (e as Error).message.split('\n')[0];
       }
@@ -310,9 +379,13 @@ export class MapHandle {
   async waitForIdle(opts: { timeout?: number } = {}): Promise<void> {
     const timeout = opts.timeout ?? this.timeout;
     await step(`map.waitForIdle()`, () =>
-      this._retry('map.waitForIdle()', timeout, async () => {
-        const ok = await this._call<boolean>('waitForIdle', Math.min(timeout, 2000));
-        if (!ok) return { retry: 'map did not become idle (still moving, loading tiles, or repainting)' };
+      this._retry('map.waitForIdle()', timeout, async (deadline) => {
+        // (grace: the in-page wait is itself bounded; on a page that renders two frames a second the answer needs time to get back)
+        const ok = await this._callBy<boolean>(deadline + 3000, 'waitForIdle', Math.max(50, Math.min(deadline - Date.now() - 300, 2000)));
+        if (!ok) {
+          const why = await this._call<string | undefined>('idleDiagnosis').catch(() => undefined);
+          return { retry: `map did not become idle (still moving, loading tiles, or repainting)${why ? ` — ${why}` : ''}` };
+        }
         // The mirror is (re)started here: after a navigation the page is new and it is gone.
         if (this.mirrorOpt && !(await this._call<boolean>('hasMirror'))) {
           await this._call('mirror', typeof this.mirrorOpt === 'object' ? this.mirrorOpt : {});
@@ -659,18 +732,32 @@ export class FeatureHandle {
     return toWire(opts.force && this.query.visible === undefined ? { ...this.query, visible: 'any' } : this.query);
   }
 
-  private pointOpts(opts: ActionOptions): ActionPointOptions {
-    return { force: opts.force, ignoreLayers: [...this.map.ignoreLayers, ...(opts.ignoreLayers ?? [])] };
+  private pointOpts(opts: ActionOptions, leadMs?: number): ActionPointOptions {
+    return { force: opts.force, moving: opts.moving, leadMs, ignoreLayers: [...this.map.ignoreLayers, ...(opts.ignoreLayers ?? [])] };
   }
 
   /** @internal Run `act` once the feature is actionable; `act` may ask for a retry. */
-  async _withActionPoint(what: string, opts: ActionOptions, act: (p: { x: number; y: number }) => Promise<{ retry: string } | void>): Promise<void> {
+  async _withActionPoint(
+    what: string,
+    opts: ActionOptions,
+    act: (p: { x: number; y: number }, aim: Aim, token?: string) => Promise<{ retry: string } | void>,
+    /** Moving targets: arm the click-time check BEFORE the pixel is computed — every round trip after it is lateness. */
+    armFirst?: () => Promise<string>,
+  ): Promise<void> {
     const timeout = opts.timeout ?? this.map.timeout;
     let panned = false;
+    const aim = new Aim(); // moving targets: how far ahead to point, learnt from misses across the attempts
     try {
-      await this.map._retry<true>(what, timeout, async () => {
-        const r = await this.map._call<ActionPointResult>('actionPoint', this.wire(opts), this.pointOpts(opts));
+      await this.map._retry<true>(what, timeout, async (deadline) => {
+        const token = await armFirst?.();
+        // Looking for the pixel has no side effects and may be abandoned at the deadline; real input (below) never is.
+        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), this.pointOpts(opts, aim.leadMs)).catch(async (e) => {
+          if (token) await this.map._call('disarmClick', token).catch(() => {});
+          throw e;
+        });
+        if (r.ok) aim.velocity = r.velocity;
         if (!r.ok) {
+          if (token) await this.map._call('disarmClick', token);
           if (opts.autoPan && !panned && (r.reason === 'not-found' || r.reason === 'offscreen')) {
             const revealed =
               typeof opts.autoPan === 'object'
@@ -684,7 +771,7 @@ export class FeatureHandle {
           }
           return { retry: `${r.reason}: ${r.message}` };
         }
-        const outcome = await act(r.client);
+        const outcome = await act(r.client, aim, token);
         if (!outcome) {
           // Trace friendliness: WHICH pixel, and why that one. One short text attachment per action.
           await attach(`pixel — ${what}`, `client (${r.client.x}, ${r.client.y}) · canvas (${r.surface.x}, ${r.surface.y})${r.feature.world ? ` · ${JSON.stringify(r.feature.world)}` : ''}\n${r.why}`);
@@ -703,19 +790,19 @@ export class FeatureHandle {
   async click(opts: ActionOptions & { button?: 'left' | 'right' | 'middle'; clickCount?: number } = {}): Promise<void> {
     const what = `${this}.${opts.button === 'right' ? 'rightClick' : opts.clickCount === 2 ? 'dblclick' : 'click'}()`;
     await step(what, () =>
-      this._withActionPoint(what, opts, async (p) => {
+      this._withActionPoint(what, opts, async (p, aim, armed) => {
         // Arm an in-page check that re-runs the hit test at the instant the REAL event arrives.
-        const token = await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts));
+        const token = armed ?? (await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)));
         let verdict: ClickVerdict;
         try {
-          await this.map.page.mouse.move(p.x, p.y);
+          if (opts.moving !== 'allow') await this.map.page.mouse.move(p.x, p.y); // (mouse.click moves too; for a moving target the extra round trip is lateness)
           await withModifiers(this.map.page, opts.modifiers, () => this.map.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount }));
         } finally {
           verdict = await this.map._call<ClickVerdict>('disarmClick', token);
         }
         if (!verdict.fired) return { retry: 'the click never reached the page (is something outside the document covering it?)' };
-        if (!verdict.ok) return { retry: `click was intercepted and cancelled: ${verdict.reason}` };
-      }),
+        if (!verdict.ok) return { retry: `click was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
+      }, opts.moving === 'allow' ? () => this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)) : undefined),
     );
   }
 
@@ -729,14 +816,28 @@ export class FeatureHandle {
 
   async hover(opts: ActionOptions = {}): Promise<void> {
     const what = `${this}.hover()`;
-    await step(what, () => this._withActionPoint(what, opts, async (p) => void (await this.map.page.mouse.move(p.x, p.y, { steps: 4 }))));
+    if (opts.moving !== 'allow') return step(what, () => this._withActionPoint(what, opts, async (p) => void (await this.map.page.mouse.move(p.x, p.y, { steps: 4 }))));
+    // A moving target: one move (every extra step is latency), verified at the instant the pointer arrives.
+    await step(what, () =>
+      this._withActionPoint(what, opts, async (p, aim, armed) => {
+        const token = armed!;
+        let verdict: ClickVerdict;
+        try {
+          await this.map.page.mouse.move(p.x, p.y);
+        } finally {
+          verdict = await this.map._call<ClickVerdict>('disarmClick', token);
+        }
+        if (!verdict.fired) return { retry: 'the pointer never reached the page' };
+        if (!verdict.ok) return { retry: `hover missed the moving target: ${verdict.reason}${aim.learn(verdict)}` };
+      }, () => this.map._call<string>('armHover', this.wire(opts), this.pointOpts(opts))),
+    );
   }
 
   /** Real touch tap on the feature (touch-enabled context). Same actionability and click-time verification as click(). */
   async tap(opts: ActionOptions = {}): Promise<void> {
     const what = `${this}.tap()`;
     await step(what, () =>
-      this._withActionPoint(what, opts, async (p) => {
+      this._withActionPoint(what, opts, async (p, aim) => {
         const token = await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts));
         let verdict: ClickVerdict;
         try {
@@ -745,7 +846,7 @@ export class FeatureHandle {
           verdict = await this.map._call<ClickVerdict>('disarmClick', token);
         }
         if (!verdict.fired) return { retry: 'the tap never reached the page' };
-        if (!verdict.ok) return { retry: `tap was intercepted and cancelled: ${verdict.reason}` };
+        if (!verdict.ok) return { retry: `tap was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
       }),
     );
   }

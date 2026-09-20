@@ -8,6 +8,11 @@ Not published; versions start when the package does. Until then this lists what 
   in the README. Adapter: `getLayersOrder` / `GeoJSONSource.getData` / `areTilesLoaded` / `getRenderWorldCopies` are
   feature-detected with public fallbacks; `mapboxgl-` marker/popup classes; the pixel probe works without `redraw()`
   (through the `render` event; seam: `pixelContribution` may return a promise); new caveats say what a version cannot do.
+- **`{ moving: 'allow' }`** on `click` / `dblclick` / `rightClick` / `tap` / `hover`: act on a feature that never stops
+  moving. Skips the at-rest and two-frame checks, aims ahead along the measured velocity (lead learnt from misses), and
+  relies on the click-time verification: late input is swallowed and retried, never delivered to something else.
+- **Fixed:** a GeoJSON source holding a bare geometry (`{ type: 'Point', … }`, no Feature wrapper) was read as having no
+  features, which disabled off-screen diagnostics, `autoPan: true`, full geometries and identity learning for it.
 - **Fixed:** `toBeVisibleOnMap()` could pass without having probed a pixel when the probe threw. `{ pixels: true }` now
   fails, saying so, on a map that cannot be probed at all.
 - Licensed under **Apache-2.0**: `LICENSE`, `NOTICE`; the package ships `dist/THIRD_PARTY_LICENSES.txt`

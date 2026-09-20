@@ -14,7 +14,8 @@ test.describe('wild: animate-a-point', () => {
     await expect(map).toHaveFeature({ layer: 'point' });
     // this is the point of the example: the animation must NOT stop. A regression that breaks the
     // requestAnimationFrame loop would make the map go idle - catch that.
-    await expect(map.waitForIdle({ timeout: 1500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\)/);
+    // …and the error says WHY, instead of leaving the reader to guess that the app is slow
+    await expect(map.waitForIdle({ timeout: 2500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — the app keeps replacing the data of GeoJSON source\(s\) point \(setData in a requestAnimationFrame loop.* NEVER becomes idle/);
   });
 
   test('the point stays on the radius-20 circle around the origin at any sampled instant', async ({ wild }) => {
@@ -48,5 +49,36 @@ test.describe('wild: animate-a-point', () => {
     await expect(map.feature({ layer: 'point' }).hover({ timeout: 5000 })).rejects.toThrow(
       REFUSED,
     );
+  });
+
+  // Click only. hover({ moving: 'allow' }) was here too and was REMOVED, not retried into passing: on this page (a
+  // full-screen basemap in software GL, ~14 frames/s alone, 2-3 under five workers) a mousemove is delivered on a
+  // frame boundary, so its lateness jitters by whole frames — more than the ~175ms this 10px dot spends under any
+  // pixel. Measured under 5-worker contention: click 30/30, hover 14/30. Hover on a moving feature is covered on the
+  // light demo page (tests/moving.spec.ts), where a frame is short compared with the target's dwell time.
+  test("{ moving: 'allow' }: the perpetually moving point CAN be clicked — verified when the real event arrives", async ({ wild, page }) => {
+    test.setTimeout(90_000);
+    const map = await wild.open(example('animate-a-point'), { routes: DEMOTILES, waitForIdle: false });
+    await expect(map).toHaveFeature({ layer: 'point' }, { timeout: 15_000 });
+    // The example has no click handler of its own. Observing through MapLibre's public event API changes nothing
+    // about the app or the input: the clicks below are real mouse events at real pixels.
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      (window as any).__seen = { onPoint: 0, anywhere: 0 };
+      m.on('click', () => (window as any).__seen.anywhere++);
+      m.on('click', 'point', () => (window as any).__seen.onPoint++);
+    });
+    await map.feature({ layer: 'point' }).click({ moving: 'allow', timeout: 30_000 });
+    // exactly one click reached the app, and it was on the point: late attempts were swallowed, not delivered
+    expect(await page.evaluate(() => (window as any).__seen)).toMatchObject({ onPoint: 1, anywhere: 1 });
+  });
+
+  test('the source holds a bare GeoJSON geometry (no Feature wrapper): the library can still ask it about the point', async ({ wild }) => {
+    // Until an earlier phase a bare geometry read as "no features", so identity could never be learnt from this source —
+    // the cause of the rare `ambiguous` above. `from: 'data'` proves the source answered.
+    const map = await wild.open(example('animate-a-point'), { routes: DEMOTILES, waitForIdle: false });
+    await expect(map).toHaveFeature({ layer: 'point' }, { timeout: 15_000 });
+    const g = await map._call<{ ok: boolean; from?: string; geometry?: { type: string } }>('geometry', { layer: 'point' });
+    expect(g).toMatchObject({ ok: true, from: 'data', geometry: { type: 'Point' } });
   });
 });

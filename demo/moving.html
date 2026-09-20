@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>geowright demo — moving features</title>
+    <style>
+      body { margin: 0; font: 14px system-ui; }
+      #map { width: 900px; height: 560px; border: 1px solid #999; margin: 12px; }
+      #log { padding: 0 12px; }
+      #log span { font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="log">
+      Clicked: <span data-testid="clicked"></span> · clicks that reached the app: <span data-testid="click-count">0</span> ·
+      Hover: <span data-testid="hovered"></span> ·
+      <label>speed px/s <input data-testid="speed" type="number" value="60" style="width: 5em" /></label>
+    </div>
+    <script type="module" src="/src/moving.ts"></script>
+  </body>
+</html>

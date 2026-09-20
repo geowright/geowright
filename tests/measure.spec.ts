@@ -71,4 +71,25 @@ test.describe('measurements', () => {
     await map.snapshot();
     t('snapshot', t0);
   });
+
+  test("moving: 'allow' — attempts per successful click, by target speed", async ({ page }) => {
+    test.setTimeout(300_000);
+    await page.addInitScript(() => {
+      (window as any).__downs = 0;
+      window.addEventListener('pointerdown', () => (window as any).__downs++, true); // every REAL press, swallowed or not
+    });
+    await page.goto('/moving.html');
+    const map = geowright(page);
+    for (const speed of [60, 115, 200, 400, 800]) {
+      await page.getByTestId('speed').fill(String(speed));
+      const N = 20;
+      let ok = 0;
+      const before = await page.evaluate(() => (window as any).__downs as number);
+      const t0 = Date.now();
+      for (let i = 0; i < N; i++) ok += await map.feature({ layer: 'patrols', id: 1 }).click({ moving: 'allow', timeout: 5000 }).then(() => 1, () => 0);
+      const downs = (await page.evaluate(() => (window as any).__downs as number)) - before;
+      console.log(`speed ${speed}px/s (9px dot): ${ok}/${N} clicked, ${downs} real presses (${(downs / Math.max(ok, 1)).toFixed(2)} per success), ${Math.round((Date.now() - t0) / N)}ms per click`);
+    }
+    console.log(`app saw ${await page.getByTestId('click-count').textContent()} clicks; last on ${await page.getByTestId('clicked').textContent()}`);
+  });
 });

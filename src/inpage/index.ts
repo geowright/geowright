@@ -42,6 +42,7 @@ function engine(mapId: string): Engine<any> {
 
 const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
+  idleDiagnosis: (mapId: string) => engine(mapId).adapter.idleDiagnosis?.(),
   find: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).find(q)),
   actionPoint: async (mapId: string, q: any, opts: any) => (await engine(mapId).learnIdentity(q), engine(mapId).actionPoint(q, opts)),
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
@@ -60,6 +61,7 @@ const api = {
     return diff === undefined ? { ok: false as const, message: `layer "${layer}" is hidden (visibility: none), or this map cannot be probed` } : { ok: true as const, diff, surface: p };
   },
   armClick: (mapId: string, q: any, opts: any) => engine(mapId).armClick(q, opts),
+  armHover: (mapId: string, q: any, opts: any) => engine(mapId).armHover(q, opts),
   disarmClick: (mapId: string, token: string) => engine(mapId).disarmClick(token),
   entities: (mapId: string, opts?: any) => engine(mapId).entities(opts),
   /** Agent sessions only: mirror features into the accessibility tree as real, clickable buttons. */
