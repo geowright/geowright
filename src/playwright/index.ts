@@ -533,11 +533,34 @@ export class MapHandle {
     });
   }
 
+  /**
+   * One-finger drag (pan) from one location to another. CDP touch input, Chromium only. MapLibre adds
+   * INERTIA when the finger leaves while still moving, as for a real swipe: the map travels further
+   * than the finger did. Assert with `toHaveView` after it settles, with a tolerance — or look at
+   * where a known feature ended up.
+   */
+  async touchDragAt(from: LngLat, to: LngLat, o: { steps?: number } & ActionOptions = {}): Promise<void> {
+    await step(`map.touchDragAt(${fmt(from)} -> ${fmt(to)})`, async () => {
+      const a = await this._pointAt(from, o, 'map.touchDragAt(from)');
+      const b = await this._pointAt(to, { ...o, autoPan: false }, 'map.touchDragAt(to)');
+      await this._twoFingers(o.steps ?? 12, (t) => [{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }]);
+    });
+  }
+
+  /** Double tap at a location (MapLibre: zoom in by one, around the finger). CDP touch input, Chromium only. */
+  async doubleTapAt(at: LngLat, o: ActionOptions = {}): Promise<void> {
+    await step(`map.doubleTapAt(${fmt(at)})`, async () => {
+      const p = await this._pointAt(at, o, 'map.doubleTapAt');
+      for (let i = 0; i < 2; i++) await this._twoFingers(0, () => [p]);
+    });
+  }
+
   private cdp?: Promise<CDPSession>;
+  /** Touch points over time (one finger or several), sent as real browser-level touch input. */
   private async _twoFingers(steps: number, at: (t: number) => { x: number; y: number }[]): Promise<void> {
     const browser = this.page.context().browser();
     if (browser && browser.browserType().name() !== 'chromium') {
-      throw new GeowrightError('multi-touch gestures need Chromium: Playwright has no multi-touch API (touchscreen.tap only), this uses CDP Input.dispatchTouchEvent');
+      throw new GeowrightError('touch gestures need Chromium: Playwright has no touch-move or multi-touch API (touchscreen.tap only), this uses CDP Input.dispatchTouchEvent');
     }
     const cdp = await (this.cdp ??= this.page.context().newCDPSession(this.page));
     const points = (t: number) => at(t).map((p, id) => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, id }));
