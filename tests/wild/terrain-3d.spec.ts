@@ -8,7 +8,7 @@ const CENTER: [number, number] = [11.39085, 47.27574];
 const routes: Routes = [rasterTiles(/^https:\/\/a\.tile\.openstreetmap\.org\//), ...syntheticTerrain('https://tiles.mapterhorn.com/tilejson.json', CENTER)];
 
 // Dozens of DEM + hillshade tiles at pitch 70 in software GL: the first idle can take >10 s on a busy machine.
-const SLOW = { timeout: 30_000 };
+const SLOW = { timeout: 45_000 }; // hosted Linux (2 workers, software GL) needed more than 30 s even to reach the first idle
 
 test.describe('wild: 3d-terrain', () => {
   test.slow(); // terrain + hillshade at pitch 70 in software GL

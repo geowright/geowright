@@ -6,13 +6,15 @@ import type { Routes } from './harness';
  * proprietary and cannot be committed). An analytic landscape in Terrarium encoding, rendered per
  * tile on demand: a plain at 600 m with one east–west ridge (2,400 m) `ridgeNorthKm` north of `center`.
  * Deterministic, a few ms per tile, nothing on disk. Knowing the function, a test knows what hides what.
+ * maxzoom 9 (≈150 m per pixel here, plenty for a 3 km wide ridge): at pitch 70 MapLibre wants DEM + hillshade
+ * tiles all the way to the horizon, and with maxzoom 12 a 2-vCPU hosted Linux runner never reached idle in 30 s.
  */
 export function syntheticTerrain(tilejsonUrl: string, center: [number, number], o: { ridgeNorthKm?: number } = {}): Routes {
   const tiles = tilejsonUrl.replace(/[^/]*$/, 'synthetic-dem/{z}/{x}/{y}.png');
   const cache = new Map<string, Buffer>();
   const height = elevation(center, o.ridgeNorthKm ?? 6);
   return [
-    [tilejsonUrl, { json: { tilejson: '3.0.0', scheme: 'xyz', tiles: [tiles], bounds: [-180, -85.0511287, 180, 85.0511287], minzoom: 0, maxzoom: 12, encoding: 'terrarium', tileSize: 256 } }],
+    [tilejsonUrl, { json: { tilejson: '3.0.0', scheme: 'xyz', tiles: [tiles], bounds: [-180, -85.0511287, 180, 85.0511287], minzoom: 0, maxzoom: 9, encoding: 'terrarium', tileSize: 256 } }],
     [
       new RegExp('^' + tiles.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace('\\{z\\}/\\{x\\}/\\{y\\}', '(\\d+)/(\\d+)/(\\d+)')),
       (route) => {

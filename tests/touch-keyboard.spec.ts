@@ -68,6 +68,7 @@ test.describe('touch: Pixel 7 emulation', () => {
 
   // The main demo page is a desktop layout (320px sidebar: at 412px the map is a sliver). dense.html is full-width.
   test('tap a lot, pinch, and the pixel probe — at DPR 2.625', async ({ page }) => {
+    test.slow(); // 7x the pixels of DPR 1 in software GL: 31 s on hosted Linux, 3 s on a quiet Mac
     await page.goto('/dense.html');
     const map = geowright(page);
     await map.waitForIdle();
