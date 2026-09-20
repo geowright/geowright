@@ -138,7 +138,8 @@ ahead is learnt from each miss, and check 6 is the guard: a press that arrives l
 the action tries again. It can take several attempts and it can time out; it never clicks the wrong thing. Rule of thumb for
 what is clickable: the time the target spends under one pixel (diameter ÷ speed) must be longer than a frame of the page under
 test. Measured: a 9 px dot at 60–200 px/s on a light page, first try; MapLibre's "animate a point" (10 px dot, 114 px/s, full-screen
-basemap in software GL) clicked 30/30 under five parallel workers. `hover` is weaker than `click` — a `mousemove` is delivered on
+basemap in software GL) clicked 30/30 with five parallel workers on that spec — and timed out once in three full-suite runs on a
+loaded machine, every late press swallowed: landing depends on the machine, not mis-clicking does not. `hover` is weaker than `click` — a `mousemove` is delivered on
 a frame boundary — and is only dependable when frames are short compared with that dwell time.
 
 ### When something fails, it says what WAS on the map

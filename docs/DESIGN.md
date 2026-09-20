@@ -225,7 +225,8 @@ example — a full-screen basemap in software GL, ~14 frames a second — it nev
 computed (every round trip after it is lateness), and how far to lead is learnt from each miss — the verdict reports
 where the target was when the event arrived; lead + lateness is that attempt's measured latency, and the median of the
 last few is used (a full-gain correction chased frame-sized jitter and never settled). Result on that example under five
-parallel workers: click 30 of 30. `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
+parallel workers: click 30 of 30 — and one timeout in three full-suite runs on a loaded machine, every late press
+swallowed. Landing the click depends on the machine; not mis-clicking does not, and only that is asserted in the suite. `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
 boundary, so its lateness jitters by whole frames — more than the ~175 ms that dot spends under any pixel (14 of 30
 there); it is dependable when a frame is short compared with the target's dwell time.
 
