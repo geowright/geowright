@@ -11,9 +11,9 @@ test.describe('accessibility mirror', () => {
   });
 
   test('plain getByRole locators see and click map features', async ({ page }) => {
-    const group = page.getByRole('group', { name: /^Map main - 16 features in view/ });
+    const group = page.getByRole('group', { name: /^Map main - 41 features in view/ });
     await expect(group).toBeVisible();
-    await expect(group.getByRole('button')).toHaveCount(16);
+    await expect(group.getByRole('button')).toHaveCount(41);
 
     await page.getByRole('button', { name: /Gas leak/ }).click(); // a REAL click; bubbles to the map
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
@@ -24,7 +24,7 @@ test.describe('accessibility mirror', () => {
 
   test('aria snapshot contains the map', async ({ page }) => {
     await expect(page.locator('[data-mapwright-mirror="main"]')).toMatchAriaSnapshot(`
-      - group /Map main - 16 features in view, center 34\\.7800,32\\.0800 zoom 12\\.0/:
+      - group /Map main - 41 features in view, center 34\\.7800,32\\.0800 zoom 12\\.0/:
         - button /alerts 1 \\(Point\\) id=1, name=Gas leak, severity=high/
     `);
   });

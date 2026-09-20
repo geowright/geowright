@@ -1,5 +1,7 @@
 import { test as base } from '@playwright/test';
 import { makeTilePng } from './tile-png';
+import { BUILDINGS } from './buildings';
+import { routeVectorTiles } from '../src/playwright/tiles';
 import { mapwright, type MapHandle } from '../src/playwright';
 
 export { expect } from '../src/playwright';
@@ -17,6 +19,7 @@ export const test = base.extend<{ map: MapHandle }>({
       return route.abort();
     });
     await page.route('**/tiles/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: TILE }));
+    await routeVectorTiles(page, '**/vt/buildings/**', { buildings: BUILDINGS });
     await page.goto('/');
     const map = mapwright(page);
     await map.waitForIdle();

@@ -24,6 +24,6 @@ test.describe('map snapshot (agent layer)', () => {
     const snap = await map.snapshot({ perLayer: 2 });
     expect(snap).toMatch(/\[parcels\] 6 fill entities/);
     expect(snap).toMatch(/… 4 more not listed\. Summary — .*zoning: /);
-    expect(snap.split('\n').length).toBeLessThan(40);
+    expect(snap.split('\n').length).toBeLessThan(50);
   });
 });

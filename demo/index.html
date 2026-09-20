@@ -24,6 +24,7 @@
         <label class="row"><input type="checkbox" data-testid="toggle-alerts" checked /> Alerts</label>
         <label class="row"><input type="checkbox" data-testid="toggle-stations" checked /> Stations</label>
         <label class="row"><input type="checkbox" data-testid="toggle-roads" checked /> Roads</label>
+        <label class="row"><input type="checkbox" data-testid="toggle-buildings" checked /> Buildings (vector tiles)</label>
       </section>
 
       <section class="panel">
@@ -69,6 +70,8 @@
         <div id="alert-list"></div>
       </section>
 
+      <div class="row small">Selected alerts (shift+click): <span data-testid="selection"></span></div>
+      <div class="row small">Hover: <span data-testid="hover-info"></span></div>
       <footer data-testid="view-state">0.00000,0.00000,0.00</footer>
     </div>
 

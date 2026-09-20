@@ -72,8 +72,12 @@ export interface MapwrightOptions {
 
 export interface ActionOptions extends ActionPointOptions {
   timeout?: number;
-  /** Map equivalent of scrollIntoView: if the target is not in the viewport, move the camera. Opt-in. */
-  autoPan?: boolean;
+  /**
+   * Map equivalent of scrollIntoView: if the target is not in the viewport, move the camera. Opt-in.
+   * `true` looks the feature up in the source data (GeoJSON sources only). For tiled sources the
+   * browser cannot know where an off-screen feature is: pass the location, `{ lng, lat }`.
+   */
+  autoPan?: boolean | LngLat;
 }
 
 export interface DrawOptions {
@@ -302,7 +306,11 @@ export class FeatureHandle {
         const r = await this.map._call<ActionPointResult>('actionPoint', toWire(this.query), this.pointOpts(opts));
         if (!r.ok) {
           if (opts.autoPan && !panned && (r.reason === 'not-found' || r.reason === 'offscreen')) {
-            if (await this.map._call<boolean>('reveal', toWire(this.query))) {
+            const revealed =
+              typeof opts.autoPan === 'object'
+                ? (await this.map._call('revealWorld', opts.autoPan), true)
+                : await this.map._call<boolean>('reveal', toWire(this.query));
+            if (revealed) {
               panned = true;
               await this.map._call('waitForIdle', 2000);
               return { retry: 'auto-panned to feature' };

@@ -283,6 +283,12 @@ export class Engine<W = unknown> {
         lines.push(`  id wanted ${JSON.stringify(q.id)}; rendered ids: ${rendered.slice(0, 15).map((f) => JSON.stringify(f.id)).join(', ')}`);
       }
       const data = await this.adapter.queryData?.(id);
+      if (!data && info.sourceType && info.sourceType !== 'geojson' && !this.find(q).length) {
+        lines.push(
+          `  layer "${id}" uses a tiled (${info.sourceType}) source: whether a match exists OUTSIDE the viewport cannot be known ` +
+            `from the browser. To act on an off-screen feature pass a location: { autoPan: { lng, lat } }.`,
+        );
+      }
       if (data) {
         const offscreen = data.filter((f) => this.matches(f, q));
         if (offscreen.length && !this.find(q).length) {
@@ -493,7 +499,7 @@ export class Engine<W = unknown> {
       }
     }
     const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && l.sourceType !== 'raster');
-    if (blind.length) out.push(`\nnote: ${blind.map((l) => l.id).join(', ')} use tiled sources; features outside the viewport are unknowable from here.`);
+    if (blind.length) out.push(`\nnote: ${blind.map((l) => l.id).join(', ')} use${blind.length === 1 ? '' : ''} tiled sources; features outside the viewport are unknowable from here.`);
     return out.join('\n');
   }
 

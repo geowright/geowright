@@ -27,6 +27,14 @@ const style: StyleSpecification = {
   // Glyphs are served by the app itself (demo/public/glyphs, Noto Sans, OFL) — still no external network.
   glyphs: location.origin + '/glyphs/{fontstack}/{range}.pbf',
   sources: {
+    // Vector TILES: the app only knows a URL template; the data lives "on a server". In tests the
+    // tiles are generated from a GeoJSON fixture inside page.route. In manual dev they 404 (empty layer).
+    buildings: {
+      type: 'vector',
+      tiles: [location.origin + '/vt/buildings/{z}/{x}/{y}.pbf'],
+      minzoom: 0,
+      maxzoom: 14,
+    },
     basemap: {
       type: 'raster',
       tiles: [location.origin + '/tiles/{z}/{x}/{y}.png'],
@@ -83,6 +91,16 @@ const style: StyleSpecification = {
       paint: {
         'line-color': '#33475b',
         'line-width': 1,
+      },
+    },
+    {
+      id: 'buildings',
+      type: 'fill',
+      source: 'buildings',
+      'source-layer': 'buildings',
+      paint: {
+        'fill-color': ['match', ['get', 'kind'], 'office', '#8e24aa', '#6d4c41'],
+        'fill-opacity': 0.75,
       },
     },
     {
@@ -262,11 +280,21 @@ alertForm.addEventListener('submit', (ev) => {
 
 let drawModeActive = false;
 let popup: Popup | null = null;
+const selection = new Set<number>();
+const selectionEl = document.querySelector('[data-testid="selection"]') as HTMLElement;
+const hoverEl = document.querySelector('[data-testid="hover-info"]') as HTMLElement;
+
+// Hover feedback: pointer cursor + name of the alert under the mouse.
+map.on('mousemove', (e) => {
+  const f = map.queryRenderedFeatures(e.point, { layers: ['alerts'] })[0];
+  map.getCanvas().style.cursor = f ? 'pointer' : '';
+  hoverEl.textContent = f ? String((f.properties as any).name) : '';
+});
 
 map.on('click', (e) => {
   if (drawModeActive) return;
 
-  const features = map.queryRenderedFeatures(e.point, { layers: ['alerts', 'parcels'] });
+  const features = map.queryRenderedFeatures(e.point, { layers: ['alerts', 'parcels', 'buildings'] });
 
   if (popup) {
     popup.remove();
@@ -278,10 +306,24 @@ map.on('click', (e) => {
   const alertFeature = features.find((f: MapGeoJSONFeature) => f.layer.id === 'alerts');
   const parcelFeature = features.find((f: MapGeoJSONFeature) => f.layer.id === 'parcels');
 
+  const buildingFeature = features.find((f: MapGeoJSONFeature) => f.layer.id === 'buildings');
+
+  // Shift+click on an alert toggles it in the selection instead of opening a popup.
+  if (alertFeature && e.originalEvent.shiftKey) {
+    const id = Number((alertFeature.properties as any).id);
+    if (selection.has(id)) selection.delete(id);
+    else selection.add(id);
+    selectionEl.textContent = [...selection].sort((a, b) => a - b).join(',');
+    return;
+  }
+
   let html: string | null = null;
   if (alertFeature) {
     const p = alertFeature.properties as any;
     html = `<div data-testid="popup" data-kind="alert" data-id="${p.id}"><strong>${escapeHtml(p.name)}</strong><br/>Severity: ${p.severity}</div>`;
+  } else if (buildingFeature) {
+    const p = buildingFeature.properties as any;
+    html = `<div data-testid="popup" data-kind="building" data-id="${p.id}"><strong>Building ${p.id}</strong><br/>Kind: ${p.kind}<br/>Floors: ${p.floors}</div>`;
   } else if (parcelFeature) {
     const p = parcelFeature.properties as any;
     html = `<div data-testid="popup" data-kind="parcel" data-id="${p.id}"><strong>Parcel ${p.id}</strong><br/>Owner: ${escapeHtml(p.owner)}<br/>Zoning: ${p.zoning}</div>`;
@@ -463,6 +505,7 @@ map.on('load', () => {
   wireToggle('toggle-alerts', ['alerts', 'alerts-labels']);
   wireToggle('toggle-stations', ['stations-clusters', 'stations-cluster-count', 'stations-points']);
   wireToggle('toggle-roads', ['roads']);
+  wireToggle('toggle-buildings', ['buildings']);
 
   const adapter = new TerraDrawMapLibreGLAdapter({ map });
   terraDraw = new TerraDraw({
