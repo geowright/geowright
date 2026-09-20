@@ -38,6 +38,24 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     return { lng: ll.lng, lat: ll.lat };
   }
 
+  /**
+   * project() always answers, even for the far side of the globe (it returns the pixel where the
+   * location WOULD be if the earth were transparent). The public way to know: round-trip. The pixel
+   * unprojects to what is actually drawn there; if that is not (about) the location we asked for,
+   * the location is hidden. Tolerance scales with what one pixel covers at that spot (large near
+   * the limb of the globe, tiny on a zoomed-in flat map).
+   */
+  isOnSurface(w: LngLat): boolean {
+    const p = this.map.project([w.lng, w.lat]);
+    const back = this.map.unproject(p);
+    const next = this.map.unproject([p.x + 1, p.y + 1]);
+    const dist = (a: { lng: number; lat: number }, b: { lng: number; lat: number }) => {
+      const dLng = ((((a.lng - b.lng) % 360) + 540) % 360) - 180;
+      return Math.hypot(dLng * Math.cos((a.lat * Math.PI) / 180), a.lat - b.lat);
+    };
+    return dist(back, w) <= 3 * dist(back, next) + 1e-9;
+  }
+
   worldFromCoord(coord: number[]): LngLat {
     return { lng: coord[0], lat: coord[1] };
   }

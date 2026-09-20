@@ -480,6 +480,19 @@ document.addEventListener('keydown', (ev) => {
   map.flyTo({ center: [35.2, 32.08], zoom: 12 });
 });
 
+// Camera presets: everything else in the demo is north-up and flat; real apps are not.
+const PRESETS: Record<string, { projection: 'mercator' | 'globe'; zoom: number; bearing: number; pitch: number }> = {
+  'north-up': { projection: 'mercator', zoom: 12, bearing: 0, pitch: 0 },
+  tilted: { projection: 'mercator', zoom: 12, bearing: 35, pitch: 55 },
+  'globe-6': { projection: 'globe', zoom: 6, bearing: 0, pitch: 0 },
+  'globe-2': { projection: 'globe', zoom: 1.8, bearing: 0, pitch: 0 },
+};
+(document.querySelector('[data-testid="camera-preset"]') as HTMLSelectElement).addEventListener('change', (ev) => {
+  const p = PRESETS[(ev.target as HTMLSelectElement).value];
+  map.setProjection({ type: p.projection });
+  map.easeTo({ center: [34.78, 32.08], zoom: p.zoom, bearing: p.bearing, pitch: p.pitch, duration: 600 });
+});
+
 const viewStateEl = document.querySelector('[data-testid="view-state"]') as HTMLElement;
 function updateViewState() {
   const c = map.getCenter();

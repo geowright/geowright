@@ -94,6 +94,11 @@ export interface CanvasAdapter<W = unknown> {
    * drawn? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
    */
   pixelContribution?(layer: string, at: Pt): number | undefined;
+  /**
+   * Optional: false when `world` has a pixel but is NOT what is drawn there — the far side of a
+   * globe, beyond the horizon, behind the camera. Acting on that pixel would hit something else.
+   */
+  isOnSurface?(world: W): boolean;
   /** Optional "scrollIntoView": move the camera so `world` is comfortably inside the viewport. */
   reveal?(world: W): Promise<void>;
 }

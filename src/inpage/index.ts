@@ -74,7 +74,8 @@ const api = {
     const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
     const client = { x: r.left + p.x, y: r.top + p.y };
     const top = inside ? topElementAt(client.x, client.y) : null;
-    return { client, surface: p, inside, covered: inside && top !== el, moving: a.isMoving() };
+    const hidden = inside && a.isOnSurface ? !a.isOnSurface(world) : false;
+    return { client, surface: p, inside, hidden, covered: inside && top !== el, moving: a.isMoving() };
   },
   worldAt: (mapId: string, client: { x: number; y: number }) => {
     const a = engine(mapId).adapter;

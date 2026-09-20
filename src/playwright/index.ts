@@ -300,7 +300,7 @@ export class MapHandle {
   /** @internal lngLat -> client pixel, waiting until it is in view, uncovered and the map is still. */
   _pointAt(at: LngLat, opts: ActionOptions, what: string): Promise<{ x: number; y: number }> {
     return this._retry<{ x: number; y: number }>(`${what} ${fmt(at)}`, opts.timeout ?? this.timeout, async () => {
-      const r = await this._call<{ client: { x: number; y: number }; inside: boolean; covered: boolean; moving: boolean }>('clientPoint', at);
+      const r = await this._call<{ client: { x: number; y: number }; inside: boolean; hidden: boolean; covered: boolean; moving: boolean }>('clientPoint', at);
       if (r.moving) return { retry: 'map is moving' };
       if (!r.inside) {
         if (!opts.autoPan) return { retry: 'location is outside the viewport (pass { autoPan: true } to move the camera)' };
@@ -308,6 +308,7 @@ export class MapHandle {
         await this._call('waitForIdle', 2000);
         return { retry: 'panned to location' };
       }
+      if (r.hidden) return { retry: 'location is not on the visible map surface (far side of the globe, beyond the horizon, or behind the camera): its pixel shows something else' };
       if (r.covered && !opts.force) return { retry: 'location is covered by a DOM element (popup, control, overlay)' };
       return { value: r.client };
     });

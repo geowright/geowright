@@ -7,7 +7,7 @@ test.describe('map snapshot (agent layer)', () => {
     expect(snap).toContain('view: center 34.78,32.08 zoom 12');
     expect(snap).toMatch(/\[alerts\] 3 circle entities \(also drawn by: alerts-labels\)/);
     expect(snap).toMatch(/#1 Point @\(\d+,\d+\) id=1 name="Gas leak" severity="high"/);
-    expect(snap).toContain('[source alerts] 1 feature(s) OUTSIDE the viewport (pan to see them): #4 to the east at 35.2,32.08');
+    expect(snap).toContain('[source alerts] 1 feature(s) OUTSIDE the viewport (pan to see them; directions are geographic): #4 to the east at 35.2,32.08');
     expect(snap).toMatch(/\[source stations\] \d+ feature\(s\) are inside the view but not drawn individually/);
     expect(snap).toMatch(/\[parcels\] 6 fill entities \(also drawn by: parcels-outline\)/);
     expect(snap).toMatch(/visible but empty in this view: .*td-polygon/);

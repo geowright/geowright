@@ -587,13 +587,18 @@ export class Engine<W = unknown> {
       seenSources.add(l.source);
       const renderedIds = new Set(a.queryFeatures({}).filter((f) => f.source === l.source).map((f) => this.entityKey(f)));
       const off = data.filter((f) => !renderedIds.has(this.entityKey({ ...f, source: l.source })) && (!o.filter || this.matches(f, { ...o.filter, at: undefined }, false)));
-      if (!off.length || view.bounds === undefined) continue;
-      const b = view.bounds;
+      if (!off.length || view.center === undefined) continue;
       const firstCoord = (f: RenderedFeature) => {
         const first = explode(f.geometry)[0];
         return first.kind === 'point' ? first.coord : first.kind === 'line' ? first.coords[0] : first.rings[0][0];
       };
-      const inView = (c: number[]) => c[0] >= b.west && c[0] <= b.east && c[1] >= b.south && c[1] <= b.north;
+      // "In view" is decided in PIXELS, not by lng/lat bounds: on a rotated or pitched map the bounds
+      // are the bounding box of a trapezoid and contain plenty that is not on screen.
+      const inView = (c: number[]) => {
+        const w = a.worldFromCoord(c);
+        const p = a.project(w);
+        return p.x >= 0 && p.y >= 0 && p.x <= size.w && p.y <= size.h && (a.isOnSurface?.(w) ?? true);
+      };
       const outside = off.filter((f) => !inView(firstCoord(f)));
       const undrawn = off.length - outside.length;
       out.push('');
@@ -601,11 +606,9 @@ export class Engine<W = unknown> {
       if (outside.length) {
         const dirs = outside.slice(0, 5).map((f) => {
           const c = firstCoord(f);
-          const ew = c[0] > b.east ? 'east' : c[0] < b.west ? 'west' : '';
-          const ns = c[1] > b.north ? 'north' : c[1] < b.south ? 'south' : '';
-          return `${f.id !== undefined ? '#' + f.id : ''} to the ${ns}${ns && ew ? '-' : ''}${ew} at ${n(c[0])},${n(c[1])} ${fmtProps(f.properties, 3)}`;
+          return `${f.id !== undefined ? '#' + f.id : ''} to the ${compass(c[0] - view.center.lng, c[1] - view.center.lat, view.center.lat)} at ${n(c[0])},${n(c[1])} ${fmtProps(f.properties, 3)}`;
         });
-        out.push(`[source ${l.source}] ${outside.length} feature(s) OUTSIDE the viewport (pan to see them): ${dirs.join(' | ')}${outside.length > 5 ? ' | …' : ''}`);
+        out.push(`[source ${l.source}] ${outside.length} feature(s) OUTSIDE the viewport (pan to see them; directions are geographic${view.bearing ? `, the map is rotated ${n(view.bearing, 0)}°` : ''}): ${dirs.join(' | ')}${outside.length > 5 ? ' | …' : ''}`);
       }
     }
     const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && l.sourceType !== 'raster');
@@ -816,6 +819,13 @@ function testWhere(actual: unknown, want: unknown): boolean {
     if (bound !== undefined && !(typeof actual === 'number' && cmp(actual, bound))) return false;
   }
   return true;
+}
+
+/** 8-wind geographic direction of an offset in degrees (longitude shrunk by cos(lat)). */
+export function compass(dLng: number, dLat: number, atLat: number): string {
+  const wrapped = ((((dLng % 360) + 540) % 360) - 180) * Math.cos((atLat * Math.PI) / 180);
+  const names = ['east', 'north-east', 'north', 'north-west', 'west', 'south-west', 'south', 'south-east'];
+  return names[(Math.round(Math.atan2(dLat, wrapped) / (Math.PI / 4)) + 8) % 8];
 }
 
 const avg = (n: number[]) => n.reduce((s, v) => s + v, 0) / n.length;

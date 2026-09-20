@@ -92,6 +92,8 @@ radius/width or `text-opacity: 0` — so a plain `toHaveFeature` can pass on som
 5. no DOM element (popup, control, overlay) covers the pixel
 6. at the instant the real `pointerdown` arrives, the hit test is re-run; if the target is no longer there the click is swallowed and the action retries
 
+Works unchanged on rotated, pitched and globe maps (pixels come from `map.project()`, candidates are verified by MapLibre's hit test). A location on the far side of the globe or behind the camera is an error, never a click on whatever is drawn at that pixel.
+
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map), `{ autoPan: true }`, `{ timeout }`.
 
 ### When something fails, it says what WAS on the map
@@ -174,6 +176,6 @@ npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it 
 demo/             the system under test (Vite + MapLibre 6 + terra-draw; dense.html = 5k points; draw2.html = mapbox-gl-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   geowright(page), handles, expect matchers
-tests/            assert / act / draw / draw2 / dense / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
+tests/            assert / act / draw / draw2 / dense / camera / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```
