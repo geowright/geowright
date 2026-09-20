@@ -996,6 +996,10 @@ ${indent(explain)}`,
         await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
         let exp = expected as GeometryExpectation;
         if (Array.isArray(expected)) {
+          // Found on a wild app: [[lng, lat], …] here ended as "Invalid LngLat object: (NaN, NaN)" from inside the page.
+          if (expected.some((v) => typeof v?.lng !== 'number' || typeof v?.lat !== 'number')) {
+            throw new GeowrightError('toHaveGeometry: a vertex list must be [{ lng, lat }, …]. For raw coordinates pass a GeoJSON geometry: { type: "Polygon", coordinates: [[[lng, lat], …]] }');
+          }
           const coords = expected.map((v) => [v.lng, v.lat]);
           const found = await map._find(received.query);
           exp = found[0]?.geometryType === 'Polygon' ? { type: 'Polygon', coordinates: [coords] } : { type: 'LineString', coordinates: coords };

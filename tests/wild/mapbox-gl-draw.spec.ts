@@ -1,54 +1,76 @@
+import { readFile } from 'node:fs/promises';
+import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import { brightBasemap } from './basemap';
 import { example, expect, test, type Routes } from './harness';
-import { fileURLToPath } from 'node:url';
 
-// MapLibre example "Draw polygon with mapbox-gl-draw": mapbox-gl-draw (@mapbox/mapbox-gl-draw@1.5.0
-// from unpkg) + turf, loaded as an ES module from esm.sh (`import * as turf from
-// 'https://esm.sh/@turf/turf@7.1.0'`).
+// MapLibre example "Draw polygon with mapbox-gl-draw": @mapbox/mapbox-gl-draw 1.5.0 from unpkg (a classic
+// script) + turf as an ES MODULE from esm.sh (`import * as turf from 'https://esm.sh/@turf/turf@7.1.0'`).
 //
-// node_modules has @mapbox/mapbox-gl-draw@1.5.2 (not 1.5.0): routed the unpkg JS/CSS URLs to that
-// absolute path (see MAPBOX_GL_DRAW below) — a newer patch of the same 1.5.x line the example asks for.
-//
-// STOPPED HERE: the turf import cannot be satisfied.
-// `import * as turf from 'https://esm.sh/@turf/turf@7.1.0'` is a real ES module import at the top of
-// the page's <script type="module">; when the request for that URL is unrouted (aborted, per this
-// repo's no-network rule), that import rejects and the WHOLE module script never runs —
-// `const map = new maplibregl.Map(...)` included. Confirmed directly: with everything else routed
-// (mapbox-gl-draw JS/CSS, the basemap) and only the esm.sh URL left unrouted/tolerated,
-// `window.__geowright_maps.main` never gets set at all after the page settles — the map object itself
-// is never constructed. This is the "cannot be made to load at all" case in the brief's hard limits.
-// Per the brief: checked whether the @turf/turf npm package itself ships a single self-contained ESM
-// bundle we could vendor instead of esm.sh. It does not:
-//   - `npm view @turf/turf@7.1.0 dist` / the unpkg file listing for @turf/turf@7.1.0 show only 4 files:
-//     dist/ (a folder), LICENSE, README.md, package.json — and inside dist/ only dist/cjs/ and dist/esm/.
-//   - package.json: "module": "dist/esm/index.js", but that file is NOT self-contained — its first ~80
-//     lines alone are `import { x } from "@turf/along"`, `"@turf/angle"`, `"@turf/area"`, ... one bare
-//     specifier per turf function, dozens of separate `@turf/*` packages. None of those are npm
-//     dependencies of @turf/turf (turf is a monorepo of ~150 standalone packages); resolving the ESM
-//     entry point would mean downloading dozens of further packages (themselves possibly importing
-//     still more @turf/* packages) and hand-writing an import map for all of them — not "a single
-//     self-contained file", and well past "download only, no npm install".
-//   - The ONLY self-contained file the package ships is `turf.min.js` (`"browser": "turf.min.js"` in
-//     package.json) — but that is a UMD/global bundle (sets `window.turf`), not an ES module; it cannot
-//     satisfy `import * as turf from '...'` without editing the example's script (not allowed: "change
-//     NOTHING else").
-// What WOULD be needed: either (a) esm.sh itself (or an equivalent bundling redirector) reachable at
-// test time — not "no network in tests" — or (b) vendoring turf's ~150 individual `@turf/*` packages
-// plus an import map rewriting every bare `@turf/*` specifier to a local file, which is far beyond "one
-// exact file, license-checked, downloaded by hand".
+// Fixtures: mapbox-gl-draw comes from node_modules (1.5.2 — same 1.5.x line). turf was the hard one: the
+// example run stopped here ("cannot be made to load": esm.sh serves a module graph, and the npm package's
+// ESM entry imports ~150 separate @turf/* packages). The only self-contained file turf ships is the UMD
+// bundle `turf.min.js` (MIT, already vendored for measure-distances). So the esm.sh URL is answered with
+// that REAL bundle wrapped as a module: the UMD text, then `export const { area, … } = globalThis.turf` with
+// the export names read from the bundle itself. Real turf code (7.4 rather than 7.1), nothing hand-written.
 const MAPBOX_GL_DRAW = fileURLToPath(new URL('../../node_modules/@mapbox/mapbox-gl-draw/dist/', import.meta.url));
+const TURF_UMD = fileURLToPath(new URL('../../wild/fixtures/vendor/turf@7/turf.min.js', import.meta.url));
+
+let turfModule: Promise<string> | undefined;
+const turfAsEsModule = () =>
+  (turfModule ??= (async () => {
+    const umd = await readFile(TURF_UMD, 'utf8');
+    const sandbox: { turf?: Record<string, unknown> } = {};
+    vm.runInNewContext(umd, { self: sandbox, globalThis: sandbox, window: sandbox });
+    const names = Object.keys(sandbox.turf ?? {}).filter((n) => /^[A-Za-z_$][\w$]*$/.test(n) && n !== 'default');
+    if (!names.includes('area')) throw new Error('turf UMD bundle did not expose its API as expected');
+    return `${umd}\nconst __turf = globalThis.turf;\nexport const { ${names.join(', ')} } = __turf;\nexport default __turf;\n`;
+  })());
+
+const CENTER: [number, number] = [-91.874, 42.76];
 const routes: Routes = [
-  ...brightBasemap([-91.874, 42.76]),
+  ...brightBasemap(CENTER),
   ['https://www.unpkg.com/@mapbox/mapbox-gl-draw@1.5.0/dist/mapbox-gl-draw.js', MAPBOX_GL_DRAW + 'mapbox-gl-draw.js'],
   ['https://www.unpkg.com/@mapbox/mapbox-gl-draw@1.5.0/dist/mapbox-gl-draw.css', MAPBOX_GL_DRAW + 'mapbox-gl-draw.css'],
+  ['https://esm.sh/@turf/turf@7.1.0', async (route) => route.fulfill({ status: 200, headers: { 'access-control-allow-origin': '*' }, contentType: 'text/javascript', body: await turfAsEsModule() })],
 ];
 
+// A ~1.1 km square around the map centre (zoom 12 in the example).
+const d = 0.005;
+const SQUARE = [
+  { lng: CENTER[0] - d, lat: CENTER[1] - d },
+  { lng: CENTER[0] + d, lat: CENTER[1] - d },
+  { lng: CENTER[0] + d, lat: CENTER[1] + d },
+  { lng: CENTER[0] - d, lat: CENTER[1] + d },
+];
+const FILL = ['gl-draw-polygon-fill-inactive.cold', 'gl-draw-polygon-fill-active.hot', 'gl-draw-polygon-fill-inactive.hot', 'gl-draw-polygon-fill-active.cold'];
+
 test.describe('wild: draw-polygon-with-mapbox-gl-draw', () => {
-  test.fixme(
-    'the page cannot be made to load: `import … from esm.sh/@turf/turf@7.1.0` has no single-file, no-network, no-npm-install substitute (see comment above)',
-    async ({ wild }) => {
-      const map = await wild.open(example('draw-polygon-with-mapbox-gl-draw'), { routes });
-      await expect(map).toHaveFeature({ layer: 'gl-draw-polygon-fill-inactive.cold' });
-    },
-  );
+  test('drawing a polygon with the control shows its area, computed by turf', async ({ wild, page }) => {
+    const map = await wild.open(example('draw-polygon-with-mapbox-gl-draw'), { routes });
+    await page.locator('button.mapbox-gl-draw_polygon').click();
+    await map.draw.polygon(SQUARE, { finish: 'dblclick' });
+    await expect(map.feature({ layer: FILL })).toHaveGeometry(SQUARE, { tolerancePx: 2 });
+    // 0.01° x 0.01° at 42.76°N ≈ 1113 m x 817 m ≈ 0.909 km²
+    const text = await page.locator('#calculated-area').innerText();
+    const m2 = Number(/([\d.]+)/.exec(text.replace(/,/g, ''))![1]);
+    expect(m2).toBeGreaterThan(880_000);
+    expect(m2).toBeLessThan(940_000);
+  });
+
+  test('the trash button deletes the selected polygon and the area read-out goes away', async ({ wild, page }) => {
+    const map = await wild.open(example('draw-polygon-with-mapbox-gl-draw'), { routes });
+    await page.locator('button.mapbox-gl-draw_polygon').click();
+    await map.draw.polygon(SQUARE, { finish: 'dblclick' });
+    // Real input, real tool behaviour: the SECOND click of the finishing double-click lands on the new polygon and
+    // puts mapbox-gl-draw into direct_select (vertex editing), where the trash button only deletes selected
+    // vertices — for a real user too. So: click away (deselect), click the polygon (select it), then trash.
+    await map.clickAt({ lng: CENTER[0] + 0.02, lat: CENTER[1] + 0.012 });
+    await expect(map).toHaveFeature({ layer: FILL, where: { active: 'false' } });
+    await map.feature({ layer: FILL }).click();
+    await expect(map).toHaveFeature({ layer: FILL, where: { active: 'true' } });
+    await page.locator('button.mapbox-gl-draw_trash').click();
+    await expect(map).not.toHaveFeature({ layer: FILL });
+    await expect(page.locator('#calculated-area')).toBeEmpty();
+  });
 });
