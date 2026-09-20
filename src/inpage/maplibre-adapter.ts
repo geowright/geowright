@@ -25,6 +25,9 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
       pitch: this.map.getPitch(),
       bounds: { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() },
       size: { width: canvas.clientWidth, height: canvas.clientHeight },
+      // Both change what a pixel means (a globe has a far side, terrain hides what is behind a ridge).
+      projection: (this.map.getProjection?.()?.type as string | undefined) ?? 'mercator',
+      terrain: !!this.map.getTerrain?.(),
     };
   }
 

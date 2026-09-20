@@ -81,6 +81,28 @@ test.describe('visibility', () => {
     expect(err?.message).toContain('1 feature(s) match but are NOT VISIBLE: sensors#502 (circle-opacity evaluates to 0');
   });
 
+  test('an INVISIBLE feature on top is not an occluder; a visible one is', async ({ map, page }) => {
+    // What many apps do: a transparent hit area / highlight layer from ANOTHER source lying over the data.
+    const cover = (opacity: number) =>
+      page.evaluate((o) => {
+        const m = (window as any).__geowright_maps.main;
+        if (m.getLayer('cover')) m.removeLayer('cover');
+        if (!m.getSource('cover')) {
+          m.addSource('cover', { type: 'geojson', data: { type: 'Feature', properties: { what: 'cover' }, geometry: { type: 'Polygon', coordinates: [[[34.6, 32.0], [34.95, 32.0], [34.95, 32.2], [34.6, 32.2], [34.6, 32.0]]] } } });
+        }
+        m.addLayer({ id: 'cover', type: 'fill', source: 'cover', paint: { 'fill-color': '#000', 'fill-opacity': o } });
+      }, opacity);
+    await cover(0);
+    await expect(map).toHaveFeature({ layer: 'cover', visible: 'any' });
+    await map.feature({ layer: 'parcels', id: 101 }).click(); // nobody can SEE the cover: the parcel is what the user clicks
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '101');
+    expect(await map.snapshot({ layers: ['parcels'] })).not.toContain('covered-by:cover');
+
+    await cover(0.6);
+    const err = await map.feature({ layer: 'parcels', id: 102 }).click({ timeout: 800 }).then(() => null, (e: Error) => e);
+    expect(err?.message).toMatch(/covered by another feature; topmost is cover/);
+  });
+
   test('snapshot marks invisible entities', async ({ map }) => {
     const snap = await map.snapshot();
     expect(snap).toMatch(/#502 Point .*NOT-VISIBLE\(circle-opacity evaluates to 0/);

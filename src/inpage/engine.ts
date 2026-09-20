@@ -101,6 +101,16 @@ export class Engine<W = unknown> {
     };
   }
 
+  /**
+   * The feature a USER sees at the top of a pixel. Features the style paints invisibly (an opacity-0
+   * hit area, a muted symbol) hide nothing, so they are not occluders — until an earlier phase they were.
+   * (MapLibre delivers layer-scoped events to every layer under the pointer, so "on top" was never
+   * about who gets the click; it is about what the person clicking can see.)
+   */
+  private topVisible(hits: RenderedFeature[]): RenderedFeature | undefined {
+    return hits.find((h) => this.visibility(h).visible) ?? hits[0];
+  }
+
   /* ---------------- action point ("actionability") ---------------- */
 
   /**
@@ -167,8 +177,9 @@ export class Engine<W = unknown> {
         skipped.miss++; // candidate is not actually on the rendered feature (e.g. icon offset)
         continue;
       }
-      if (!opts.force && this.entityKey(hits[0]) !== targetEntity) {
-        occluder ??= hits[0];
+      const top = this.topVisible(hits)!;
+      if (!opts.force && this.entityKey(top) !== targetEntity) {
+        occluder ??= top;
         skipped.occluded++;
         continue;
       }
@@ -274,11 +285,12 @@ export class Engine<W = unknown> {
         const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
         const client = { x: rect.left + c.x, y: rect.top + c.y };
         const el = topElementAt(client.x, client.y);
-        const kind: DebugMark['kind'] = !hits.some((h) => this.key(h) === k) ? 'miss' : this.entityKey(hits[0]) !== ek ? 'occluded' : el !== this.adapter.surface() ? 'dom' : 'ok';
+        const top = this.topVisible(hits);
+        const kind: DebugMark['kind'] = !hits.some((h) => this.key(h) === k) ? 'miss' : this.entityKey(top!) !== ek ? 'occluded' : el !== this.adapter.surface() ? 'dom' : 'ok';
         const label = labelled
           ? undefined
           : `${pieces[0].layer}${pieces[0].id !== undefined ? '#' + pieces[0].id : ''}` +
-            (kind === 'occluded' ? ` under ${hits[0].layer}${hits[0].id !== undefined ? '#' + hits[0].id : ''}` : kind === 'dom' && el ? ` under ${describeEl(el)}` : '');
+            (kind === 'occluded' ? ` under ${top!.layer}${top!.id !== undefined ? '#' + top!.id : ''}` : kind === 'dom' && el ? ` under ${describeEl(el)}` : '');
         labelled = true;
         marks.push({ ...client, kind, label });
       }
@@ -402,8 +414,9 @@ export class Engine<W = unknown> {
         const layers = this.layersOf(q);
         const mine = hits.find((h) => (!layers || layers.includes(h.layer)) && this.matches(h, q));
         if (!mine) verdict.reason = 'target was no longer under the pointer when the click arrived';
-        else if (!opts.force && this.entityKey(hits[0]) !== this.entityKey(mine)) {
-          verdict.reason = `target was covered by ${describe({ ...hits[0], geometryType: hits[0].geometry.type })} when the click arrived`;
+        else if (!opts.force && this.entityKey(this.topVisible(hits)!) !== this.entityKey(mine)) {
+          const top = this.topVisible(hits)!;
+          verdict.reason = `target was covered by ${describe({ ...top, geometryType: top.geometry.type })} when the click arrived`;
         } else verdict.ok = true;
       }
       if (!verdict.ok) {
@@ -566,9 +579,10 @@ export class Engine<W = unknown> {
       const hits = this.adapter.queryFeatures({ at: c });
       if (!hits.some((h) => this.entityKey(h) === e.key)) continue;
       const el = document.elementsFromPoint(rect.left + c.x, rect.top + c.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
-      if (this.entityKey(hits[0]) === e.key && el === surface) return { pixel: round(c) };
+      const top = this.topVisible(hits)!;
+      if (this.entityKey(top) === e.key && el === surface) return { pixel: round(c) };
       coveredPixel ??= round(c);
-      blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${hits[0].layer}${hits[0].id !== undefined ? '#' + hits[0].id : ''}`;
+      blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${top.layer}${top.id !== undefined ? '#' + top.id : ''}`;
     }
     return { coveredPixel, blocked };
   }
@@ -629,7 +643,10 @@ export class Engine<W = unknown> {
     const out: string[] = [];
 
     out.push(`MAP (${a.kind}) canvas ${size.w}x${size.h} at client (${Math.round(rect.left)},${Math.round(rect.top)})${a.isMoving() ? '  ** MOVING: positions are changing, re-snapshot before acting **' : ''}`);
-    if (view.center) out.push(`view: center ${n(view.center.lng)},${n(view.center.lat)} zoom ${n(view.zoom, 2)} bearing ${n(view.bearing, 1)} pitch ${n(view.pitch, 1)}`);
+    if (view.center) {
+      const extras = [typeof view.projection === 'string' && view.projection !== 'mercator' ? `projection ${view.projection}` : '', view.terrain ? 'terrain on' : ''].filter(Boolean);
+      out.push(`view: center ${n(view.center.lng)},${n(view.center.lat)} zoom ${n(view.zoom, 2)} bearing ${n(view.bearing, 1)} pitch ${n(view.pitch, 1)}${extras.length ? ' · ' + extras.join(' · ') : ''}`);
+    }
     if (view.bounds) out.push(`bounds: west ${n(view.bounds.west)} south ${n(view.bounds.south)} east ${n(view.bounds.east)} north ${n(view.bounds.north)}`);
 
     const entities = this.collect({ layers: o.layers, skipLayers: o.skipLayers, filter: o.filter });
@@ -645,8 +662,11 @@ export class Engine<W = unknown> {
     const drawn = new Set([...entities.values()].flatMap((e) => [...e.byLayer.keys()]));
     const fmtLayer = (l: (typeof layers)[number]) => `${l.id}(${l.type}${l.sourceType ? ',' + l.sourceType : ''})`;
     out.push(`layers with content, top to bottom: ${[...visible].reverse().filter((l) => drawn.has(l.id)).map(fmtLayer).join(' ')}`);
-    const empty = visible.filter((l) => !drawn.has(l.id) && l.source);
+    // Raster, hillshade, heatmap... draw pixels, not features: "empty" would be a lie about them.
+    const pixelOnly = visible.filter((l) => PIXEL_ONLY.has(l.type));
+    const empty = visible.filter((l) => !drawn.has(l.id) && l.source && !PIXEL_ONLY.has(l.type));
     if (empty.length) out.push(`visible but empty in this view: ${empty.map((l) => l.id).join(' ')}`);
+    if (pixelOnly.length) out.push(`pixel-only layers (nothing to query): ${pixelOnly.map((l) => `${l.id}(${l.type})`).join(' ')}`);
     if (hidden.length) out.push(`hidden layers: ${hidden.map((l) => l.id).join(' ')}`);
     out.push(`entities rendered in viewport: ${entities.size}. Pixels are CLIENT coordinates: click them directly.`);
 
@@ -724,7 +744,7 @@ export class Engine<W = unknown> {
         out.push(`[source ${l.source}] ${outside.length} feature(s) OUTSIDE the viewport (pan to see them; directions are geographic${view.bearing ? `, the map is rotated ${n(view.bearing, 0)}°` : ''}): ${dirs.join(' | ')}${outside.length > 5 ? ' | …' : ''}`);
       }
     }
-    const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && l.sourceType !== 'raster');
+    const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && !PIXEL_ONLY.has(l.type));
     for (const c of a.caveats?.() ?? []) out.push(`\nnote: ${c}`);
     if (blind.length) {
       // By SOURCE: a basemap style has a hundred layers on one tiled source, and listing them all says nothing.
@@ -765,6 +785,9 @@ export class Engine<W = unknown> {
 }
 
 /* ---------------- helpers ---------------- */
+
+/** Layer types that paint pixels without features one could query or click. */
+const PIXEL_ONLY = new Set(['raster', 'hillshade', 'heatmap', 'background', 'color-relief', 'custom']);
 
 /** Hit tests per attempt at finding a clickable pixel on one feature. */
 const MAX_TRIES = 600;

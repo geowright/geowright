@@ -1,0 +1,10 @@
+--- upstream/test/examples/3d-terrain.html (v6.10.0)
++++ wild/maplibre-examples/examples/3d-terrain.html
+@@ -69,6 +69,7 @@
+         maxZoom: 18,
+         maxPitch: 85
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.addControl(
+         new maplibregl.NavigationControl({

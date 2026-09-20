@@ -1,4 +1,4 @@
-import { expect as baseExpect, test, type CDPSession, type Locator, type Page } from '@playwright/test';
+import { expect as baseExpect, selectors, test, type CDPSession, type Locator, type Page } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -69,6 +69,30 @@ function getInpageSource(): Promise<string> {
     return out.outputFiles[0].text;
   })());
 }
+
+/* ------------------------------------------------------------------ element pins */
+
+/**
+ * `map.marker()` / `map.popup()` hand out normal Locators. They used to be `locator(css).nth(i)`:
+ * bound to document ORDER, so adding or removing another marker silently re-pointed them at a
+ * different element. Now the element itself is pinned in the page (a JS reference in a Map — the
+ * app's DOM is not touched) and a custom selector engine resolves the pin lazily, on every use.
+ * If the app removes or replaces the element the locator matches nothing, and says so.
+ *
+ * Playwright wants selector engines registered before the page exists, hence at import time.
+ */
+const PIN_ENGINE = 'geowright_pin';
+const pinEngine: Promise<boolean> = selectors
+  .register(PIN_ENGINE, () => ({
+    query(root: Document | Element, token: string) {
+      return this.queryAll(root, token)[0] ?? null;
+    },
+    queryAll(root: Document | Element, token: string): Element[] {
+      const el = (window as any).__geowright_pins?.get(token) as Element | undefined;
+      return el && el.isConnected && (root === document || root.contains(el)) ? [el] : [];
+    },
+  }))
+  .then(() => true, (e: Error) => /already registered/i.test(e.message));
 
 /* ------------------------------------------------------------------ options */
 
@@ -332,8 +356,9 @@ export class MapHandle {
   /**
    * A normal Playwright Locator for the DOM marker at a location (or on a feature). Markers are
    * elements, so everything Playwright can do applies — click(), hover(), toBeVisible(), dragTo().
-   * Auto-waits until exactly one marker is there; the locator is then bound to that element's
-   * position in the document (resolve again after markers are added or removed).
+   * Auto-waits until exactly one marker is there; the Locator is then pinned to THAT element (not to
+   * its position in the document): other markers may come and go, and if the app removes or replaces
+   * this one the Locator matches nothing — resolve again.
    */
   marker(where: OverlayWhere, opts: { timeout?: number } = {}): Promise<Locator> {
     return this._overlay('marker', where, opts);
@@ -363,7 +388,18 @@ export class MapHandle {
         return { retry: `strict mode violation: ${list.length} ${kind}s match` };
       }),
     );
-    return this.page.locator(found.selector).nth(found.index);
+    if (!(await pinEngine)) return this.page.locator(found.selector).nth(found.index); // engine unavailable: order-bound fallback
+    const token = await this.page.evaluate(
+      ([selector, index]) => {
+        const w = window as any;
+        const pins: Map<string, Element> = (w.__geowright_pins ??= new Map());
+        const token = `${pins.size + 1}-${Math.random().toString(36).slice(2, 8)}`;
+        pins.set(token, document.querySelectorAll(selector as string)[index as number]);
+        return token;
+      },
+      [found.selector, found.index] as const,
+    );
+    return this.page.locator(`${PIN_ENGINE}=${token}`);
   }
 
   /** lng/lat under a client (viewport) pixel. */

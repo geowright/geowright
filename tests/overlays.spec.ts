@@ -32,6 +32,25 @@ test.describe('DOM markers and popups', () => {
     expect(err?.message).toMatch(/no marker there; 3 marker\(s\) on the map: "HQ"/);
   });
 
+  test('a marker Locator stays on ITS element when other markers come and go (it was order-bound once)', async ({ map, page }) => {
+    await page.getByTestId('toggle-markers').check();
+    const hq = await map.marker({ at: { lng: 34.84, lat: 32.12 } });
+    await expect(hq).toHaveAttribute('data-testid', 'marker-hq');
+    // Another script puts a marker-classed element BEFORE it in document order: `.maplibregl-marker >> nth=i` would now be a different element.
+    await hq.evaluate((el) => {
+      const intruder = document.createElement('div');
+      intruder.className = 'maplibregl-marker';
+      intruder.dataset.testid = 'intruder';
+      el.parentElement!.insertBefore(intruder, el.parentElement!.firstChild);
+    });
+    await expect(hq).toHaveAttribute('data-testid', 'marker-hq');
+    await hq.click();
+    await expect(page.getByTestId('hq-popup')).toBeVisible(); // HQ's own popup, not a neighbour's
+    // removed by the app: the Locator matches nothing (and Playwright says so) instead of pointing at a neighbour
+    await page.getByTestId('toggle-markers').uncheck();
+    await expect(hq).toHaveCount(0);
+  });
+
   test('drag a marker to a coordinate with plain Playwright + map.clientPoint', async ({ map, page }) => {
     await page.getByTestId('toggle-markers').check();
     const hq = await map.marker({ at: { lng: 34.84, lat: 32.12 } });
