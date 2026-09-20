@@ -1,4 +1,4 @@
-import { Engine } from './engine';
+import { Engine, topElementAt } from './engine';
 import { MapLibreAdapter } from './maplibre-adapter';
 import { startMirror } from './mirror';
 import type { CanvasAdapter } from './types';
@@ -49,6 +49,7 @@ const api = {
   disarmClick: (mapId: string, token: string) => engine(mapId).disarmClick(token),
   entities: (mapId: string, opts?: any) => engine(mapId).entities(opts),
   /** Agent sessions only: mirror features into the accessibility tree as real, clickable buttons. */
+  hasMirror: (mapId: string) => !!(window as any).__mapwright_mirrors?.[mapId],
   mirror: (mapId: string, opts?: any) => {
     const w = window as any;
     (w.__mapwright_mirrors ??= {})[mapId]?.();
@@ -69,7 +70,7 @@ const api = {
     const r = el.getBoundingClientRect();
     const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
     const client = { x: r.left + p.x, y: r.top + p.y };
-    const top = inside ? document.elementFromPoint(client.x, client.y) : null;
+    const top = inside ? topElementAt(client.x, client.y) : null;
     return { client, surface: p, inside, covered: inside && top !== el, moving: a.isMoving() };
   },
   worldAt: (mapId: string, client: { x: number; y: number }) => {

@@ -138,7 +138,7 @@ export class Engine<W = unknown> {
         continue;
       }
       const client = { x: rect.left + c.x, y: rect.top + c.y };
-      const el = document.elementFromPoint(client.x, client.y);
+      const el = topElementAt(client.x, client.y);
       if (el !== this.adapter.surface()) {
         domCover ??= el ?? undefined;
         continue;
@@ -210,7 +210,7 @@ export class Engine<W = unknown> {
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
       const rect = surface.getBoundingClientRect();
-      if (me.target !== surface) {
+      if (me.target !== surface && !isMirrorNode(me.target)) {
         verdict.reason = `pointer event landed on ${describeEl(me.target as Element)}, not the map canvas`;
       } else {
         const hits = this.adapter.queryFeatures({ at: { x: me.clientX - rect.left, y: me.clientY - rect.top } }).filter((h) => !ignore.has(h.layer));
@@ -615,6 +615,19 @@ function histogram(props: Record<string, unknown>[]): string {
   }
   return parts.length ? `Summary — ${parts.join('; ')}` : '';
 }
+
+/**
+ * Topmost element at a client point, looking THROUGH the accessibility mirror's own buttons: they
+ * sit on top of features by design and forward real clicks to the map, so they are never a cover.
+ */
+export function topElementAt(x: number, y: number): Element | null {
+  for (const el of document.elementsFromPoint(x, y)) {
+    if (!el.closest('[data-mapwright-mirror]')) return el;
+  }
+  return null;
+}
+
+const isMirrorNode = (el: EventTarget | null) => el instanceof Element && !!el.closest('[data-mapwright-mirror]');
 
 function showWant(v: unknown): string {
   const op = v as WhereOp | null;

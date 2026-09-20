@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { mapwright } from '../src/playwright';
 
 /**
  * Accessibility mirror (agent mode, opt-in): map features become real, invisible buttons inside
@@ -46,5 +47,28 @@ test.describe('accessibility mirror', () => {
     expect(await gas.evaluate((el, h) => el === h, handle)).toBe(true); // same DOM node => agent refs stay valid
     await gas.click();
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
+  });
+
+  test('handle API and mirror coexist: mirror buttons are never "DOM cover" for our own actions', async ({ map, page }) => {
+    // every feature now has a button on top of its best pixel — exactly where the handle API clicks
+    await map.feature({ layer: 'alerts', id: 2 }).click();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '2');
+    await map.feature({ layer: 'parcels', id: 105 }).click();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '105');
+    await map.clickAt(await map.feature({ layer: 'alerts', id: 3 }).lngLat());
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '3');
+    await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3);
+  });
+
+  test('mirror: true option starts the mirror and restores it after navigation', async ({ page, map }) => {
+    void map;
+    const mirrored = mapwright(page, { mirror: { max: 100 } });
+    await page.reload();
+    await mirrored.waitForIdle();
+    await page.getByRole('button', { name: /Road closure/ }).click();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '2');
+    await page.reload();
+    await mirrored.waitForIdle();
+    await expect(page.getByRole('button', { name: /Road closure/ })).toBeVisible();
   });
 });

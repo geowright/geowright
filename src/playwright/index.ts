@@ -77,6 +77,13 @@ export interface MapwrightOptions {
    * A feature's OWN label (same source feature, different layer) is already never an occluder.
    */
   ignoreLayers?: string[];
+  /**
+   * Opt-in accessibility mirror: every feature also becomes an invisible real <button> inside the
+   * map container, so plain Playwright locators work on the map —
+   * `page.getByRole('button', { name: /Gas leak/ }).click()` — alongside the handle API.
+   * Trade-off: it adds DOM to the page under test. Off by default.
+   */
+  mirror?: boolean | { max?: number };
 }
 
 export type Modifier = 'Shift' | 'Control' | 'Alt' | 'Meta';
@@ -116,8 +123,10 @@ export class MapHandle {
   readonly mapId: string;
   readonly timeout: number;
   readonly ignoreLayers: string[];
+  private readonly mirrorOpt: MapwrightOptions['mirror'];
 
   constructor(readonly page: Page, opts: MapwrightOptions = {}) {
+    this.mirrorOpt = opts.mirror;
     this.mapId = opts.mapId ?? 'main';
     this.timeout = opts.timeout ?? 10_000;
     this.ignoreLayers = opts.ignoreLayers ?? [];
@@ -182,7 +191,12 @@ export class MapHandle {
     await step(`map.waitForIdle()`, () =>
       this._retry('map.waitForIdle()', timeout, async () => {
         const ok = await this._call<boolean>('waitForIdle', Math.min(timeout, 2000));
-        return ok ? { value: undefined } : { retry: 'map did not become idle (still moving, loading tiles, or repainting)' };
+        if (!ok) return { retry: 'map did not become idle (still moving, loading tiles, or repainting)' };
+        // The mirror is (re)started here: after a navigation the page is new and it is gone.
+        if (this.mirrorOpt && !(await this._call<boolean>('hasMirror'))) {
+          await this._call('mirror', typeof this.mirrorOpt === 'object' ? this.mirrorOpt : {});
+        }
+        return { value: undefined };
       }),
     );
   }

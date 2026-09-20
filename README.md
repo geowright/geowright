@@ -24,7 +24,7 @@ The in-page adapter is injected by Playwright at test time. (Auto-discovery is n
 ```ts
 import { mapwright, expect } from '../src/playwright';
 
-const map = mapwright(page);                       // { mapId?: 'main', timeout?, ignoreLayers? }
+const map = mapwright(page);                       // { mapId?: 'main', timeout?, ignoreLayers?, mirror? }
 await map.waitForIdle();
 
 // ASSERT — retrying, like web-first assertions
