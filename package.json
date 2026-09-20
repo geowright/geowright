@@ -1,12 +1,13 @@
 {
   "name": "geowright",
+  "license": "Apache-2.0",
   "version": "0.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite demo",
     "build:demo": "vite build demo",
     "preview": "vite preview demo --port 4173 --strictPort",
-    "build:inpage": "esbuild src/inpage/index.ts --bundle --format=iife --target=es2022 --outfile=dist/inpage.js && esbuild src/inpage/agent-entry.ts --bundle --format=iife --target=es2022 --outfile=dist/inpage-agent.js",
+    "build:inpage": "node scripts/build-inpage.mjs",
     "typecheck": "tsc --noEmit",
     "test": "playwright test",
     "build:node": "esbuild src/playwright/index.ts src/playwright/tiles.ts --bundle --platform=node --format=esm --packages=external --outdir=dist",
@@ -51,6 +52,9 @@
     "dist/inpage.js",
     "dist/inpage-agent.js",
     "dist/types",
+    "dist/THIRD_PARTY_LICENSES.txt",
+    "LICENSE",
+    "NOTICE",
     "README.md",
     "agent/MAP_SKILL.md"
   ],

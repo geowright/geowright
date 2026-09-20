@@ -1,0 +1,26 @@
+geowright
+Copyright 2026 Shai Sinai
+
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This product bundles third-party software into the scripts it injects into the page under
+test (dist/inpage.js, dist/inpage-agent.js). Their full license texts ship with the package
+in dist/THIRD_PARTY_LICENSES.txt, generated from the bundler's input list at build time:
+
+  @maplibre/maplibre-gl-style-spec (expression evaluator) — ISC / BSD-3-Clause
+    Copyright (c) 2020, MapLibre contributors
+    Copyright (c) 2020, Mapbox
+    contains code from glfx.js, Copyright (C) 2011 by Evan Wallace (MIT)
+    and from d3-color, Copyright 2010-2016 Mike Bostock (BSD-3-Clause)
+  @mapbox/unitbezier — BSD-2-Clause
+    Copyright (C) 2008 Apple Inc. All Rights Reserved.
+  quickselect — ISC
+    Copyright (c) 2024, Vladimir Agafonkin
+  tinyqueue — ISC
+    Copyright (c) 2017, Vladimir Agafonkin
+
+MapLibre GL JS itself is NOT bundled: geowright talks to the map instance of the application
+under test. Runtime dependencies installed next to the package (@maplibre/geojson-vt,
+@maplibre/vt-pbf, @types/geojson) carry their own license files in node_modules.
+A full inventory, including development-only and test-fixture material, is in
+docs/THIRD_PARTY_NOTICES.md.

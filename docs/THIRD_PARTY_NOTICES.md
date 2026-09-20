@@ -6,7 +6,7 @@ currently installed (see `package.json` / `package-lock.json`); pin dates if you
 file after a dependency bump.
 
 None of the licenses below are copyleft, and none conflict with distributing the core under
-Apache-2.0 (per the license options note). Nothing outside MIT / BSD-2-Clause / BSD-3-Clause /
+Apache-2.0. Nothing outside MIT / BSD-2-Clause / BSD-3-Clause /
 ISC / OFL-1.1 was found.
 
 ---
@@ -33,9 +33,8 @@ normalizePropertyExpression, type StylePropertyExpression } from '@maplibre/mapl
 client-side. Verified present in `dist/inpage.js` by grepping for symbols unique to its transitive
 deps (`quickselect`, `tinyqueue`, `unitbezier` all matched; `jsonlint`, `minimist`,
 `json-stringify-pretty-compact` — used only by the style-spec's *validator*, not its evaluator — did
-not, i.e. tree-shaken out of this particular build). Note: `dist/` was not rebuilt for this audit
-(build was skipped per instructions); this is what the tree currently contains and may not reflect
-uncommitted `src/inpage/engine.ts` / `maplibre-adapter.ts` changes other agents have in flight.
+not, i.e. tree-shaken out of this particular build). Re-checked from esbuild's metafile
+on 2026-09-20 (an earlier phase): the same four packages, nothing else from `node_modules`.
 
 | Package | Version | SPDX | Copyright | Notice required? |
 |---|---|---|---|---|
@@ -54,11 +53,16 @@ one individually survives tree-shaking in a given build was checked above only f
 | `quickselect` | 3.0.0 | ISC | `Copyright (c) 2024, Vladimir Agafonkin` | Yes — observed in `dist/inpage.js` |
 | `tinyqueue` | 3.0.0 | ISC | `Copyright (c) 2017, Vladimir Agafonkin` | Yes — observed in `dist/inpage.js` |
 
-**Action: this file itself is the "third-party notice" — nothing in `dist/inpage.js` carries an
-embedded license banner** (esbuild strips comments by default; grepped for `Copyright` in the built
-file, zero matches). If shipping under Apache-2.0/requiring attribution to travel with the artifact,
-either point consumers at this file from the README/NOTICE, or switch the `build:inpage` esbuild
-call to `--legal-comments=inline` (or `linked`) so the license text ships in the JS itself.
+**How the attribution travels with the artifact:** esbuild strips ordinary comments, and none of these
+packages marks its license comment as a legal one, so `--legal-comments` alone ships nothing (checked:
+zero `Copyright` matches in the built file). Instead `npm run build` runs
+`scripts/third-party-licenses.mjs`, which reads esbuild's metafile — the list of inputs that actually
+survived tree-shaking — and writes the full license text of each bundled package to
+`dist/THIRD_PARTY_LICENSES.txt` (in `"files"`, next to the bundles, whose first line is a `/*! … */`
+banner pointing at it). Today that is exactly four packages: the style-spec, `@mapbox/unitbezier`,
+`quickselect`, `tinyqueue`. The root `NOTICE` names the same four. The style-spec vendors its three
+dependencies pre-built inside its own `dist/`, without their `package.json`; the script takes their
+license files from the installed top-level copies.
 
 ---
 
@@ -138,5 +142,4 @@ None of this ships in the npm package (confirmed: `npm pack --dry-run` includes 
 - `minimist`'s bundled `LICENSE` text has no named copyright holder (generic "This software is
   released under the MIT license"); the `package.json` `author` is James Halliday. Transitive-only,
   dev-side (style-spec validator, not observed in the built `dist/inpage.js`).
-- None of the above is incompatible with distributing the core under Apache-2.0 per
-  the license options note's compatibility table.
+- None of the above is incompatible with distributing the core under Apache-2.0.
