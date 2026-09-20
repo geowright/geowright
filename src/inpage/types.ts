@@ -184,6 +184,10 @@ export interface SnapshotOptions {
   /** Only these layers. Default: every layer that has rendered features, minus `skipLayers`. */
   layers?: string[];
   skipLayers?: string[];
+  /** List only entities matching this query — how to find one feature among thousands of look-alikes. */
+  filter?: FeatureQuery;
+  /** Character budget for the whole snapshot (≈ 4 chars per token). The per-layer cap shrinks to fit. Default 8000. */
+  maxChars?: number;
 }
 
 /** One data entity as the snapshot / mirror see it. */
@@ -199,6 +203,8 @@ export interface EntityView {
   pixel?: Pt;
   /** Why there is no clean pixel (covered-by:..., covered-by-dom:..., or out of view). */
   blocked?: string;
+  /** False when the entity was counted but not hit-tested (over `max`). */
+  located?: boolean;
   /** Set when no layer paints anything for this entity (opacity 0 etc.): rendered, not visible. */
   invisible?: string;
 }

@@ -23,7 +23,7 @@ test.describe('map snapshot (agent layer)', () => {
   test('is bounded: per-layer cap with a summary of the remainder', async ({ map }) => {
     const snap = await map.snapshot({ perLayer: 2 });
     expect(snap).toMatch(/\[parcels\] 6 fill entities/);
-    expect(snap).toMatch(/… 4 more not listed\. Summary — .*zoning: /);
+    expect(snap).toMatch(/… 4 more not listed \(nearest to the view centre are listed\)\. Summary — .*zoning: /);
     expect(snap.split('\n').length).toBeLessThan(50);
   });
 });

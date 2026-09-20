@@ -185,7 +185,7 @@ export class Engine<W = unknown> {
     for (const piece of pieces) {
       const g = piece.geometry;
       for (const part of explode(g)) {
-        if (part.kind === 'point') out.push(proj(part.coord));
+        if (part.kind === 'point') out.push(...pointCandidates(proj(part.coord)));
         else if (part.kind === 'line') out.push(...lineCandidates(part.coords.map(proj)));
         else out.push(...polygonCandidates(part.rings.map((r) => r.map(proj)), size));
       }
@@ -355,49 +355,76 @@ export class Engine<W = unknown> {
   /* ---------------- entities (shared by snapshot + accessibility mirror) ---------------- */
 
   /**
-   * Rendered features folded into data entities, each with a clean clickable pixel if one exists.
-   * `ignoreDom` lets a caller declare DOM it owns (the mirror's own buttons) as transparent.
+   * Rendered features folded into data entities (no hit tests yet — this part is cheap even for
+   * thousands of features). The OWNER layer is the entity's main body, not its decoration:
+   * circle/fill beat line (outlines), which beats symbol (labels). Ties: topmost.
    */
-  entities(o: { layers?: string[]; skipLayers?: string[]; ignoreDom?: (el: Element) => boolean } = {}): EntityView[] {
+  private collect(o: { layers?: string[]; skipLayers?: string[]; filter?: FeatureQuery }): Map<string, Collected> {
     const a = this.adapter;
-    const surface = a.surface();
-    const rect = surface.getBoundingClientRect();
-    const size = this.surfaceSize();
     const typeOf = new Map(a.listLayers().map((l) => [l.id, l.type]));
     const rank = (layerId: string) => (typeOf.get(layerId) === 'symbol' ? 0 : typeOf.get(layerId) === 'line' ? 1 : 2);
     const skip = new Set(o.skipLayers ?? []);
     const only = o.layers && new Set(o.layers);
-    const found = new Map<string, { owner: string; byLayer: Map<string, RenderedFeature[]> }>();
+    const filterLayers = o.filter && this.layersOf(o.filter);
+    const size = this.surfaceSize();
+    const centre = { x: size.w / 2, y: size.h / 2 };
+    const found = new Map<string, Collected>();
+    const matched = new Set<string>();
     for (const f of a.queryFeatures({})) {
       if (skip.has(f.layer) || (only && !only.has(f.layer))) continue;
       const k = this.entityKey(f);
+      if (o.filter && (!filterLayers || filterLayers.includes(f.layer)) && this.matches(f, o.filter)) matched.add(k);
       let e = found.get(k);
-      if (!e) found.set(k, (e = { owner: f.layer, byLayer: new Map() }));
+      if (!e) found.set(k, (e = { key: k, owner: f.layer, byLayer: new Map(), d: Infinity }));
       if (!e.byLayer.has(f.layer)) e.byLayer.set(f.layer, []);
       e.byLayer.get(f.layer)!.push(f);
       if (rank(f.layer) > rank(e.owner)) e.owner = f.layer;
     }
-    const topEl = (c: Pt) => {
-      const stack = document.elementsFromPoint(rect.left + c.x, rect.top + c.y);
-      return stack.find((el) => !o.ignoreDom?.(el));
-    };
-    return [...found.entries()].map(([ek, e]) => {
-      const pieces = e.byLayer.get(e.owner)!;
-      const f = pieces[0];
-      let pixel: Pt | undefined;
-      let blocked: string | undefined = 'no part of it is inside the view';
-      for (const c of this.candidates(pieces, size).slice(0, 40)) {
-        const hits = a.queryFeatures({ at: c });
-        if (!hits.some((h) => this.entityKey(h) === ek)) continue;
-        const el = topEl(c);
-        if (this.entityKey(hits[0]) === ek && el === surface) {
-          pixel = round(c);
-          blocked = undefined;
-          break;
-        }
-        blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${hits[0].layer}${hits[0].id !== undefined ? '#' + hits[0].id : ''}`;
+    for (const [k, e] of found) {
+      if (o.filter && !matched.has(k)) {
+        found.delete(k);
+        continue;
       }
-      return { key: ek, layer: e.owner, alsoLayers: [...e.byLayer.keys()].filter((l) => l !== e.owner), id: f.id, geometryType: f.geometry.type, properties: f.properties, pixel, blocked, invisible: this.entityInvisible(e.byLayer) };
+      e.cands = this.candidates(e.byLayer.get(e.owner)!, size);
+      const c = e.cands[0];
+      e.d = c ? Math.hypot(c.x - centre.x, c.y - centre.y) : Infinity;
+    }
+    return found;
+  }
+
+  /** The expensive part, done only for entities that will actually be shown: verified hit tests. */
+  private locate(e: Collected, ignoreDom?: (el: Element) => boolean): { pixel?: Pt; coveredPixel?: Pt; blocked?: string } {
+    const surface = this.adapter.surface();
+    const rect = surface.getBoundingClientRect();
+    let coveredPixel: Pt | undefined;
+    let blocked: string | undefined = 'no part of it is inside the view';
+    for (const c of (e.cands ?? []).slice(0, 40)) {
+      const hits = this.adapter.queryFeatures({ at: c });
+      if (!hits.some((h) => this.entityKey(h) === e.key)) continue;
+      const el = document.elementsFromPoint(rect.left + c.x, rect.top + c.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
+      if (this.entityKey(hits[0]) === e.key && el === surface) return { pixel: round(c) };
+      coveredPixel ??= round(c);
+      blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${hits[0].layer}${hits[0].id !== undefined ? '#' + hits[0].id : ''}`;
+    }
+    return { coveredPixel, blocked };
+  }
+
+  /**
+   * Entities nearest to the viewport centre first. With `max`, hit-testing stops once `max`
+   * entities have a clean clickable pixel; the rest come back with `located: false` (counted, not
+   * examined) — on a map with thousands of features, examining every one is the cost that matters.
+   */
+  entities(o: { layers?: string[]; skipLayers?: string[]; filter?: FeatureQuery; max?: number; ignoreDom?: (el: Element) => boolean } = {}): EntityView[] {
+    const sorted = [...this.collect(o).values()].sort((x, y) => x.d - y.d);
+    let usable = 0;
+    return sorted.map((e) => {
+      const f = e.byLayer.get(e.owner)![0];
+      const invisible = this.entityInvisible(e.byLayer);
+      const base = { key: e.key, layer: e.owner, alsoLayers: [...e.byLayer.keys()].filter((l) => l !== e.owner), id: f.id, geometryType: f.geometry.type, properties: f.properties, invisible };
+      if (o.max !== undefined && usable >= o.max) return { ...base, located: false };
+      const loc = this.locate(e, o.ignoreDom);
+      if (loc.pixel && !invisible) usable++;
+      return { ...base, located: true, pixel: loc.pixel, blocked: loc.pixel ? undefined : loc.blocked };
     });
   }
 
@@ -442,28 +469,13 @@ export class Engine<W = unknown> {
     if (view.center) out.push(`view: center ${n(view.center.lng)},${n(view.center.lat)} zoom ${n(view.zoom, 2)} bearing ${n(view.bearing, 1)} pitch ${n(view.pitch, 1)}`);
     if (view.bounds) out.push(`bounds: west ${n(view.bounds.west)} south ${n(view.bounds.south)} east ${n(view.bounds.east)} north ${n(view.bounds.north)}`);
 
-    // Group rendered features into entities. The OWNER layer is the entity's main body, not its
-    // decoration: circle/fill beat line (outlines), which beats symbol (labels). Ties: topmost.
-    const typeOf = new Map(layers.map((l) => [l.id, l.type]));
-    const rank = (layerId: string) => {
-      const t = typeOf.get(layerId);
-      return t === 'symbol' ? 0 : t === 'line' ? 1 : 2;
-    };
-    const entities = new Map<string, { owner: string; byLayer: Map<string, RenderedFeature[]> }>();
-    for (const f of a.queryFeatures({})) {
-      if (skip.has(f.layer) || (only && !only.has(f.layer))) continue;
-      const k = this.entityKey(f);
-      let e = entities.get(k);
-      if (!e) entities.set(k, (e = { owner: f.layer, byLayer: new Map() }));
-      if (!e.byLayer.has(f.layer)) e.byLayer.set(f.layer, []);
-      e.byLayer.get(f.layer)!.push(f);
-      if (rank(f.layer) > rank(e.owner)) e.owner = f.layer;
-    }
-    const byLayer = new Map<string, { pieces: RenderedFeature[]; also: Set<string>; invisible?: string }[]>();
+    const entities = this.collect({ layers: o.layers, skipLayers: o.skipLayers, filter: o.filter });
+    const byLayer = new Map<string, Collected[]>();
     for (const e of entities.values()) {
       if (!byLayer.has(e.owner)) byLayer.set(e.owner, []);
-      byLayer.get(e.owner)!.push({ pieces: e.byLayer.get(e.owner)!, also: new Set([...e.byLayer.keys()].filter((l) => l !== e.owner)), invisible: this.entityInvisible(e.byLayer) });
+      byLayer.get(e.owner)!.push(e);
     }
+    for (const list of byLayer.values()) list.sort((x, y) => x.d - y.d);
 
     const visible = layers.filter((l) => l.visible);
     const hidden = layers.filter((l) => !l.visible);
@@ -475,44 +487,37 @@ export class Engine<W = unknown> {
     if (hidden.length) out.push(`hidden layers: ${hidden.map((l) => l.id).join(' ')}`);
     out.push(`entities rendered in viewport: ${entities.size}. Pixels are CLIENT coordinates: click them directly.`);
 
-    const centre = { x: size.w / 2, y: size.h / 2 };
-    for (const l of [...visible].reverse()) {
-      const list = byLayer.get(l.id);
-      if (!list) continue;
-      const also = [...new Set(list.flatMap((e) => [...e.also]))];
-      out.push('');
-      out.push(`[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
-      const rows = list
-        .map((e) => {
-          const cands = this.candidates(e.pieces, size);
-          let pt: Pt | undefined;
-          let note = '';
-          const ek = this.entityKey(e.pieces[0]);
-          for (const c of cands.slice(0, 40)) {
-            const hits = a.queryFeatures({ at: c });
-            if (!hits.some((h) => this.entityKey(h) === ek)) continue;
-            pt ??= c;
-            const top = hits[0];
-            const el = document.elementFromPoint(rect.left + c.x, rect.top + c.y);
-            if (this.entityKey(top) === ek && el === surface) {
-              pt = c;
-              note = '';
-              break;
-            }
-            note = el !== surface ? ` covered-by-dom:${describeEl(el!)}` : ` covered-by:${top.layer}${top.id !== undefined ? '#' + top.id : ''}`;
-          }
-          return { e, pt, note, d: pt ? Math.hypot(pt.x - centre.x, pt.y - centre.y) : Infinity };
-        })
-        .sort((x, y) => x.d - y.d);
-      for (const r of rows.slice(0, perLayer)) {
-        const f = r.e.pieces[0];
-        const pos = r.pt ? `@(${Math.round(rect.left + r.pt.x)},${Math.round(rect.top + r.pt.y)})` : '@(edge: no clickable pixel in view)';
-        const inv = r.e.invisible ? ` NOT-VISIBLE(${r.e.invisible})` : '';
-        out.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${r.note}${inv} ${fmtProps(f.properties, maxProps)}`);
+    if (o.filter) out.push(`filter: ${JSON.stringify(o.filter)} — only matching entities are listed below.`);
+
+    // Entity sections are rendered by a function of the per-layer cap, so the character budget can
+    // shrink the cap and re-render. Hit tests are cached per entity: shrinking costs nothing.
+    const located = new Map<string, ReturnType<Engine<W>['locate']>>();
+    const header = out.splice(0);
+    const sections = (cap: number): string[] => {
+      const sec: string[] = [];
+      for (const l of [...visible].reverse()) {
+        const list = byLayer.get(l.id);
+        if (!list) continue;
+        const also = [...new Set(list.flatMap((e) => [...e.byLayer.keys()].filter((x) => x !== e.owner)))];
+        sec.push('');
+        sec.push(`[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
+        for (const e of list.slice(0, cap)) {
+          let loc = located.get(e.key);
+          if (!loc) located.set(e.key, (loc = this.locate(e)));
+          const f = e.byLayer.get(e.owner)![0];
+          const pt = loc.pixel ?? loc.coveredPixel;
+          const pos = pt ? `@(${Math.round(rect.left + pt.x)},${Math.round(rect.top + pt.y)})` : '@(edge: no clickable pixel in view)';
+          const invisible = this.entityInvisible(e.byLayer);
+          sec.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${loc.pixel || !pt ? '' : ' ' + loc.blocked}${invisible ? ` NOT-VISIBLE(${invisible})` : ''} ${fmtProps(f.properties, maxProps)}`);
+        }
+        const rest = list.slice(cap);
+        if (rest.length) {
+          sec.push(`  … ${rest.length} more not listed${cap ? ' (nearest to the view centre are listed)' : ''}. ${histogram(rest.map((e) => e.byLayer.get(e.owner)![0].properties))}`);
+          sec.push(`    to list specific ones: snapshot('<mapId>', { filter: { layer: '${l.id}', where: { <prop>: <value> } } })`);
+        }
       }
-      const rest = rows.slice(perLayer);
-      if (rest.length) out.push(`  … ${rest.length} more not listed. ${histogram(rest.map((r) => r.e.pieces[0].properties))}`);
-    }
+      return sec;
+    };
 
     // What the viewport hides (only knowable for sources that hold their full data client-side).
     const seenSources = new Set<string>();
@@ -522,7 +527,7 @@ export class Engine<W = unknown> {
       if (!data) continue;
       seenSources.add(l.source);
       const renderedIds = new Set(a.queryFeatures({}).filter((f) => f.source === l.source).map((f) => this.entityKey(f)));
-      const off = data.filter((f) => !renderedIds.has(this.entityKey({ ...f, source: l.source })));
+      const off = data.filter((f) => !renderedIds.has(this.entityKey({ ...f, source: l.source })) && (!o.filter || this.matches(f, { ...o.filter, at: undefined }, false)));
       if (!off.length || view.bounds === undefined) continue;
       const b = view.bounds;
       const firstCoord = (f: RenderedFeature) => {
@@ -545,8 +550,20 @@ export class Engine<W = unknown> {
       }
     }
     const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && l.sourceType !== 'raster');
-    if (blind.length) out.push(`\nnote: ${blind.map((l) => l.id).join(', ')} use${blind.length === 1 ? '' : ''} tiled sources; features outside the viewport are unknowable from here.`);
-    return out.join('\n');
+    if (blind.length) out.push(`\nnote: ${blind.map((l) => l.id).join(', ')} use tiled sources; features outside the viewport are unknowable from here.`);
+
+    // Budget: shrink the per-layer cap until the text fits; as a last resort cut it, and say so.
+    const maxChars = o.maxChars ?? 8000;
+    const footer = out;
+    let cap = perLayer;
+    let text = '';
+    for (;;) {
+      text = [...header, ...sections(cap), ...footer].join('\n');
+      if (text.length <= maxChars || cap === 0) break;
+      cap = Math.floor(cap / 2);
+    }
+    if (text.length > maxChars) text = text.slice(0, Math.max(0, maxChars - 60)) + `\n… cut to fit maxChars=${maxChars}; use layers/filter to narrow.`;
+    return text;
   }
 
   /** Auto-pan ("scrollIntoView"): bring a not-rendered feature's data position into view. */
@@ -568,6 +585,16 @@ export class Engine<W = unknown> {
 
 /* ---------------- helpers ---------------- */
 
+/** A data entity before any hit testing: its rendered pieces per layer, and how central it is. */
+interface Collected {
+  key: string;
+  owner: string;
+  byLayer: Map<string, RenderedFeature[]>;
+  cands?: Pt[];
+  /** Distance of its best candidate pixel from the viewport centre (Infinity: nothing in view). */
+  d: number;
+}
+
 type Part =
   | { kind: 'point'; coord: number[] }
   | { kind: 'line'; coords: number[][] }
@@ -582,6 +609,20 @@ function explode(g: Geometry): Part[] {
     case 'Polygon': return [{ kind: 'polygon', rings: g.coordinates }];
     case 'MultiPolygon': return g.coordinates.map((rings) => ({ kind: 'polygon', rings }));
   }
+}
+
+/**
+ * A point feature is drawn as a disc or icon around its coordinate. The centre is the best pixel,
+ * but on a dense map it is often under a NEIGHBOUR while a crescent of the symbol is still visible
+ * and clickable — so offer a few pixels around it too. They are verified by the hit test like any
+ * other candidate, so a ring pixel that misses a small symbol is simply skipped.
+ */
+function pointCandidates(c: Pt): Pt[] {
+  const out = [c];
+  for (const r of [3, 6, 10]) {
+    for (let k = 0; k < 8; k++) out.push({ x: c.x + r * Math.cos((k * Math.PI) / 4), y: c.y + r * Math.sin((k * Math.PI) / 4) });
+  }
+  return out;
 }
 
 function lineCandidates(pts: Pt[]): Pt[] {

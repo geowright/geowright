@@ -31,7 +31,7 @@ export function startMirror(engine: Engine<any>, mapId: string, opts: { max?: nu
 
   const render = () => {
     const view = engine.adapter.getViewState() as any;
-    const all = engine.entities({ ignoreDom: (el) => root.contains(el) });
+    const all = engine.entities({ max, ignoreDom: (el) => root.contains(el) });
     const usable = all.filter((e) => e.pixel && !e.invisible); // what a user can neither see nor click gets no button
     root.setAttribute(
       'aria-label',
