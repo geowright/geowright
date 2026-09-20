@@ -95,6 +95,13 @@ export interface CanvasAdapter<W = unknown> {
    */
   colour?(f: RenderedFeature): { property: string; colour: string; dataDriven: boolean } | undefined;
   /**
+   * Optional: how many pixels UP the screen the top of this feature is drawn from where its geometry
+   * projects to at `at` — 3D extrusions seen with a pitched camera. What a user sees and clicks is the
+   * roof and the walls, not the footprint on the ground (which may even be outside the viewport while
+   * the building towers into it). An estimate is enough: candidates are verified by the hit test.
+   */
+  lift?(f: RenderedFeature, at: Pt): number;
+  /**
    * Optional: things the adapter could NOT work out and silently answered safely for (e.g. a style
    * expression newer than the bundled evaluator -> "visible"). Printed once in diagnostics/snapshot.
    */
@@ -166,6 +173,8 @@ export interface FeatureSummary {
   /** False when the style paints nothing for this feature ("rendered" but a user cannot see it). */
   visible: boolean;
   invisibleBecause?: string;
+  /** The library's per-feature state, when it has any (MapLibre feature-state: `{ hover: true }`). Apps drive highlight styling with it. */
+  state?: Record<string, unknown>;
 }
 
 export type ActionPointFailure =

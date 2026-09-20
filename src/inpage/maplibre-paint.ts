@@ -151,3 +151,10 @@ export function paintColour(map: MlMap, f: RenderedFeature): { property: string;
   const kind = (expression('paint', property) as { kind?: string } | null | undefined)?.kind;
   return { property, colour: `#${hex(v.r)}${hex(v.g)}${hex(v.b)}`, dataDriven: kind === 'source' || kind === 'composite' };
 }
+
+/** Height in metres a fill-extrusion layer raises THIS feature to, at the current zoom (0 for anything else). */
+export function extrusionHeight(map: MlMap, f: RenderedFeature): number {
+  if (map.getLayer(f.layer)?.type !== 'fill-extrusion') return 0;
+  const h = evaluatorFor(map, f).value('paint', 'fill-extrusion-height');
+  return typeof h === 'number' && h > 0 ? h : 0;
+}

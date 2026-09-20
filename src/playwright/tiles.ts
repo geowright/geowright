@@ -1,4 +1,4 @@
-import type { Page } from '@playwright/test';
+import type { Page, Route } from '@playwright/test';
 import type { FeatureCollection } from 'geojson';
 import { GeoJSONVT } from '@maplibre/geojson-vt';
 import { fromGeojsonVt } from '@maplibre/vt-pbf';
@@ -18,8 +18,16 @@ export async function routeVectorTiles(
   layers: Record<string, FeatureCollection>,
   opts: { maxZoom?: number } = {},
 ): Promise<void> {
+  await page.route(urlPattern, vectorTileHandler(layers, opts));
+}
+
+/**
+ * The same thing as a plain route handler, for when you register routes yourself
+ * (`context.route`, a routing table, a handler that falls back for some tiles).
+ */
+export function vectorTileHandler(layers: Record<string, FeatureCollection>, opts: { maxZoom?: number } = {}): (route: Route) => Promise<void> {
   const indexes = Object.entries(layers).map(([name, data]) => [name, new GeoJSONVT(data, { maxZoom: opts.maxZoom ?? 14, indexMaxZoom: 5, buffer: 64 })] as const);
-  await page.route(urlPattern, (route) => {
+  return (route) => {
     const m = /\/(\d+)\/(\d+)\/(\d+)(?:\.\w+)?(?:\?.*)?$/.exec(route.request().url());
     if (!m) return route.fulfill({ status: 400, body: 'expected .../{z}/{x}/{y}.pbf' });
     const [z, x, y] = [+m[1], +m[2], +m[3]];
@@ -30,6 +38,6 @@ export async function routeVectorTiles(
     }
     // An empty 200 is a valid "nothing here" tile; a 404 would surface as a map error event.
     const body = Object.keys(tiles).length ? Buffer.from(fromGeojsonVt(tiles, { version: 2, extent: 4096 })) : Buffer.alloc(0);
-    return route.fulfill({ status: 200, contentType: 'application/x-protobuf', body });
-  });
+    return route.fulfill({ status: 200, contentType: 'application/x-protobuf', headers: { 'access-control-allow-origin': '*' }, body });
+  };
 }

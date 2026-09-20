@@ -723,11 +723,17 @@ export class FeatureHandle {
     });
   }
 
-  /** lng/lat of the point on the feature that an action would use. */
-  async lngLat(opts: { timeout?: number } = {}): Promise<LngLat> {
-    const f = await this.info(opts);
-    if (!f.lngLat) throw new GeowrightError(`${this}.lngLat(): feature is rendered but not inside the viewport`);
-    return f.lngLat;
+  /**
+   * lng/lat of the pixel an action WOULD use: fully verified (on the feature, topmost, not under DOM,
+   * map still) — so it waits and fails exactly like `click()`, and takes the same options.
+   * (`info().lngLat` is cheaper but only the best GEOMETRIC candidate: on a feature that is mostly
+   * covered by another one it can be a covered pixel.)
+   */
+  async lngLat(opts: ActionOptions = {}): Promise<LngLat> {
+    const what = `${this}.lngLat()`;
+    let at: LngLat | undefined;
+    await this._withActionPoint(what, opts, async (p) => void (at = await this.map.lngLatAt(p)));
+    return at!;
   }
 
   /** The resolved feature (auto-waits until exactly one matches). */

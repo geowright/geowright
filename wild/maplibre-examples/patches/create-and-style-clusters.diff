@@ -1,0 +1,10 @@
+--- upstream/test/examples/create-and-style-clusters.html (v6.10.0)
++++ wild/maplibre-examples/examples/create-and-style-clusters.html
+@@ -28,6 +28,7 @@
+         zoom: 3,
+         fadeDuration: 0 // this is in order for the text and circles to move "as-one"
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         // Add a new source from our GeoJSON data and

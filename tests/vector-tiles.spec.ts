@@ -49,6 +49,6 @@ test.describe('vector tile layer', () => {
     expect(snap).toContain('buildings(fill,vector)');
     expect(snap).toMatch(/\[buildings\] 25 fill entities/);
     expect(snap).toMatch(/… 22 more not listed \(nearest to the view centre are listed\)\. Summary of all \d+ — .*kind: house×\d+, office×\d+/);
-    expect(snap).toContain('note: buildings use tiled sources; features outside the viewport are unknowable from here.');
+    expect(snap).toContain('note: tiled source(s) buildings (1 layer): features outside the viewport are unknowable from here.');
   });
 });

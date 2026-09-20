@@ -1,0 +1,10 @@
+--- upstream/test/examples/display-buildings-in-3d.html (v6.10.0)
++++ wild/maplibre-examples/examples/display-buildings-in-3d.html
+@@ -29,6 +29,7 @@
+       container: 'map',
+       canvasContextAttributes: {antialias: true}
+   });
++  (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+   
+   // The 'building' layer in the streets vector source contains building-height
+   // data from OpenStreetMap.

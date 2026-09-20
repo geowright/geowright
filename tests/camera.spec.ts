@@ -51,7 +51,7 @@ test.describe('camera: rotated + pitched', () => {
     expect(snap).toContain('bearing 35 pitch 55');
     // bounds are a bounding box of the rotated trapezoid; what is off-screen is decided in pixels
     expect(snap).toMatch(/OUTSIDE the viewport \(pan to see them; directions are geographic, the map is rotated 35°\): #4 to the east/);
-    const [, x, y] = snap.match(/#2 Point @\((\d+),(\d+)\) id=2 name="Road closure"/)!;
+    const [, x, y] = snap.match(/#2 Point @\((\d+),(\d+)\) drawn orange\(#f9a825\) id=2 name="Road closure"/)!;
     await page.mouse.click(+x, +y);
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '2');
   });

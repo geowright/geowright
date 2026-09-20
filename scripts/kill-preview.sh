@@ -4,11 +4,14 @@
 # matches every preview server of every project this user runs on the machine.
 set -euo pipefail
 PORT=${GEOWRIGHT_PORT:-4173}
+WILD_PORT=${GEOWRIGHT_WILD_PORT:-$((PORT + 1))}   # wild/serve.mjs
 REPO=$(cd "$(dirname "$0")/.." && pwd -P)
+for PORT in "$PORT" "$WILD_PORT"; do
 for pid in $(lsof -ti "TCP:$PORT" -sTCP:LISTEN 2>/dev/null || true); do
   cwd=$(lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | sed -n 's/^n//p')
   case "$cwd" in
-    "$REPO"*) kill "$pid" && echo "stopped preview pid $pid (port $PORT, cwd $cwd)" ;;
+    "$REPO"*) kill "$pid" && echo "stopped server pid $pid (port $PORT, cwd $cwd)" ;;
     *) echo "port $PORT is held by pid $pid in $cwd — not ours, left alone" >&2 ;;
   esac
+done
 done

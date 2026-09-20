@@ -19,6 +19,8 @@ export const WEBGL_SOFTWARE_FLAGS = [
 // Port is configurable so a CI job on a dedicated runner and a local run on the SAME machine
 // never share (or fight over) one preview server.
 const PORT = Number(process.env.GEOWRIGHT_PORT ?? 4173);
+// The "wild apps" suite (apps we did not write, tests/wild) has its own static server: see wild/serve.mjs.
+export const WILD_PORT = Number(process.env.GEOWRIGHT_WILD_PORT ?? PORT + 1);
 
 export default defineConfig({
   testDir: 'tests',
@@ -38,11 +40,20 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 }, launchOptions: { args: WEBGL_SOFTWARE_FLAGS } },
     },
   ],
-  webServer: {
-    // Test the BUILT app: bundled ESM is the realistic (and harder) target.
-    command: `npm run build:demo && npx vite preview demo --port ${PORT} --strictPort`,
-    url: `http://localhost:${PORT}`,
-    reuseExistingServer: !process.env.CI,
-    timeout: 120_000,
-  },
+  webServer: [
+    {
+      // Test the BUILT app: bundled ESM is the realistic (and harder) target.
+      command: `npm run build:demo && npx vite preview demo --port ${PORT} --strictPort`,
+      url: `http://localhost:${PORT}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 120_000,
+    },
+    {
+      command: 'node wild/serve.mjs',
+      env: { GEOWRIGHT_WILD_PORT: String(WILD_PORT) },
+      url: `http://localhost:${WILD_PORT}`,
+      reuseExistingServer: !process.env.CI,
+      timeout: 30_000,
+    },
+  ],
 });

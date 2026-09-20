@@ -5,3 +5,6 @@ playwright-report/
 .DS_Store
 .playwright-mcp/
 agent/runs/
+
+# wild apps: pristine upstream copies are re-fetchable (wild/scripts/examples.sh), not committed
+wild/maplibre-examples/.upstream/

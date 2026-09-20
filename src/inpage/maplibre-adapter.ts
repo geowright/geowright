@@ -1,5 +1,5 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
+import { extrusionHeight, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
 import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
 
 /**
@@ -142,6 +142,20 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
 
   colour(f: RenderedFeature) {
     return paintColour(this.map, f);
+  }
+
+  /**
+   * A vertical metre at a ground point appears as (local scale across the view direction) x sin(pitch)
+   * pixels. The scale is measured along the screen's horizontal, which pitch does not foreshorten.
+   * Public API only (project/unproject); perspective makes it approximate, the hit test makes it safe.
+   */
+  lift(f: RenderedFeature, at: Pt): number {
+    const pitch = this.map.getPitch();
+    if (!pitch) return 0;
+    const height = extrusionHeight(this.map, f);
+    if (!height) return 0;
+    const metres = this.map.unproject([at.x, at.y]).distanceTo(this.map.unproject([at.x + 10, at.y]));
+    return metres > 0 ? height * (10 / metres) * Math.sin((pitch * Math.PI) / 180) : 0;
   }
 
   caveats(): string[] {

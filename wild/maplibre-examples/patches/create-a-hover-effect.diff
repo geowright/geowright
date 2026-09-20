@@ -1,0 +1,10 @@
+--- upstream/test/examples/create-a-hover-effect.html (v6.10.0)
++++ wild/maplibre-examples/examples/create-a-hover-effect.html
+@@ -26,6 +26,7 @@
+         center: [-100.486052, 37.830348],
+         zoom: 2
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+     let hoveredStateId = null;
+ 
+     map.on('load', () => {

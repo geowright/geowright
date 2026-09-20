@@ -97,6 +97,7 @@ export class Engine<W = unknown> {
       pixel: best && round(best),
       client: best && round({ x: rect.left + best.x, y: rect.top + best.y }),
       world: best && this.adapter.unproject(best),
+      state: f.state && Object.keys(f.state).length ? f.state : undefined,
     };
   }
 
@@ -156,6 +157,10 @@ export class Engine<W = unknown> {
     const skipped = { miss: 0, occluded: 0, dom: 0 };
 
     for (const [i, c] of cands.entries()) {
+      // Bounded: a big shape that is almost entirely under another layer has thousands of covered
+      // candidates (a country under the app's own polygons: 25,000, ~0.4ms each, twice per action).
+      // A user does not hunt for the one uncovered sliver either; after MAX_TRIES it is "occluded".
+      if (i >= MAX_TRIES) break;
       const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
       const onTarget = hits.some((h) => this.key(h) === targetKey);
       if (!onTarget) {
@@ -175,7 +180,7 @@ export class Engine<W = unknown> {
         continue;
       }
       const why =
-        `candidate ${i + 1} of ${cands.length} (${pieces[0].geometry.type.includes('Polygon') ? 'interior points, farthest from the edge first' : pieces[0].geometry.type.includes('Line') ? 'middle of the line first' : 'centre first, then a ring around it'})` +
+        `candidate ${i + 1} of ${cands.length} (${pieces[0].geometry.type.includes('Polygon') ? `interior points, farthest from the edge first${this.adapter.lift?.(pieces[0], c) ? '; extruded: roof, then walls, then footprint' : ''}` : pieces[0].geometry.type.includes('Line') ? 'middle of the line first' : 'centre first, then a ring around it'})` +
         (i ? `; skipped before it: ${skipped.occluded} under another feature${occluder ? ` (${occluder.layer}${occluder.id !== undefined ? '#' + occluder.id : ''})` : ''}, ${skipped.dom} under DOM${domCover ? ` (${describeEl(domCover)})` : ''}, ${skipped.miss} not on the feature` : '') +
         (opts.force ? '; force: occlusion not checked' : '');
       return { ok: true, client: round(client), surface: round(c), feature: this.summarize(pieces), why };
@@ -184,7 +189,7 @@ export class Engine<W = unknown> {
     if (occluder) {
       return fail(
         'occluded',
-        `every candidate point is covered by another feature; topmost is ${describe({ ...occluder, geometryType: occluder.geometry.type })}. ` +
+        `${cands.length > MAX_TRIES ? `the ${MAX_TRIES} best of ${cands.length} candidate points are all` : 'every candidate point is'} covered by another feature; topmost is ${describe({ ...occluder, geometryType: occluder.geometry.type })}. ` +
           `Use { force: true } to click anyway, or { ignoreLayers: ['${occluder.layer}'] }.`,
       );
     }
@@ -204,14 +209,29 @@ export class Engine<W = unknown> {
     const inView = (p: Pt) => p.x >= 2 && p.y >= 2 && p.x <= size.w - 2 && p.y <= size.h - 2;
     const proj = (c: number[]) => this.adapter.project(this.adapter.worldFromCoord(c));
     const out: Pt[] = [];
+    // Polygon candidates of ALL parts and pieces are ranked together (deepest interior first): a country
+    // is a hundred islands and tile pieces, and the good pixel is in the mainland, not in whichever
+    // piece happens to come first. `tier` keeps an extrusion's roof before its walls before its footprint.
+    const poly: { p: Pt; d: number; tier: number }[] = [];
     for (const piece of pieces) {
       const g = piece.geometry;
       for (const part of explode(g)) {
         if (part.kind === 'point') out.push(...pointCandidates(proj(part.coord)));
         else if (part.kind === 'line') out.push(...lineCandidates(part.coords.map(proj)));
-        else out.push(...polygonCandidates(part.rings.map((r) => r.map(proj)), size));
+        else {
+          const rings = part.rings.map((r) => r.map(proj));
+          // An extruded polygon is drawn ABOVE its footprint: the roof first, then half-way up the walls,
+          // then the ground. Every lifted copy of the footprint lies inside the building's silhouette.
+          const lift = this.adapter.lift?.(piece, rings[0][0]) ?? 0;
+          const tiers = lift > 1 ? [1, 0.5, 0] : [0];
+          tiers.forEach((t, tier) => {
+            for (const c of scoredPolygonCandidates(t ? rings.map((r) => r.map((p) => ({ x: p.x, y: p.y - lift * t }))) : rings, size)) poly.push({ ...c, tier });
+          });
+        }
       }
     }
+    poly.sort((a, b) => a.tier - b.tier || b.d - a.d);
+    for (const c of poly) out.push(c.p);
     return out.filter(inView);
   }
 
@@ -539,7 +559,9 @@ export class Engine<W = unknown> {
     const surface = this.adapter.surface();
     const rect = surface.getBoundingClientRect();
     let coveredPixel: Pt | undefined;
-    let blocked: string | undefined = 'no part of it is inside the view';
+    // Candidates come from the GEOMETRY; what is hit-tested is what is DRAWN. They differ for a label placed
+    // along a line, an icon with an offset, or a symbol hidden by collision at the pixels we tried.
+    let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
     for (const c of (e.cands ?? []).slice(0, 40)) {
       const hits = this.adapter.queryFeatures({ at: c });
       if (!hits.some((h) => this.entityKey(h) === e.key)) continue;
@@ -645,16 +667,20 @@ export class Engine<W = unknown> {
         const driven = colours.some((c) => c?.dataDriven);
         const constant = !driven && colours[0] ? `, all drawn ${nameColour(colours[0].colour)}` : '';
         sec.push(`[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}${constant}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
-        if (driven) sec.push(`  ${colours[0]!.property} is data-driven: ${tally(colours.map((c) => (c ? nameColour(c.colour) : 'unknown')))}`);
+        if (driven) {
+          // An interpolated colour gives (almost) one hex per feature: then the colour WORD is the useful bucket.
+          const manyShades = new Set(colours.map((c) => c?.colour)).size > 8;
+          sec.push(`  ${colours[0]!.property} is data-driven: ${tally(colours.map((c) => (c ? (manyShades ? nameColour(c.colour).replace(/\(.*/, '') : nameColour(c.colour)) : 'unknown')))}${manyShades ? ' (a continuous scale; each row shows its exact colour)' : ''}`);
+        }
         for (const e of list.slice(0, cap)) {
           let loc = located.get(e.key);
           if (!loc) located.set(e.key, (loc = this.locate(e)));
           const f = e.byLayer.get(e.owner)![0];
           const pt = loc.pixel ?? loc.coveredPixel;
-          const pos = pt ? `@(${Math.round(rect.left + pt.x)},${Math.round(rect.top + pt.y)})` : '@(edge: no clickable pixel in view)';
+          const pos = pt ? `@(${Math.round(rect.left + pt.x)},${Math.round(rect.top + pt.y)})` : `@(${loc.blocked})`;
           const invisible = this.entityInvisible(e.byLayer);
           const colour = driven ? this.adapter.colour?.(f) : undefined;
-          sec.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${loc.pixel || !pt ? '' : ' ' + loc.blocked}${invisible ? ` NOT-VISIBLE(${invisible})` : ''}${colour ? ` drawn ${nameColour(colour.colour)}` : ''} ${fmtProps(f.properties, maxProps)}`);
+          sec.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${loc.pixel || !pt ? '' : ' ' + loc.blocked}${invisible ? ` NOT-VISIBLE(${invisible})` : ''}${colour ? ` drawn ${nameColour(colour.colour)}` : ''}${f.state && Object.keys(f.state).length ? ` state=${JSON.stringify(f.state)}` : ''} ${fmtProps(f.properties, maxProps)}`);
         }
         const rest = list.slice(cap);
         if (rest.length) {
@@ -700,7 +726,12 @@ export class Engine<W = unknown> {
     }
     const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && l.sourceType !== 'raster');
     for (const c of a.caveats?.() ?? []) out.push(`\nnote: ${c}`);
-    if (blind.length) out.push(`\nnote: ${blind.map((l) => l.id).join(', ')} use tiled sources; features outside the viewport are unknowable from here.`);
+    if (blind.length) {
+      // By SOURCE: a basemap style has a hundred layers on one tiled source, and listing them all says nothing.
+      const bySource = new Map<string, number>();
+      for (const l of blind) bySource.set(l.source ?? '?', (bySource.get(l.source ?? '?') ?? 0) + 1);
+      out.push(`\nnote: tiled source(s) ${[...bySource].map(([src, n]) => `${src} (${n} layer${n === 1 ? '' : 's'})`).join(', ')}: features outside the viewport are unknowable from here.`);
+    }
 
     // Budget: shrink the per-layer cap until the text fits; as a last resort cut it, and say so.
     const maxChars = o.maxChars ?? 8000;
@@ -734,6 +765,9 @@ export class Engine<W = unknown> {
 }
 
 /* ---------------- helpers ---------------- */
+
+/** Hit tests per attempt at finding a clickable pixel on one feature. */
+const MAX_TRIES = 600;
 
 /** A data entity before any hit testing: its rendered pieces per layer, and how central it is. */
 interface Collected {
@@ -808,12 +842,18 @@ export function lineCandidates(pts: Pt[]): Pt[] {
 }
 
 export function polygonCandidates(rings: Pt[][], size: { w: number; h: number }): Pt[] {
+  return scoredPolygonCandidates(rings, size).sort((a, b) => b.d - a.d).map((s) => s.p);
+}
+
+/** Interior grid points with their distance from the edge (unsorted). The grid is as fine as the shape is big: 12x12 at most, 3x3 for a speck. */
+export function scoredPolygonCandidates(rings: Pt[][], size: { w: number; h: number }): { p: Pt; d: number }[] {
   const xs = rings[0].map((p) => p.x);
   const ys = rings[0].map((p) => p.y);
   const x0 = Math.max(0, Math.min(...xs)), x1 = Math.min(size.w, Math.max(...xs));
   const y0 = Math.max(0, Math.min(...ys)), y1 = Math.min(size.h, Math.max(...ys));
   if (x1 <= x0 || y1 <= y0) return [];
-  const N = 12;
+  // A 12x12 grid over a 6px island is 144 candidates (and later 144 hit tests) for nothing.
+  const N = Math.max(3, Math.min(12, Math.ceil(Math.max(x1 - x0, y1 - y0) / 5)));
   const scored: { p: Pt; d: number }[] = [];
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
@@ -822,7 +862,7 @@ export function polygonCandidates(rings: Pt[][], size: { w: number; h: number })
       scored.push({ p, d: Math.min(...rings.map((r) => distToRing(p, r))) });
     }
   }
-  return scored.sort((a, b) => b.d - a.d).map((s) => s.p);
+  return scored;
 }
 
 export function inPolygon(p: Pt, rings: Pt[][]): boolean {
