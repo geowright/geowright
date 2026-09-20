@@ -39,6 +39,9 @@ await map.feature({ layer: 'alerts', id: 4 }).click({ autoPan: true });   // map
 await map.feature({ layer: 'td-point', at: vertex }).dragTo({ lng, lat });
 await map.clickAt({ lng: 34.78, lat: 32.08 });
 await map.rightClickAt({ lng: 34.81, lat: 32.07 });
+await map.feature({ layer: 'alerts', id: 1 }).click({ modifiers: ['Shift'] });
+await map.wheelAt({ lng: 34.8, lat: 32.1 }, -600);                        // zooms around the pointer
+await map.feature({ layer: 'buildings', id: 1028 }).click({ autoPan: { lng: 35.2, lat: 32.09 } }); // tiled source
 await map.draw.polygon([a, b, c, d], { finish: 'click-first' });          // finish gesture is tool-specific
 ```
 
@@ -107,6 +110,16 @@ npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/
 
 `agent/mcp-probe.mjs` exercises the whole path without an LLM; results of real agent runs are in the design notes (an earlier phase).
 
+## Vector tiles without a tile server
+
+```ts
+import { routeVectorTiles } from 'mapwright-spike/tiles';
+await routeVectorTiles(page, '**/vt/buildings/**', { buildings: buildingsGeoJSON }); // key = MVT source-layer
+```
+
+Real MVT tiles are cut from a GeoJSON fixture inside `page.route`; the app keeps its production `{z}/{x}/{y}.pbf` URL and code path.
+For tiled sources the browser cannot know what is off-screen, and the failure messages say so.
+
 ## Determinism
 
 No network. Inline style, GeoJSON sources, raster tiles fulfilled with `page.route`, glyphs served by the app (Noto Sans, OFL). The `map` fixture aborts and fails the test on any non-local request. Headless software WebGL flags (same set MapLibre uses in its own CI) are documented in `playwright.config.ts`.
@@ -119,6 +132,7 @@ node demo/scripts/copy-worker.mjs      # MapLibre 6 worker files -> demo/public 
 npx playwright test                    # builds the demo, serves it on :4173, runs headless
 npx playwright test --repeat-each=20   # the flake bar
 npm run dev                            # poke at the demo app by hand
+npm run pack:local                     # dist/mapwright-spike-0.0.0.tgz for trying it in another project (for local testing)
 ```
 
 ## Layout
@@ -127,6 +141,6 @@ npm run dev                            # poke at the demo app by hand
 demo/             the system under test (Vite + MapLibre 6 + terra-draw), no test code inside
 src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
 src/playwright/   mapwright(page), handles, expect matchers
-tests/            assert / act / draw / discovery / snapshot / mirror specs
+tests/            assert / act / draw / input / vector-tiles / two-maps / discovery / snapshot / mirror specs
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```
