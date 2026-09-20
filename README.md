@@ -32,7 +32,7 @@ await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'high' } }
 await expect(map).not.toHaveFeature({ layer: 'alerts', id: 2 });
 await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3);
 await expect(map).toHaveView({ center: { lng: 35.2, lat: 32.08 }, zoom: 12 });
-await expect(map).toHaveFeature({ layer: 'sensors', id: 502 }, { visible: true });   // rendered is not visible
+await expect(map).toHaveFeature({ layer: 'sensors', id: 502 }, { visible: 'any' });  // opt out: "rendered" incl. opacity-0
 await expect(map.feature({ layer: 'sensors', id: 501 })).toBeVisibleOnMap();       // paint AND pixels
 
 // ACT — auto-waiting, strict, verified
@@ -63,7 +63,7 @@ await expect(map.feature({ layer: 'td-polygon' })).toHaveGeometry([a, b, c, d], 
 { layer: 'alerts', where: { severity: { in: ['high', 'medium'] }, id: { gte: 2 } } }
 //   operators: eq ne gt gte lt lte in matches exists
 { layer: 'td-point', at: { lng, lat } }               // only what is rendered under that location
-{ layer: 'sensors', visible: true }                   // only what the style actually paints (see below)
+{ layer: 'sensors', visible: 'any' }                  // default is VISIBLE only; 'any' = MapLibre's "rendered" (see below)
 ```
 
 `map.feature(q)` is **strict** (exactly one match, like a Locator); `map.features(q)` is a set.
@@ -74,9 +74,10 @@ Handles are lazy: nothing is resolved until an action or assertion runs.
 MapLibre's `queryRenderedFeatures` also returns features painted with opacity 0, a transparent colour, zero
 radius/width or `text-opacity: 0` — so a plain `toHaveFeature` can pass on something no user can see.
 
-- `visible: true | false` in any query (or `toHaveFeature(q, { visible: true })`): evaluates the layer's paint
-  properties **for that feature** — data-driven expressions, zoom, feature-state — with MapLibre's own expression
-  evaluator. Cheap; failure messages say which property (`[NOT VISIBLE: circle-opacity evaluates to 0]`).
+- **Queries match only what a user can see, by default.** The layer's paint properties are evaluated **for that
+  feature** — data-driven expressions, zoom, feature-state — with MapLibre's own expression evaluator. Cheap; failure
+  messages say which property (`[NOT VISIBLE: circle-opacity evaluates to 0]`). Opt out with `visible: 'any'`
+  (in the query, or `toHaveFeature(q, { visible: 'any' })`); `visible: false` matches only the invisible ones.
 - `expect(map.feature(q)).toBeVisibleOnMap()`: the paint check **and** a pixel probe (do the canvas pixels at the
   feature change when its layer is not drawn?). Catches a transparent icon image. The probe re-renders three
   times and toggles the layer within one task — use it where it matters, `{ pixels: false }` skips it.
@@ -176,11 +177,11 @@ because draw tools disagree. Tested against terra-draw and mapbox-gl-draw. Note:
 
 `FeatureSetHandle` (`map.features(q)`): `all()`, `count()` — snapshots, no waiting.
 
-Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
+Queries: `layer` · `id` · `where` · `at` · `visible` (default true; `false`; `'any'`). Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
 
 | Matcher (all retry; `.not` supported) | |
 |---|---|
-| `expect(map).toHaveFeature(query, { visible?, timeout? })` | at least one rendered (optionally: visible) feature |
+| `expect(map).toHaveFeature(query, { visible?, timeout? })` | at least one VISIBLE feature (`visible: 'any'` = merely rendered) |
 | `expect(map.features(q)).toHaveFeatureCount(n)` | exactly n |
 | `expect(map.feature(q)).toBeVisibleOnMap({ pixels? })` | one feature, painted by the style AND contributing pixels |
 | `expect(map.feature(q)).toHaveGeometry(expected, { tolerancePx? = 2 })` | GeoJSON geometry · vertex list · `{ circle: { center, edge } }` |

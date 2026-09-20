@@ -135,10 +135,11 @@ export interface FeatureQuery {
   /** Only features rendered under this world location (hit test). Disambiguates e.g. vertex handles. */
   at?: LngLat;
   /**
-   * true: only features the style actually paints (opacity > 0, non-transparent colour, non-zero
-   * size). false: only invisible ones. Default: do not care — "rendered", as the library reports it.
+   * Default (undefined / true): only features a user can SEE — the style actually paints them
+   * (opacity > 0, non-transparent colour, non-zero size). MapLibre's own notion of "rendered" also
+   * includes opacity-0 features; ask for that with 'any'. false: only the invisible ones.
    */
-  visible?: boolean;
+  visible?: boolean | 'any';
 }
 
 export interface FeatureSummary {

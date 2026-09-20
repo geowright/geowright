@@ -30,7 +30,8 @@ export class Engine<W = unknown> {
   /** `rendered: false` for features that come from source DATA: paint visibility does not apply. */
   private matches(f: RenderedFeature, q: FeatureQuery, rendered = true): boolean {
     if (q.id !== undefined && String(f.id) !== String(q.id)) return false;
-    if (rendered && q.visible !== undefined && this.visibility(f).visible !== q.visible) return false;
+    const want = q.visible ?? true; // visible by default: "the map has a feature" means a user can see it
+    if (rendered && want !== 'any' && this.visibility(f).visible !== want) return false;
     if (q.where) {
       for (const [k, v] of Object.entries(q.where)) {
         if (!testWhere(f.properties[k], v)) return false;
@@ -125,7 +126,14 @@ export class Engine<W = unknown> {
 
   private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions): ActionPointResult {
     const groups = [...this.group(q).values()];
-    if (groups.length === 0) return fail('not-found', 'no rendered feature matches');
+    if (groups.length === 0) {
+      // Say WHY when the only match is painted invisibly — "not found" would send people hunting.
+      const hidden = q.visible === undefined ? [...this.group({ ...q, visible: 'any' }).values()] : [];
+      if (hidden.length === 1) {
+        return fail('invisible', `feature is rendered but not visible: ${this.visibility(hidden[0][0]).reason}. A user cannot see it; use { force: true } to act on it anyway.`);
+      }
+      return fail('not-found', 'no rendered feature matches');
+    }
     if (groups.length > 1) {
       const list = groups.slice(0, 5).map((g) => describe(this.summarize(g))).join('; ');
       return fail('ambiguous', `strict mode violation: query resolved to ${groups.length} features: ${list}`);
@@ -424,7 +432,7 @@ export class Engine<W = unknown> {
         continue;
       }
       if (!info.visible) lines.push(`layer "${id}": visibility is "none"`);
-      const rendered = this.find({ layer: id });
+      const rendered = this.find({ layer: id, visible: 'any' });
       lines.push(`layer "${id}": ${rendered.length} feature(s) rendered in viewport`);
       for (const f of rendered.slice(0, 8)) lines.push(`  - ${describe(f)}`);
       if (rendered.length > 8) lines.push(`  … ${rendered.length - 8} more`);
@@ -436,13 +444,13 @@ export class Engine<W = unknown> {
             (values.length ? values.slice(0, 10).join(', ') + (values.length > 10 ? ', …' : '') : '(none)'),
         );
       }
-      if (q.visible !== undefined) {
-        const { visible: _v, ...anyVisibility } = q;
-        const other = this.find({ ...anyVisibility, layer: id }).filter((f) => f.visible !== q.visible);
+      const want = q.visible ?? true;
+      if (want !== 'any') {
+        const other = this.find({ ...q, layer: id, visible: 'any' }).filter((f) => f.visible !== want);
         if (other.length) {
           lines.push(
-            `  ${other.length} feature(s) match but are ${q.visible ? 'NOT VISIBLE' : 'visible'}` +
-              (q.visible ? `: ${other.slice(0, 3).map((f) => `${f.layer}${f.id !== undefined ? '#' + f.id : ''} (${f.invisibleBecause})`).join('; ')}` : ''),
+            `  ${other.length} feature(s) match but are ${want ? 'NOT VISIBLE' : 'visible'}` +
+              (want ? `: ${other.slice(0, 3).map((f) => `${f.layer}${f.id !== undefined ? '#' + f.id : ''} (${f.invisibleBecause})`).join('; ')}. Rendered-but-invisible features match only with { visible: 'any' }.` : ''),
           );
         }
       }

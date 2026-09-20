@@ -11,16 +11,17 @@ test.describe('visibility', () => {
     await expect(map).toHaveFeature({ layer: 'sensors', id: 501 });
   });
 
-  test('rendered vs visible: the default stays "rendered", { visible } narrows it', async ({ map }) => {
+  test('visible is the default; MapLibre\'s looser "rendered" is { visible: \'any\' }', async ({ map }) => {
     // The trap this feature exists for: the archived sensor is "there" as far as MapLibre is concerned.
-    await expect(map).toHaveFeature({ layer: 'sensors', id: 502 });
-    await expect(map).not.toHaveFeature({ layer: 'sensors', id: 502 }, { visible: true });
+    await expect(map).toHaveFeature({ layer: 'sensors', id: 502 }, { visible: 'any' });
+    await expect(map).not.toHaveFeature({ layer: 'sensors', id: 502 }); // a user cannot see it
     await expect(map).toHaveFeature({ layer: 'sensors', id: 502, visible: false });
-    await expect(map.features({ layer: 'sensors' })).toHaveFeatureCount(3);
-    await expect(map.features({ layer: 'sensors', visible: true })).toHaveFeatureCount(2);
-    await expect(map.features({ layer: 'sensor-zones', visible: true })).toHaveFeatureCount(0); // fill-opacity: 0
+    await expect(map.features({ layer: 'sensors' })).toHaveFeatureCount(2);
+    await expect(map.features({ layer: 'sensors', visible: 'any' })).toHaveFeatureCount(3);
+    await expect(map.features({ layer: 'sensor-zones' })).toHaveFeatureCount(0); // fill-opacity: 0
+    await expect(map.features({ layer: 'sensor-zones', visible: 'any' })).toHaveFeatureCount(1);
 
-    const [archived] = await map.features({ layer: 'sensors', id: 502 }).all();
+    const [archived] = await map.features({ layer: 'sensors', id: 502, visible: 'any' }).all();
     expect(archived.visible).toBe(false);
     expect(archived.invisibleBecause).toContain('circle-opacity evaluates to 0');
   });
@@ -30,7 +31,7 @@ test.describe('visibility', () => {
     await expect(sensor).toBeVisibleOnMap();
     await page.getByTestId('sensor-archive-501').click(); // async setData, 100–400ms
     await expect(sensor).not.toBeVisibleOnMap();
-    await expect(map).toHaveFeature({ layer: 'sensors', id: 501 }); // still "rendered"
+    await expect(map).toHaveFeature({ layer: 'sensors', id: 501, visible: 'any' }); // still "rendered"
     await page.getByTestId('sensor-archive-501').click();
     await expect(sensor).toBeVisibleOnMap();
   });
@@ -75,7 +76,7 @@ test.describe('visibility', () => {
 
   test('failure message explains that a match exists but cannot be seen', async ({ map }) => {
     const err = await expect(map)
-      .toHaveFeature({ layer: 'sensors', where: { name: 'Sensor Birch' }, visible: true }, { timeout: 600 })
+      .toHaveFeature({ layer: 'sensors', where: { name: 'Sensor Birch' } }, { timeout: 600 })
       .then(() => null, (e: Error) => e);
     expect(err?.message).toContain('1 feature(s) match but are NOT VISIBLE: sensors#502 (circle-opacity evaluates to 0');
   });

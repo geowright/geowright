@@ -77,7 +77,7 @@ test.describe('Engine.find with a fake adapter', () => {
     expect(found.some((f) => f.layer === 'sensors')).toBe(false);
   });
 
-  test('visible: true/false filters via the fake visibility()', () => {
+  test('visible by default; false = only invisible; \'any\' = rendered, seen or not', () => {
     const archived = point('sensors', 100, { status: 'archived' }, [1, 1]);
     const active = point('sensors', 101, { status: 'active' }, [2, 2]);
     const engine = new Engine(makeAdapter([archived, active]));
@@ -85,7 +85,8 @@ test.describe('Engine.find with a fake adapter', () => {
     expect(engine.find({ layer: 'sensors', visible: true })[0].id).toBe(101);
     expect(engine.find({ layer: 'sensors', visible: false })).toHaveLength(1);
     expect(engine.find({ layer: 'sensors', visible: false })[0].id).toBe(100);
-    expect(engine.find({ layer: 'sensors' })).toHaveLength(2); // no visible filter: both "rendered"
+    expect(engine.find({ layer: 'sensors' })).toHaveLength(1); // default: what a user can see
+    expect(engine.find({ layer: 'sensors', visible: 'any' })).toHaveLength(2); // MapLibre's "rendered"
   });
 
   test("summary's client = pixel + the surface rect's left/top", () => {

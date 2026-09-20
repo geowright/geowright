@@ -591,6 +591,11 @@ export class FeatureHandle {
     return `map.feature(${show(this.query)})`;
   }
 
+  /** `force` also means "even if it is painted invisibly". */
+  private wire(opts: ActionOptions): WireQuery {
+    return toWire(opts.force && this.query.visible === undefined ? { ...this.query, visible: 'any' } : this.query);
+  }
+
   private pointOpts(opts: ActionOptions): ActionPointOptions {
     return { force: opts.force, ignoreLayers: [...this.map.ignoreLayers, ...(opts.ignoreLayers ?? [])] };
   }
@@ -601,7 +606,7 @@ export class FeatureHandle {
     let panned = false;
     try {
       await this.map._retry<true>(what, timeout, async () => {
-        const r = await this.map._call<ActionPointResult>('actionPoint', toWire(this.query), this.pointOpts(opts));
+        const r = await this.map._call<ActionPointResult>('actionPoint', this.wire(opts), this.pointOpts(opts));
         if (!r.ok) {
           if (opts.autoPan && !panned && (r.reason === 'not-found' || r.reason === 'offscreen')) {
             const revealed =
@@ -637,7 +642,7 @@ export class FeatureHandle {
     await step(what, () =>
       this._withActionPoint(what, opts, async (p) => {
         // Arm an in-page check that re-runs the hit test at the instant the REAL event arrives.
-        const token = await this.map._call<string>('armClick', toWire(this.query), this.pointOpts(opts));
+        const token = await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts));
         let verdict: ClickVerdict;
         try {
           await this.map.page.mouse.move(p.x, p.y);
@@ -669,7 +674,7 @@ export class FeatureHandle {
     const what = `${this}.tap()`;
     await step(what, () =>
       this._withActionPoint(what, opts, async (p) => {
-        const token = await this.map._call<string>('armClick', toWire(this.query), this.pointOpts(opts));
+        const token = await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts));
         let verdict: ClickVerdict;
         try {
           await this.map.page.touchscreen.tap(p.x, p.y);
@@ -792,8 +797,11 @@ export interface ViewExpectation {
 }
 
 export const expect = baseExpect.extend({
-  /** At least one rendered feature matches. Retries; `.not` waits for none. */
-  async toHaveFeature(map: MapHandle, query: FeatureQuery, options?: { timeout?: number; visible?: boolean }) {
+  /**
+   * At least one feature a user can SEE matches (`{ visible: 'any' }` for MapLibre's looser notion of
+   * "rendered", which includes opacity-0 features). Retries; `.not` waits for none.
+   */
+  async toHaveFeature(map: MapHandle, query: FeatureQuery, options?: { timeout?: number; visible?: boolean | 'any' }) {
     if (!(map instanceof MapHandle)) throw new Error('toHaveFeature: receiver must be a MapHandle — expect(map).toHaveFeature(...)');
     const timeout = options?.timeout ?? this.timeout;
     if (options?.visible !== undefined) query = { ...query, visible: options.visible };
@@ -854,7 +862,7 @@ export const expect = baseExpect.extend({
     if (!(received instanceof FeatureHandle)) throw new Error('toBeVisibleOnMap: receiver must be map.feature(...)');
     const timeout = options?.timeout ?? this.timeout;
     const map = received.map;
-    const { visible: _v, ...query } = received.query;
+    const query: FeatureQuery = { ...received.query, visible: 'any' }; // look at it even if invisible: that is the question
     const deadline = Date.now() + timeout;
     let pass = false;
     let why = 'never checked';
