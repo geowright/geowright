@@ -1,0 +1,723 @@
+# Design
+
+This document explains the decisions behind geowright and the evidence for them: what was tried,
+what broke, and what the numbers said. It assumes familiarity with the [README](../README.md) —
+this is the "why," not the API reference.
+
+## Two gaps in DOM-only testing: ASSERT and ACT
+
+A MapLibre map renders to a single WebGL canvas. Everything a normal Playwright suite is good at —
+finding an element, reading its text, clicking it, waiting for it to appear — stops working the
+moment the thing under test is a pixel inside that canvas rather than a DOM node. This leaves two
+gaps in an otherwise ordinary end-to-end suite:
+
+- **ASSERT** — after driving the application's normal UI, verify that something was added to,
+  changed on, or removed from the map (a marker appeared, a layer's data changed, the camera moved
+  to the right place).
+- **ACT** — perform actions that start on the map itself: click a feature, right-click a location,
+  drag a vertex, draw a shape.
+
+geowright closes both gaps for MapLibre GL JS (developed against 6.10; versions 2–6 and the BSD-licensed
+Mapbox GL JS 1.13 are covered by a version matrix, see "Version compatibility") with a small in-page engine
+plus a Playwright binding, and takes a **grey-box** stance to do it: it can read the map's public
+state (rendered features, paint properties, camera, layer list) to decide what to click and what to
+expect, but every action it performs is **real input** — `page.mouse` and CDP touch/keyboard events
+at real screen pixels, dispatched the same way a person's input reaches the browser. It never calls
+`map.fire()` or otherwise synthesizes a DOM or map event. CDP's own `Input` domain (which is what
+Playwright's mouse and keyboard already use) is fine; anything that skips the browser's real input
+pipeline is not. The library's own claim that "real input matters" is not a slogan: it is backed by
+several bugs described below that a synthetic-event test would never have found, because the
+application's own event handling — not the test's assumptions — is what was actually broken.
+
+The adapter is built against **MapLibre's public API only**. No private fields, no internal render
+flags, nothing that could silently change across a minor version. This shows up most concretely in
+one design choice described under actionability: an existing prior-art library (MapGrab, see below)
+decided whether the map was "stable" by reading MapLibre's private internal flags directly
+(`_styleDirty`, `_repaint`, `scrollZoom._lastWheelEventTime`, and others). Reading private fields
+ties a testing library to implementation details that are free to change on any release, which is a
+plausible reason that library stopped being maintained. geowright's stability check is built
+entirely from public surface instead (described below).
+
+All of this sits behind one seam: `CanvasAdapter<W>`, in `src/inpage/types.ts`. The engine that
+does query matching, action-point selection, and diagnostics has **zero imports from MapLibre or
+any other map library** — every library-specific behavior is one method on the adapter interface,
+most of them optional so an adapter can simply not implement what its library cannot do. The
+vocabulary is deliberately generic where it can be: a "world" coordinate is whatever the underlying
+library's native coordinate space is (`{lng, lat}` for a map, but the type is a generic `W`); a
+"surface" is the DOM element that receives real input; a "feature" is an addressable thing drawn on
+the surface, grouped into "layers." The MapLibre adapter that implements this seam is small (a few
+hundred lines); everything else — retrying handles, strict-vs-set matching, the "what was
+actually on the map" diagnostics, the matcher library — has no idea it is talking to a map.
+
+That generality is real but uneven. It extends cleanly to anything with a retained scene and a
+programmatic pick/hit-test — deck.gl, OpenLayers, Leaflet, Cesium, and 2D scene-graph libraries like
+Konva, Fabric, or ECharts all expose something equivalent to "what is rendered here" and "where does
+this world coordinate project to." It does not extend to immediate-mode canvas content (a raw 2D
+context, most games, many charts) where there is no queryable model at all without the application
+doing extra work far beyond a one-line hook. Two things are specifically true of maps and not of
+canvas content in general: a real settle signal (`idle`, discussed below — most canvas apps have
+nothing like it), and a universal, application-independent addressing scheme (`{lng, lat}` — a
+canvas editor's coordinate space is whatever that application invented). "A testing layer for
+retained-mode, pickable canvas libraries, maps first" is an accurate description of the design;
+"a testing layer for the canvas web" would not be.
+
+## The one-line hook, not auto-discovery
+
+Getting a handle on the map instance is the first problem any tool like this has to solve, and the
+options were narrower than expected.
+
+**Auto-discovery of the map instance is not possible for a bundled ESM application, not merely
+fragile.** MapLibre GL JS 6 ships ESM-only: there is no UMD build and no `window.maplibregl` global
+to intercept. The one auto-discovery trick that has ever worked against a global-exposing library —
+inject a script before the page loads, trap the global, and patch the constructor it exposes — has
+nothing left to patch: in a bundled application the `Map` class is a module-private binding, never
+assigned to `window`. The instance itself is unreachable from outside: the container DOM node holds
+no back-reference to the map that was constructed around it, and its event handlers are bound
+closures with no enumerable path back to the instance. `tests/discovery.spec.ts` turns this claim
+into an executable check against a real bundled application: it looks for a library global, walks
+every enumerable property of `window` for anything shaped like a map, and walks the map container's
+DOM subtree (including symbol keys, to catch framework-added expandos) for a back-reference. All
+three come back empty; only the explicit hook is found. If that test ever starts failing, the
+premise behind the hook would need to be revisited.
+
+The remaining ways to get "automatic" discovery are all worse than a one-line hook: rewriting the
+application's bundle inside `page.route` (a regex over minified, unstable code) or a
+framework-specific search (walking React's fiber tree to find a wrapper component's ref). Neither
+is robust across bundlers, minifier settings, or framework versions, and neither was pursued past
+the idea stage.
+
+The one relevant piece of prior art, an archived MIT-licensed library called MapGrab that solved the
+same ASSERT/ACT problem for MapLibre and Mapbox GL, made the identical call: an explicit
+`installMapGrab(map, id)` call in application code. Nobody building this kind of tool has found a
+way around an explicit registration step. geowright's version is lighter — a dependency-free global
+assignment instead of an imported function:
+
+```ts
+const map = new maplibregl.Map({ ... });
+(window.__geowright_maps ??= {}).main = map;
+```
+
+Nothing is imported, so the application ships zero test code in production and never depends on the
+testing library. The in-page adapter and engine are injected separately, by the test runner
+(`page.evaluate` of a pre-built bundle, re-injected after every navigation); duck-typing on the
+registered object picks the right adapter. The one line is meant to live only in a test or
+development build, for reasons covered next.
+
+Applications that wrap MapLibre in a component library still reduce to one line, just moved to
+wherever the wrapper first hands back the underlying map instance — typically a load callback:
+
+```jsx
+<Map onLoad={e => ((window.__geowright_maps ??= {}).main = e.target)} …                />  // react-map-gl
+<MapLibre onload={(e) => ((window.__geowright_maps ??= {}).main = e.target)} …          />  // svelte-maplibre-gl
+```
+
+Vue is the one wrapper where the naive line does not work: a Vue **template** expression cannot see
+`window` at all, so the documented one-liner throws there. Inside `<script setup>` the plain line is
+fine; from a template the working form reaches `window` through the DOM node's own document instead:
+
+```jsx
+<mgl-map @map:load="e => ((e.map.getContainer().ownerDocument.defaultView.__geowright_maps ??= {}).main = e.map)" … />
+```
+
+A second wrapper-specific wrinkle worth stating plainly: a wrapper's load callback fires only when
+the underlying library's own `load` event fires, and `load` needs every declared source to resolve.
+If one data request fails, the map is never registered, and the hook's caller sees only "no map
+registered" after its timeout — a message that points at the hook, not at the real cause. The test
+harness lists every unanswered network request at teardown, which is how this gets diagnosed in
+practice.
+
+The hook has one security implication worth stating up front: it exposes the live map instance to
+*any* script running on the page, which is why it belongs in test and development builds only, never
+shipped to production. This is also, incidentally, a real affordance for browser-driven agents (see
+the agent layer below): an agent poking around a page with the hook present can find and use
+`window.__geowright_maps` on its own, with no instructions at all. Any application that adopts the
+hook for testing becomes more legible to that kind of agent for free — and takes on the same
+exposure for free.
+
+## Actionability: what "click a feature" has to verify
+
+A `click()` on a feature is not "compute a pixel and send a mouse event." Before geowright will
+send real input for a feature action, all of the following have to hold, and the whole check re-runs
+on every retry:
+
+1. **The query resolves to exactly one logical feature** — strict, the same contract as a Playwright
+   Locator. More than one match is an error naming the ambiguity, not a guess.
+2. **The map is not moving, and the chosen pixel is stable across two animation frames.** This
+   replaces reading private internal state (the MapGrab approach, discussed above) with two public
+   checks: sampling the candidate pixel twice, one frame apart, and requiring the map's own
+   `isMoving()` to answer false. An in-flight `flyTo` or animation is a wait, not a race.
+3. **The pixel is actually on the feature.** Candidate pixels are generated geometrically and then
+   *verified* by the library's own hit test — geometry code stays simple because it never needs to
+   be exactly right, only close enough for the hit test to confirm it. For a polygon, candidates come
+   from a grid over its on-screen bounding box (density scaled to the shape's on-screen size, from a
+   dense 12×12 grid down to 3×3 for something the size of a few pixels), kept only if they fall
+   inside the shape, and ranked by distance from the nearest edge — a cheap pole-of-inaccessibility
+   approximation. The **centroid or bounding-box centre is never used**, because it can land outside
+   a concave shape or inside a hole. For a line, candidates are ordered along the line and tried from
+   the middle outward, not from either end. (An early version ranked by *array index* distance from
+   the middle index, which for the typical vertex ordering of a line is almost always its first
+   vertex — every line was being clicked near its start rather than its middle. It never failed a
+   test, because a line's endpoint is also a point on the line, so the wrong pixel was still a valid
+   one. It was caught by a small, fast unit test written directly against the candidate-generation
+   function, after the end-to-end suite had missed it — the strongest argument found for
+   keeping a fast unit-test layer underneath an inherently slow, browser-driven suite.) For a point
+   feature, the first candidate is its own location; if that location is not clickable — buried under
+   other features in a dense cluster — a ring of additional candidates around it (a few small radii,
+   several compass directions each) is tried next, each still verified by the real hit test. On a
+   stress page with several thousand overlapping point features, more than half had no clickable
+   pixel at their nominal location at all (59% of entities); the ring candidates recovered 623 of those
+   2,173 by finding the visible crescent a real user would have clicked instead. The rest are reported
+   as occluded, naming the occluder.
+4. **The feature is the topmost thing a person can actually see at that pixel.** A feature's own
+   label rendered on top of it does not count as an occluder — putting a count label on a cluster and
+   then finding cluster clicks newly "occluded by their own label" is what motivated this rule: labels
+   sitting on their own feature are the norm, not an edge case. The comparison is on the underlying
+   *data* feature (source, id, properties), not the rendered layer, so a foreign layer's label still
+   occludes correctly. A feature that is rendered but invisible (opacity 0, a transparent color — see
+   "Visibility" below) is likewise not counted as an occluder, on the reasoning that occlusion is
+   about what a person can see, not about which layer receives an event first.
+5. **No DOM element covers the pixel** — a popup, a control, an overlay. Checked with
+   `document.elementFromPoint`, so a marker or popup sitting exactly on a feature's best interior
+   candidate correctly blocks that candidate and the search moves on to the next one.
+6. **The map is scrolled into the browser viewport** if it is not already, since no pointer can reach
+   a part of the page that is off-screen — the same thing a Locator does before acting.
+7. **At the instant the real pointer event fires, the hit test is re-run at that exact pixel.** Between
+   computing a target pixel in the page and Playwright dispatching input for it a few milliseconds
+   later in the test process, the application could have moved the map. An armed, capture-phase
+   listener re-checks the hit test at the pixel and moment of the real `pointerdown`; on a mismatch it
+   swallows the whole click sequence before it reaches the application, and the action retries from
+   the top. This closes the same class of race Playwright's own hit-target interception closes for
+   ordinary DOM elements, and it was verified with a targeted mutation test: with the check disabled,
+   a spec built to provoke the race fails; with it enabled, the same spec passes.
+
+Fill-extrusion (3D buildings) features need one more step: their clickable area is not their
+footprint. A tall building's footprint can be scrolled entirely out of view while the tower itself is
+still on screen. Action points for extrusions are lifted toward wherever the shape is actually drawn
+— roof first, then partway down the walls, then the footprint as a last resort — using an estimate
+(evaluated extrusion height, times an approximate on-screen pixels-per-metre scale measured along the
+horizontal axis, which camera pitch does not foreshorten, times the sine of the pitch angle). MapLibre
+exposes no public 3D projection to compute this exactly, but an estimate is sufficient because every
+candidate is still verified by the real hit test — a wrong estimate produces a retry, never a wrong
+click.
+
+**Bounded search.** Candidate generation is cheap per candidate but not free in aggregate: a large,
+mostly-covered polygon (a country outline mostly hidden under smaller regions on top of it) produced
+tens of thousands of geometric candidates and took on the order of 25 seconds per action before this
+was addressed. The fix keeps grid density proportional to on-screen size, ranks every part's
+candidates together by depth-from-edge instead of exhausting one part before the next, and caps the
+whole search at **600 hit tests** — past that bound the action reports the feature as occluded and
+names what is on top, rather than continuing to search for an ever-smaller sliver that a real user
+would not hunt for either. On the case that motivated this, the same action went from tens of
+thousands of candidate pixels to roughly two thousand and well under two seconds.
+
+## Identity: matching a click back to a feature
+
+MapLibre's rendered feature `id` cannot be trusted as a stable key on its own. It coerces non-integer
+ids to numbers (a UUID string id from a drawing library becomes something like `0`, `4`, `75`, or
+`8866` — the leading digits, colliding across genuinely different features), and the same feature
+comes back once per internal tile it happens to be sliced into, each time with a different, clipped
+piece of its geometry. For this reason **identity is `layer + id + properties`, and geometry received
+from the renderer is treated as a possibly-partial piece, never the authoritative shape** — the full
+shape, when it is needed (drawing / geometry assertions), is read from the source's own data instead.
+
+Related layers that draw one logical thing are folded into a single entity for the purposes of a
+handle or a snapshot row — a circle, its label, and its outline, drawn on three separate layers, are
+one entity with a primary layer and a list of the others it also appears on. This matters because a
+typical map style renders one real-world thing across several layers on purpose (fill + outline,
+point + label), and treating those as unrelated features would make ordinary queries and counts
+wrong.
+
+Two harder identity problems only showed up once the library was pointed at applications it was not
+built around:
+
+- **Features with no id and identical properties.** Several point-of-interest markers that are all
+  `{ icon: "music" }`, with no id field at all, key identically under `layer + id + properties` and
+  therefore collapse to one feature — which is correct when a wrapper renders one real entity as
+  several coincident pieces, and wrong when they are genuinely distinct entities that merely look
+  alike. Geometry cannot settle this (tile-clipped pieces of one shape look nothing alike), but
+  *contact* can: same-key, id-less pieces are grouped by whether their on-screen bounding boxes touch,
+  using a sweep over the boxes rather than an all-pairs comparison. Two id-less, property-identical
+  shapes that visually touch are still counted as one feature — a documented limit of this approach,
+  not something contact alone can resolve.
+- **The same feature, seen through re-rendering, briefly disagreeing with itself.** An application
+  that replaces its entire GeoJSON source on every animation frame can, for one instant, be caught
+  mid-swap, rendering the same logical point from two different generations of that data roughly
+  thirty pixels apart — which look exactly like two nearby id-less pieces that do not touch. When a
+  split like this happens unexpectedly, the adapter can ask a GeoJSON source directly whether its
+  *current* data holds exactly one feature with those properties, and trust that answer over what the
+  renderer momentarily disagreed with; a vector-tile source cannot be asked this question at all, so
+  for tiled sources the split from re-rendering stands as-is.
+- **World copies.** At low zoom, a web-Mercator map draws the whole world more than once side by
+  side. The same id-less feature then appears in each visible copy, and identity keys built purely
+  from screen position would treat those as separate features. The adapter can report the pixel
+  period the surface repeats at; x-coordinates are folded by that period before pieces are compared,
+  so multiple on-screen copies of one feature merge back into one identity.
+
+A residual, unresolved case: under deliberately heavy concurrent load, roughly one time in twenty an
+animated point occasionally reports itself as "ambiguous" rather than the more accurate "unstable" —
+the action still correctly refuses to click either way, but the diagnostic label is sometimes wrong,
+and the specific cause was not isolated.
+
+## Visibility: "rendered is not visible"
+
+MapLibre's `queryRenderedFeatures` documents, and testing against 6.10 confirms in practice, that it
+returns features the style paints completely invisibly: `circle-opacity: 0` (constant or data-driven),
+`circle-radius: 0`, a circle color with zero alpha, and `text-opacity: 0` all come back from a
+viewport query exactly as if they were visible; a point query at a specific pixel returns all of these
+except zero-radius. A plain "does this feature exist" query can therefore pass on something no user
+could ever see. The trap is broad, not an edge case, so it is addressed as a default rather than an
+opt-in check.
+
+**Paint evaluation is the everyday mechanism.** MapLibre's own style expression evaluator is published
+separately as `@maplibre/maplibre-gl-style-spec` and is bundled into the injected script; the public
+`getPaintProperty` / `getLayoutProperty` accessors give the raw style values, and the bundled
+evaluator resolves them for a specific feature — handling data-driven expressions, zoom-dependent
+values, per-feature state, and global state exactly as the renderer itself would. This costs
+microseconds per feature, needs no rendering, and can explain itself in a failure message (for
+example, "`circle-opacity` evaluates to 0"). What it cannot see: a genuinely transparent icon image
+(nothing about the icon's *pixels* is visible to a paint-property read), or a color that happens to
+exactly match whatever is drawn underneath it.
+
+Because of that gap, an **opt-in pixel probe is the ground-truth check**, run once a passing paint
+evaluation has already said "visible." A WebGL canvas without `preserveDrawingBuffer` reads back all
+zeros shortly after a frame is drawn — except within the same JavaScript task as the draw itself. The
+probe exploits this and MapLibre's public, synchronous `redraw()`: redraw with the layer on, read
+pixels, hide the layer, redraw again, read pixels again, restore the layer, redraw once more — all in
+one task, so nothing is ever actually composited to the screen and there is no visible flicker. A
+non-zero difference between the two reads means the layer contributed real pixels at that location.
+Measured warm, on a quiet machine, this costs on the order of 25–27 ms per probe (one call was
+measured at 205 ms, attributable to a source reload the first probe triggers, discussed next); an
+early, informal measurement taken while the machine was under heavy unrelated load suggested
+85–180 ms, which is the number to distrust. The probe has two real costs beyond time: it fires
+MapLibre's `styledata` event and causes the layer's source to reload afterward, so an application with
+its own `styledata` listeners will see that; and the differential it measures is per *layer* at a
+pixel, not per feature, so a second feature from the same layer under the same pixel confounds it.
+
+Query semantics default to what a person can actually see: `visible: true` (implicit default) matches
+only paint-evaluated-visible features; `'any'` opts back into MapLibre's own broader notion of
+"rendered," including opacity-0 features; `visible: false` matches only the invisible ones. The
+stricter matcher, `toBeVisibleOnMap()`, runs both checks — paint evaluation and, by default, the pixel
+probe (`{ pixels: false }` skips the probe where it is not needed). Feature actions refuse to act on
+an invisible match by default (`{ force: true }` overrides): a user cannot click what they cannot see,
+and a test that tries to is very likely testing the wrong thing.
+
+A layer that paints something but has **no individually addressable features at all** — a raster tile
+layer, an image or video layer, a hillshade layer, a heatmap — cannot be asked about through feature
+queries, since there is no feature to query. `toHaveLayerPixels(layerId, { at, radiusPx })` runs the
+same redraw/read-back probe over a radius around a location instead of a single feature's pixel; an
+early version read a 5×5-pixel patch and reported "nothing" for a real radar image, because imagery is
+transparent at any single spot often enough — the default is now a 24-pixel radius. (The same lesson a
+second way: a spec that probed the centre of a canvas source assumed the example's thin, RANDOMLY placed
+circle outlines would cross it. Probe the area the content can be in, not a point.) **Heatmap layers are always reported as
+"visible"** to feature-level queries; MapLibre has no equivalent paint rule for a heatmap's rendered
+intensity, and this is a documented, deliberate gap rather than an oversight — `toHaveLayerPixels` is
+the honest check for a heatmap layer.
+
+When the evaluator encounters something it cannot resolve — a style expression newer than the bundled
+evaluator's grammar — the answer is always **"visible," never a false "invisible."** This is stated as
+a hard rule because the alternative failure mode (silently reporting a real, visible feature as hidden)
+would be far more damaging to a test suite than the reverse. One subtlety worth recording: an
+unrecognized operator inside an expression array does not throw by default — `['some-unknown-op', 1]`
+parses as an ordinary literal array rather than raising an error — so the "cannot evaluate" case had to
+be detected explicitly (checking whether an array-shaped, non-array-typed paint value is actually a
+compiled expression), rather than relying on a `catch` that would never fire. A feature that exists in
+an application's data but is not drawn for a library-specific reason distinct from ordinary invisibility
+— most commonly, its style references an icon image name that was never added to the map's sprite — is
+reported as exactly that in diagnostics, rather than left indistinguishable from an ordinary
+symbol-collision hide.
+
+## Globe and terrain
+
+**MapLibre's own viewport queries are measurably wrong on a globe projection**, in both directions, as
+verified directly against a real globe example at a middle zoom level on version 6.10: a plain
+viewport query with no geometry, and an equivalent full-viewport bounding-box query, both returned 24
+countries; a point-by-point query at the same view found 83; and a smaller bounding box returned 187 —
+because bounding-box queries on a globe include geometry on the *far side* of the sphere along with
+whatever is actually visible. For fill-extrusion layers specifically, bounding-box queries on a globe
+returned nothing at all, while point queries against the same view found real hits. The workaround,
+built entirely from public API: query a 4×4 grid of smaller boxes across the viewport instead of one
+large box, and keep only the pieces that have at least one vertex on the *near* side of the globe
+(using the round-trip check described next); extrusions specifically are found by a point sweep
+combined with their source footprints, since box queries cannot see them on a globe at all. Both the
+globe specs assert the underlying MapLibre behavior first, so they will fail loudly and visibly the
+day the library's own query fixes the underlying bug, rather than silently continuing to run a
+workaround that is no longer needed. A known, accepted gap remains: a small extrusion positioned
+between grid points, whose footprint's centre happens to fall off-screen, can still be missed by this
+grid-based approach.
+
+**The near-side check itself is a round trip through public projection functions:**
+`unproject(project(world))` should return (approximately) the same world coordinate that was put in;
+if it does not, whatever is actually drawn at that screen pixel is something else, and the location is
+not really "there." This exists because `project()` documentedly answers for locations on the far side
+of a globe too — the pixel a place *would* project to if the earth were transparent — so, before this
+check existed, clicking a location known to be on the far side of the globe silently clicked whatever
+was drawn on the near side instead, with no error at all. That is the worst kind of wrong click: one
+that succeeds. The fix generalized immediately to terrain, without any terrain-specific code: a
+location hidden behind a mountain ridge fails the exact same round trip, and clicking such a location
+is now refused as not on the visible surface, whether the reason is the far side of a sphere or a
+ridge in the way.
+
+Where the projection math holds, camera realism otherwise required **no adapter changes at all**:
+rotation and pitch tests (concave-polygon clicks, right-clicks at a coordinate, drawing, vertex
+dragging, geometry assertions) all pass unchanged, because every candidate pixel is computed through
+`map.project()` and verified by MapLibre's own hit test — perspective becomes the map library's
+problem, never the testing layer's. On terrain specifically, a click at an exact coordinate on a real
+slope lands correctly, and a location hidden behind a ridge is refused by the same round-trip check
+described above. Rendering terrain at a steep pitch needs elevation and hillshade tiles all the way to
+the horizon, which is far more tile data than the same view needs when flat; on constrained,
+GPU-less CI hardware a synthetic elevation fixture generated at a high maximum zoom level could not be
+PNG-encoded fast enough for the map to settle within its wait budget at all, and the fixture's maximum
+zoom was lowered to a level that still comfortably resolves a few kilometres of ridge terrain (tens of
+metres per pixel is more than enough) but generates far less data.
+
+Not covered as of this writing: pitch beyond the point where the horizon itself becomes visible
+(would need MapLibre's own maximum-pitch guard respected explicitly) and globe behavior at the poles.
+
+## Waiting and determinism
+
+MapLibre's `idle` event is emitted only from inside the map's own render loop, at the end of a frame,
+when nothing is dirty, nothing is pending a repaint, the map is not moving, and the style has loaded.
+The direct consequence: **if the map happens to already be idle, a bare `once('idle')` listener never
+fires**, because nothing will trigger another render to emit it. `waitForIdle()` is therefore built as
+"subscribe to `idle` first, then call the public, synchronous `triggerRepaint()`" — forcing exactly
+one frame makes an idle map either fire immediately or, if it was not actually idle, schedule the
+render that will eventually make it so. A public `areTilesLoaded()` check is layered on top as a
+second condition, belt and braces. All of this uses public API only.
+
+Idle by itself is not, and cannot be, a general synchronization primitive: it has no way to know about
+application-level asynchrony. Between a click and the fetch-then-`setData` sequence a real application
+handler might run, the map is genuinely idle the whole time — there is nothing wrong to observe. For
+that reason, **retrying assertions are the primary synchronization mechanism**, the same
+`expect.poll`-style retry that ordinary web-first Playwright assertions use; a map-idle wait alone is
+never sufficient on its own for anything that depends on application logic between an action and an
+expected result. Each assertion's retry loop does still wait for a bounded map-idle (roughly half a
+second) before evaluating on every poll, so that a verdict is never based on a half-rendered frame —
+idle is the secondary, supporting mechanism, not the primary one.
+
+Some real applications intentionally never idle at all — a `requestAnimationFrame` loop that replaces
+`setData` every frame, a streaming line, an always-animating canvas source. An explicit
+`waitForIdle()` call against such a map is a trap: it will simply time out, with a message that
+currently says only that the map did not become idle, not that the map may be animating on purpose.
+Assertions are unaffected, since their own idle wait is bounded rather than blocking; only an explicit,
+unconditional wait for idle needs to be opted out for a map like this.
+
+**No fixed sleeps remain anywhere in the library or its own tests.** The one that used to exist — a
+short pause between vertices while drawing a shape, to avoid an unintended double-click — turned out to
+be unnecessary: CDP-dispatched mouse events carry an explicit click count, so two fast clicks at
+different pixels are never mistakenly treated as one double-click regardless of timing. Once that was
+understood, the pause was removed rather than tuned.
+
+**No network reaches the outside world during a test.** Style, GeoJSON sources, and raster tiles are
+all served from in-memory fixtures through `page.route`; vector tiles are cut from a GeoJSON fixture on
+the fly, inside the route handler, using the same tiling libraries a real tile pipeline would use
+(`geojson-vt` + `vt-pbf`), so the application's real `{z}/{x}/{y}.pbf` request path runs against
+deterministic, generated tiles rather than a mocked response shape. The test fixture harness treats
+any request it cannot answer as a hard failure, aborting it and failing the test with the offending URL
+named — which doubles as the mechanism for discovering exactly what a newly tested application needs
+before it will finish loading.
+
+Headless rendering runs with the same software-GL flag set MapLibre's own upstream test suite uses in
+its own continuous integration: GPU acceleration disabled, with SwiftShader's unsafe and
+software-GL-fallback flags enabled so WebGL still renders correctly without a real GPU.
+
+The project's flake bar is `--repeat-each=20` with **zero retries configured anywhere** — a failure is
+a failure, not something a retry is allowed to paper over. Run to a clean, quiet result, that bar has
+caught real, load-independent bugs rather than timing noise: the line-candidate ranking bug described
+under actionability; a `.not.toHaveView()` matcher that could be satisfied merely by the map still
+being in motion (visible only on a slower rendering pipeline, since a fast one had usually already
+finished its ease-out by the time the check ran — fixed by requiring the camera to be genuinely at
+rest in both the affirmative and the negated form of the check); and the animated-source identity edge
+case described under identity. On a fully quiet machine, the complete suite at the time of writing
+passes **5,540 of 5,540 tests at `--repeat-each=20`, zero flakes, zero retries.** The same suite has
+also been run through hosted Linux continuous integration (software rendering, no GPU, few CPU cores),
+which is measurably slower — the base suite alone runs in on the order of 20 minutes there versus about
+two and a half minutes locally — and which found two more, purely hardware-driven issues invisible on a faster
+machine: a terrain test whose elevation fixture could not be encoded fast enough to let the map settle
+within its timeout (addressed by the reduced maximum zoom described under terrain), and a
+high-device-pixel-ratio mobile emulation test that rendered close enough to its timeout to occasionally
+cross it under software rendering, addressed by giving that specific test a longer allowance.
+
+## The agent layer: text snapshot and accessibility mirror
+
+A browser-driving agent gets essentially nothing from a page's accessibility tree where a MapLibre
+canvas sits: an empty, unlabelled region. Two ways to fix that were built, both delivered the same way
+the rest of the library is delivered — an injected script, no custom protocol server required.
+
+**A text snapshot** is a compact, structured description of the map: the current view and bounds,
+each layer with whether it currently has content, is empty, or is hidden (plus its source type), and a
+list of entities. Design rules, in order of what mattered most in practice:
+
+- Related layers are folded into one entity line (a circle, its label, and its outline, presented as
+  one thing under its primary layer) rather than listed three times.
+- Every listed entity carries a pixel that has been *verified* clickable by the same actionability
+  machinery real actions use — or, if none exists, a reason why not (covered by another feature,
+  covered by DOM, or off-screen) — rather than a geometric guess that might not actually be clickable.
+- Entities are ordered nearest to the view centre first, and the whole list respects a character
+  budget (a few thousand characters by default): the per-layer cap shrinks progressively until the
+  snapshot fits, hit-test results are cached so shrinking costs nothing extra, and a hard cut with an
+  explicit notice is the last resort if nothing else fits. What survives the cut is individual rows,
+  never the summary counts or the value histogram of what did not make the cut — the histogram
+  deliberately covers the *whole* layer, not only the truncated remainder, so nothing has to be added
+  together across two different lists to get an honest count.
+- A `filter` option narrows the listing to entities matching a query — the tool for finding one entity
+  among thousands of look-alikes without reading the whole layer.
+- For layers backed by a GeoJSON source, the snapshot can additionally report what exists but is
+  currently outside the viewport, with a compass direction toward it, and what is inside the viewport
+  but not drawn as an individually addressable thing (clustered, or hidden by symbol collision).
+- The evaluated paint color for a feature (or for a whole layer, when the color is not data-driven)
+  is included, specifically so a question like "which one is drawn red" can be answered from the
+  snapshot text rather than requiring a screenshot.
+
+**An accessibility mirror** takes a different approach: it places one invisible, real `<button>`
+element per entity inside the map's own DOM container, at that entity's verified clickable pixel, and
+reconciles those buttons by the same entity identity key used elsewhere so they survive across
+re-renders. An ordinary accessibility snapshot then lists these buttons with descriptive names, exactly
+like any other page control, and an ordinary click on one is a genuine click that bubbles into the map
+precisely as a click on a real DOM marker would. This mirrors an idea used by Flutter's web renderer,
+which maintains a parallel, hidden DOM "semantics" tree specifically so accessibility tooling can
+interact with canvas content it otherwise cannot see. The mirror needs no special instructions for an
+agent to use it, since it looks like an ordinary accessible page — but it has real costs: it mutates
+the application's own DOM (so it has to be excluded, deliberately, from the ordinary DOM-cover check
+used by real actions, and it stays off by default outside agent-specific runs), it only updates when
+the map reaches idle, so it can go visibly stale during an animation, the invisible buttons can
+intercept hover from whatever is genuinely underneath them, and a dense map needs an explicit cap on
+how many buttons get created.
+
+A handful of short, directional comparisons (single runs per condition, not a statistically meaningful
+sample, and reported here only as evidence for a design choice rather than as a benchmark) informed
+which of these two approaches, if either, is worth defaulting to. Given only ordinary browser
+automation tools and a short map-specific task, an agent given the text snapshot plus a short amount
+of guidance completed every task correctly using noticeably fewer tool calls and less context than an
+agent with only ordinary tools and vision. A vision-capable agent with no map-specific help at all was
+not helpless on a small, sparse map — it usually found the right pixels by looking — so the value of
+the structured view there was efficiency and completeness (naming things, like road or station names,
+that are never actually rendered as separate labels a vision-only agent could read), not the raw
+ability to finish the task. The gap widened sharply on a dense map with thousands of overlapping
+points and shapes: the snapshot-driven agent still completed every task; a vision-only agent completed
+only one of five, and for several of the others success was impossible for *any* vision-only approach
+by construction, since the requested attribute (a serial number, a zone, an owner) is never drawn
+anywhere and the page under test had no popup to reveal it on click. The one genuinely apples-to-apples
+comparison was a counting task: reading an overlapping pile of dots by eye undercounted the true total
+by roughly a factor of three and a highlighted subset by roughly a factor of five, while the structured
+snapshot read both numbers correctly off a single line. The accessibility mirror, in the same set of
+comparisons, needed no instructions at all but was the slowest of the working approaches, because the
+browser-automation protocol used in these comparisons no longer inlines the accessibility snapshot
+into every response — an agent has to think to go look at it, and tended to reach for a screenshot
+first instead.
+
+One direction considered but not usable at the time of writing: letting a page register its own tools
+for an agent to discover directly (the emerging `navigator.modelContext` web API), which would be the
+most direct integration of all. The API was not yet implemented in the browser versions tested against.
+
+## Testing apps we did not write
+
+Every test described above validates the library against its own demo application, written with the
+library's own assumptions baked in from the start — which is exactly the bias worth removing before
+trusting the design. A separate suite instead targets applications nobody working on this library
+wrote: MapLibre's own official examples, and small applications built by others on top of community
+wrapper libraries around MapLibre (React, Svelte, and Vue).
+
+Every one of these applications is vendored as **upstream plus exactly one added line** — the same
+one-line registration hook described earlier, and nothing else. For the official examples this is
+verified mechanically: a script re-fetches the pinned upstream release tag and confirms the diff
+against the vendored copy is still exactly one added line, for every example, so nothing can quietly
+drift out of sync with what upstream actually publishes. The wrapper applications get the same
+treatment by hand, with the exact upstream version recorded per application. Nothing in any of these
+applications was bent to fit the testing library: where something was awkward, the library's own
+adapter changed, or the friction was written down as a known limitation — never the vendored
+application. No network reaches outside these tests either; a routing layer answers everything each
+application fetches, and an unanswered request fails the test naming the URL, which is also how a
+newly vendored application's missing fixtures get discovered in the first place.
+
+**Real basemaps could not simply be copied into the repository, and this was treated as a design
+constraint rather than an inconvenience to route around.** A large share of these examples use a
+basemap built from OpenStreetMap data — OSM's own data license (ODbL) imposes share-alike obligations
+on anyone redistributing it, and a common cartographic *design* built on that data ("OSM Bright" and
+its derivatives) is separately licensed CC-BY, requiring attribution that a bare test fixture would not
+carry correctly. Others use commercial vendor tiles under proprietary terms. None of that can be
+committed as a plain binary fixture in good conscience. One basemap genuinely can be, and is: a small,
+recorded extract of `demotiles.maplibre.org`, whose data (Natural Earth) and style are both
+permissively licensed (BSD-3-Clause). Every other basemap an example needs is instead **synthetic but
+contract-faithful**: the same request URLs, the same source and source-layer names, the same layer ids
+an example's own code refers to, a real sprite and glyphs, built around a generated dataset (a small
+synthetic city — a street grid, buildings with heights, a lake, a park, points of interest, and labels)
+cut into genuine vector tiles on the fly. A terrain elevation fixture is likewise a synthetic ridge,
+encoded as real elevation-tile imagery. Nothing about the *code path* under test is faked — only the
+geographic content is invented, which is the one thing licensing actually restricts. This buys a
+legally uncomplicated fixture at a real cost in realism: a synthetic basemap has on the order of twenty
+layers where a real basemap style commonly has well over a hundred, and label density is correspondingly
+much lower — occlusion caused by dense basemap labelling, expected going in to be a significant source
+of friction, was as a result barely exercised.
+
+### Scoreboard
+
+31 applications not written for this project — 23 official MapLibre examples, 3 React (react-map-gl)
+applications, 2 Svelte (svelte-maplibre-gl) applications, and 3 Vue (vue-maplibre-gl) applications —
+covering 130 specs in total:
+
+| app | specs | result |
+|---|---|---|
+| create-a-hover-effect | 3 | after a library fix (bounded search; verified action point; feature state) |
+| create-and-style-clusters | 4 | untouched |
+| display-buildings-in-3d | 4 | after a library fix (fill-extrusion lift) |
+| 3d-terrain | 5 | after a library fix — of the snapshot only; every action was already right |
+| create-a-heatmap-layer | 5 | untouched (heatmap is always "visible": documented, by design) |
+| filter-within-a-layer | 5 | untouched — and the upstream example itself is broken; the specs pin that down |
+| show-polygon-information-on-click | 5 | untouched |
+| select-features-with-boxzoomend-callback | 5 | after a library fix (drag modifiers) |
+| filter-symbols-by-toggling-a-list | 5 | after a library fix (id-less identity; missing-icon message) |
+| filter-symbols-by-text-input | 4 | after a library fix (id-less identity) |
+| variable-label-placement | 4 | untouched; needs an extended timeout for the example's own animation |
+| display-a-popup-on-click | 5 | after a library fix (id-less identity) |
+| center-the-map-on-a-clicked-symbol | 4 | after a library fix (id-less and property-less symbols) |
+| animate-a-point | 4 | untouched, with a real limit: a perpetually moving feature can be asserted but never clicked |
+| update-a-feature-in-realtime | 5 | untouched (the map never idles by design) |
+| add-a-canvas-source | 5 | after a library addition (`toHaveLayerPixels`) |
+| animate-a-series-of-images | 5 | untouched (plus one new spec for the new matcher) |
+| create-a-draggable-point | 5 | untouched |
+| measure-distances | 5 | untouched |
+| draw-polygon-with-mapbox-gl-draw | 2 | untouched library; the fixture (a bundled third-party dependency) was the hard part |
+| draw-geometries-with-terra-draw | 6 | untouched |
+| display-a-globe-with-a-vector-map | 5 | after a library fix (globe viewport query) |
+| display-a-globe-with-a-fill-extrusion-layer | 6 | after a library fix (globe extrusion query) |
+| react-map-gl / controls | 4 | untouched (React-rendered markers and popups) |
+| react-map-gl / geojson | 4 | after a library fix (snapshot colour reporting) |
+| react-map-gl / filter | 5 | after a library fix (nested property values in the snapshot) |
+| svelte-maplibre-gl / hover-styles | 3 | after a library addition (querying by layer type / source) |
+| svelte-maplibre-gl / clusters | 3 | after a library fix (a map positioned below the fold) |
+| vue-maplibre-gl / filter | 2 | after a library fix (world copies) |
+| vue-maplibre-gl / geojson | 1 | untouched |
+| vue-maplibre-gl / marker-popup | 2 | untouched |
+
+**31 apps, 130 specs. Worked untouched: 15 (48%). Worked after a library fix or addition: 16 (52%).
+Could not be tested at all: 0.** That zero deserves its caveats stated alongside it, honestly: some
+applications were excluded before ever being tried, purely on licensing grounds (one video-based
+example with no license found for its video asset; anything that would otherwise need real OSM or
+commercial vendor tiles ran against the synthetic basemaps described above instead). And every fix
+behind the 52% figure was made by people who could see both the failing test and the library's source
+at the same time, on the same day — an outside team hitting "three markers silently counted as one" or
+"hovering does nothing on a map positioned below the fold" would more plausibly have filed a bug, or
+given up, than fixed the library themselves. The honest reading of this scoreboard is not "0% failure
+rate"; it is that roughly half of unmodified real applications exposed a real gap, which is a
+reasonably direct measure of how much bias toward the project's own demo application this exercise
+removed.
+
+**Library changes this forced**, each backed by a dedicated spec or unit test: lifting fill-extrusion
+action points toward the roof and walls; splitting id-less, property-identical features by on-screen
+contact, plus the world-copy and re-rendering-generation fixes for the same identity problem; bounding
+and re-ranking the candidate search so a large, mostly-covered shape stays fast; correcting the
+resolved-feature coordinate to be the *verified* action point rather than an unverified geometric
+guess; no longer treating an invisible feature as an occluder; the globe viewport-query workaround;
+honoring input modifiers (such as a held Shift key) during drag gestures; querying layers by their type
+or source rather than only by id, for wrapper libraries that generate layer ids programmatically;
+scrolling a map positioned below the fold into view before acting on it, rather than silently acting on
+the wrong screen location; `toHaveLayerPixels` for layers with no individually addressable features;
+better handling in the snapshot for nested property values, layers with no features to be "empty of,"
+terrain and projection state, evaluated color, and per-feature state; and naming a missing icon image
+explicitly rather than leaving it indistinguishable from an ordinary label collision.
+
+**What needed no library change at all** is worth recording alongside the fixes, since it is just as
+informative: clustered sources with no feature ids of their own; feature-state-driven hover styling;
+framework-rendered markers and popups (found correctly by location, with popups correctly anchored); a
+map registered later than the very start of the test, once a wrapper's own load callback finally fires
+(an ordinary retry against "no map registered yet" handles this with no special case); application-level
+asynchronous data flow (fetch, then compute, then update the map's data — ordinary retrying assertions
+simply wait it out); and terrain in general, where the globe's near-side round-trip check turned out to
+already be exactly the right check for "is this point hidden behind a ridge," with no terrain-specific
+code needed.
+
+## Version compatibility
+
+The adapter was written against MapLibre GL JS 6, but most production applications run an older major,
+and many still run Mapbox GL JS v1 (BSD-licensed up to 1.13; v2 and later are proprietary and are
+deliberately neither installed nor tested). A version matrix runs one small page and one core set of
+specs — assert, act, occlusion, visibility, pixel probe, snapshot, markers and popups, vector tiles,
+camera and geometry, off-screen source data — against Mapbox GL JS 1.13 and MapLibre 2, 3, 4, 5 and 6,
+installed side by side under npm aliases. It has its own Playwright config and CI job so that it cannot
+slow down the flake bar of the main suite.
+
+On first contact 50 of 54 tests passed; the API family is that stable. What the four failures taught:
+
+- **Feature-detect, never version-sniff.** `getLayersOrder()` (MapLibre 3+) falls back to the layer list
+  of `getStyle()`; `GeoJSONSource.getData()` (4+) falls back to `serialize()`, which echoes what the
+  application passed in — the data object, or only its URL, in which case off-screen features are as
+  unknowable as for a tiled source, and the adapter says so; `getProjection()`, `getGlobalState()`,
+  `getTerrain()` are optional calls. Marker and popup CSS classes are `mapboxgl-…` on the v1 family.
+- **The pixel probe without `redraw()`.** Mapbox GL JS v1 has no public synchronous render. The same
+  read-back works inside the public `render` event, which fires in the task that drew the frame:
+  `triggerRepaint()`, read on `render`, hide the layer, repeat. That costs three REAL frames, and the
+  frame without the layer can reach the screen (a one-frame flicker) — so the seam method may now
+  return a promise, and an adapter on such a version lists the difference among its caveats.
+- **A matcher bug only an old version could show.** `toBeVisibleOnMap()` assigned its verdict after
+  the paint check and again after the pixel probe; when the probe THREW (no `redraw()`), the paint
+  check's "visible" was left standing and the matcher passed at its deadline without ever having looked
+  at a pixel. The verdict is now assigned once, after every check has run, and an exception is a "no".
+  A capability that silently degrades is the failure mode to fear in a version matrix; this was one.
+
+What an old version cannot do is reported by the adapter's `caveats()` — printed once in failure
+diagnostics and in the snapshot — never answered with a guess. The bundled style-spec evaluator being
+NEWER than an old style is harmless (old expressions are a subset); the reverse case is the
+unsupported-expression caveat described under visibility. Globe, terrain, touch, drawing tools and the
+third-party applications are exercised on MapLibre 6 only; the support table in the README says
+"not in the matrix" for them rather than "✓".
+
+## Costs and known limitations
+
+Measured on a quiet machine (single test worker, software rendering, medians of repeated runs), against
+a dense stress page holding roughly 3,240 point features and 415 polygons in view at once:
+
+| operation | cost |
+|---|---|
+| find (match) 3,240 point features | 20 ms |
+| find 415 polygon features (grid-of-candidates each) | 14 ms |
+| find with a property filter (narrowing to ~20 matches) | 9 ms |
+| find with paint-visibility evaluation across all 3,240 features | 15 ms (~5 ms attributable to the evaluation itself) |
+| resolve one action point (includes the two-frame stability wait) | 33 ms |
+| build a full text snapshot | 49 ms |
+| build entity list for the accessibility mirror (capped at 80) | 43 ms |
+| pixel probe, warm | 25–27 ms |
+| globe: full-world initial idle | 2.4 s |
+| globe: click near side / refuse far side / build snapshot | 14 ms / 1.07 s / 70 ms |
+
+At these costs, hit-test-based candidate search was, against an early expectation to the contrary,
+never actually the bottleneck for a dense map — a single point query costs a small fraction of a
+millisecond, and several thousand of them together still land well under 100 ms. The real cost of
+density turned out to be correctness (features with no reachable pixel at all), not speed, which is
+why the ring-candidate mechanism described under actionability exists.
+
+The injected in-page script grew from roughly 22 KB to on the order of 135 KB minified once the
+bundled MapLibre style-spec evaluator (used for paint-visibility checks) was added, injected once per
+page load. This is a real, deliberate size-for-correctness trade, and it carries a version-coupling
+risk worth stating plainly: an application on a MapLibre release newer than the bundled evaluator,
+using a style expression the evaluator does not recognize, will silently fall back to the safe-but-
+weaker answer described earlier ("visible," never a false "invisible") rather than failing outright.
+
+**What is still wrong, as of this writing:**
+
+- A feature that is continuously moving (a perpetually animated point, for example) can be asserted
+  against, but the two-frame stability check will refuse to ever click it — correct, cautious behavior,
+  but stricter than a real user, who could click a slowly moving target without difficulty.
+- A map that intentionally never idles turns an explicit, unconditional wait for idle into a plain
+  timeout, with a generic message rather than one that recognizes the map may be animating on purpose.
+- An action's configured timeout bounds when new *attempts* may start, not the wall-clock duration of
+  one already-in-flight step; under heavy contention a single slow step can run well past the timeout
+  that was requested for the whole action.
+- The default action timeout does not scale automatically alongside a test's own extended timeout
+  setting, so slow-rendering scenarios (terrain, globe, a long intro animation) currently need their
+  timeout raised explicitly rather than inheriting one.
+- The rare "ambiguous instead of unstable" mislabeling described under identity remains unresolved, and
+  identity disambiguation by asking the source directly only works for GeoJSON sources — a vector-tile
+  source cannot be asked this kind of question at all.
+- Two id-less, property-identical shapes that visually touch on screen are still treated as a single
+  feature; contact alone cannot tell them apart.
+- The globe query workaround is a grid-based heuristic, not an exact fix, and a small extrusion
+  positioned awkwardly relative to the query grid can still be missed.
+- Synthetic basemaps under-represent both the label density and the total layer count of a real
+  basemap style, so occlusion caused by dense basemap labelling — expected to be a significant source
+  of friction — has been only lightly exercised so far.
+- On a basemap with many layers, the text snapshot's character budget can be spent describing basemap
+  layers before it reaches an application's own layers, without yet prioritizing the layers a caller is
+  more likely to care about.
+- Touch input (tap, one-finger drag, double tap, pinch, two-finger rotate) is covered, including under
+  mobile device emulation at a fractional device pixel ratio; drawing tools have not been exercised
+  under touch input at all.

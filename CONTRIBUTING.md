@@ -25,10 +25,28 @@ npx playwright test            # e2e (demo app + wild apps) and unit tests
 npm run typecheck
 bash scripts/kill-preview.sh   # stop THIS repo's servers (never pkill by pattern on a shared machine)
 ```
-Design decisions, dead ends and mistakes are recorded candidly in `the design notes`; read the relevant
-phase before re-opening a settled question. API changes update `README.md` (API reference table)
+Design decisions, dead ends and the evidence behind them are recorded in `docs/DESIGN.md`; read the
+relevant section before re-opening a settled question. API changes update `README.md` (API reference table)
 and `CHANGELOG.md`.
 
 ## Contributions and licensing
-To be completed when a license is chosen (the license options note). Expected: inbound = outbound,
-with a DCO sign-off (`git commit -s`).
+geowright is licensed under [Apache-2.0](LICENSE). Contributions are accepted under the same terms
+(**inbound = outbound**, Apache-2.0 §5): by submitting a change you license it to the project and its
+users under Apache-2.0, including the patent grant in §3. There is **no CLA**.
+
+Every commit must carry a **Developer Certificate of Origin** sign-off — `git commit -s`, which adds
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+By signing off you certify the [DCO 1.1](https://developercertificate.org/): that you wrote the change or
+otherwise have the right to submit it under the project's license. Use a real name (a GitHub `noreply`
+address is fine). Commits without a sign-off are not merged.
+
+- Do not add SPDX or license headers to files under `wild/` — they are other people's files, kept as
+  upstream wrote them, under their own licenses.
+- New files of ours need no header; the repository-level `LICENSE` covers them.
+- If a change makes esbuild bundle a new package into the injected scripts, `npm run build` lists it in
+  `dist/THIRD_PARTY_LICENSES.txt` by itself; add its attribution to `NOTICE` and a row to
+  `docs/THIRD_PARTY_NOTICES.md`.

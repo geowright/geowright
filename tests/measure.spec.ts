@@ -2,7 +2,7 @@ import { test } from './fixtures';
 import { geowright } from '../src/playwright';
 
 /**
- * Timings for the design notes — NOT part of the suite: runs only with GEOWRIGHT_MEASURE=1, one worker.
+ * Timings for docs/DESIGN.md — NOT part of the suite: runs only with GEOWRIGHT_MEASURE=1, one worker.
  *   uptime && GEOWRIGHT_MEASURE=1 npx playwright test tests/measure.spec.ts --workers=1
  * Check `uptime` first: every an earlier phase number was taken at load 60–300 and was an upper bound.
  */

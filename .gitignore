@@ -10,3 +10,7 @@ agent/runs/
 wild/maplibre-examples/.upstream/
 # prebuilt third-party apps ARE committed (tests must not need a second npm install)
 !wild/apps/*/dist/
+
+# the export script output: the would-be public tree (never committed here)
+.public-export/
+.scratch/

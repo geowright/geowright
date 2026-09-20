@@ -15,7 +15,7 @@ licenses, each made testable with **the one-line hook and nothing else**:
 | `apps/` | real open-source apps (React / Svelte / Vue wrappers), source + prebuilt `dist/` | see each app's LICENSE | `/apps/<name>/` |
 | `fixtures/` | everything the apps fetch from the network, answered by `page.route` | `fixtures/SOURCES.md` | never served by `serve.mjs`; the tests own the network |
 
-Rules (from the handoff notes, an earlier phase): permissive licenses only, license files kept; the apps are not bent
+Rules: permissive licenses only, license files kept; the apps are not bent
 to fit the library — when something is awkward the LIBRARY changes, or the friction is written down;
 no network in tests: an unanswered external request aborts and fails the test, listing the URL.
 
