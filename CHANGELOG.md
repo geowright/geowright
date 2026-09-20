@@ -16,6 +16,17 @@ Not published; versions start when the package does. Until then this lists what 
 - Unsupported style expressions are reported once (`note: visibility unknown for layer …`) instead of
   silently counting as visible.
 - `vectorTileHandler()` exported from `geowright/tiles`.
+- Features with no id and identical properties are separate features (split by where they are drawn; world
+  copies folded). Before: merged into one.
+- Globe projection: viewport-wide queries are answered by a grid of box queries + near-side check, and
+  fill-extrusions by a point sweep — works around MapLibre 6.10 returning a fraction of what is visible.
+- Queries: `layerType`, `source` (for wrapper-generated layer ids).
+- Actions scroll the map into the browser viewport first; a part of the map outside the window is reported.
+- Drags (`dragAt`, `dragTo`, `dragBy`) honour `modifiers` (they were silently dropped).
+- An invisible feature on top is not an occluder. `map.marker()` / `map.popup()` Locators are pinned to their
+  element (custom selector engine) instead of `css >> nth(i)`.
+- New: `expect(map).toHaveLayerPixels()`, `map.touchDragAt()`, `map.doubleTapAt()`, `viewState().projection` /
+  `.terrain`; failure text names a missing icon image; `toHaveGeometry` validates vertex lists.
 
 ## an earlier phase (2026-09-20)
 - **BREAKING** queries match VISIBLE features by default (`visible: 'any'` opts out).
