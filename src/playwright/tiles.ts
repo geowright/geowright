@@ -1,4 +1,5 @@
 import type { Page } from '@playwright/test';
+import type { FeatureCollection } from 'geojson';
 import { GeoJSONVT } from '@maplibre/geojson-vt';
 import { fromGeojsonVt } from '@maplibre/vt-pbf';
 
@@ -14,7 +15,7 @@ import { fromGeojsonVt } from '@maplibre/vt-pbf';
 export async function routeVectorTiles(
   page: Page,
   urlPattern: string | RegExp,
-  layers: Record<string, GeoJSON.FeatureCollection>,
+  layers: Record<string, FeatureCollection>,
   opts: { maxZoom?: number } = {},
 ): Promise<void> {
   const indexes = Object.entries(layers).map(([name, data]) => [name, new GeoJSONVT(data, { maxZoom: opts.maxZoom ?? 14, indexMaxZoom: 5, buffer: 64 })] as const);

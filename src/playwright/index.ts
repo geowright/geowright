@@ -1,5 +1,6 @@
 import { expect as baseExpect, test, type Page } from '@playwright/test';
-import { buildSync } from 'esbuild';
+import { existsSync } from 'node:fs';
+import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import type {
   ActionPointOptions,
@@ -43,17 +44,25 @@ const show = (q: FeatureQuery) =>
 
 /* ------------------------------------------------------------------ in-page bundle */
 
-let inpageSource: string | undefined;
-function getInpageSource(): string {
-  // Spike: bundle on the fly (once per worker). A published package would ship a prebuilt file.
-  inpageSource ??= buildSync({
-    entryPoints: [fileURLToPath(new URL('../inpage/index.ts', import.meta.url))],
-    bundle: true,
-    format: 'iife',
-    target: 'es2022',
-    write: false,
-  }).outputFiles[0].text;
-  return inpageSource;
+let inpageSource: Promise<string> | undefined;
+/**
+ * Source of the in-page adapter. A packed build ships it prebuilt next to this module
+ * (dist/inpage.js). Running from the repo, it is bundled on the fly with esbuild.
+ */
+function getInpageSource(): Promise<string> {
+  return (inpageSource ??= (async () => {
+    const prebuilt = fileURLToPath(new URL('./inpage.js', import.meta.url));
+    if (existsSync(prebuilt)) return readFile(prebuilt, 'utf8');
+    const { build } = await import('esbuild');
+    const out = await build({
+      entryPoints: [fileURLToPath(new URL('../inpage/index.ts', import.meta.url))],
+      bundle: true,
+      format: 'iife',
+      target: 'es2022',
+      write: false,
+    });
+    return out.outputFiles[0].text;
+  })());
 }
 
 /* ------------------------------------------------------------------ options */
@@ -137,7 +146,7 @@ export class MapHandle {
       );
     let res = await run();
     if (res.missing) {
-      await this.page.evaluate(getInpageSource());
+      await this.page.evaluate(await getInpageSource());
       res = await run();
     }
     return (res as { value: T }).value;
