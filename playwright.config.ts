@@ -16,6 +16,10 @@ export const WEBGL_SOFTWARE_FLAGS = [
   '--enable-features=AllowSwiftShaderFallback,AllowSoftwareGLFallbackDueToCrashes',
 ];
 
+// Port is configurable so a CI job on a dedicated runner and a local run on the SAME machine
+// never share (or fight over) one preview server.
+const PORT = Number(process.env.GEOWRIGHT_PORT ?? 4173);
+
 export default defineConfig({
   testDir: 'tests',
   fullyParallel: true,
@@ -24,7 +28,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 7_000 },
   use: {
-    baseURL: 'http://localhost:4173',
+    baseURL: `http://localhost:${PORT}`,
     trace: 'retain-on-failure',
     viewport: { width: 1280, height: 720 },
   },
@@ -36,8 +40,8 @@ export default defineConfig({
   ],
   webServer: {
     // Test the BUILT app: bundled ESM is the realistic (and harder) target.
-    command: 'npm run build:demo && npm run preview',
-    url: 'http://localhost:4173',
+    command: `npm run build:demo && npx vite preview demo --port ${PORT} --strictPort`,
+    url: `http://localhost:${PORT}`,
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
   },
