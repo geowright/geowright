@@ -1,8 +1,12 @@
 name: ci
 
-# Per push: typecheck + the full suite on hosted Linux. The flake check (--repeat-each) lives in
-# flake.yml so that it can never starve this job of its time limit. Use [skip ci] on docs-only /
-# batched commits.
+# Per push: typecheck + build + the full suite, and the version matrix as its own job. The flake check
+# (--repeat-each) lives in flake.yml so that it can never starve this job of its time limit. Use [skip ci] on
+# docs-only / batched commits.
+#
+# WHERE it runs is a repository setting, not something this file knows: by default a GitHub-hosted Linux runner;
+# a repository variable CI_RUNS_ON (a JSON list of runner labels) routes the jobs to another runner, and CI_PORT
+# moves the test servers off the default port when that runner shares a machine with a developer.
 on:
   push:
     branches: [main]
@@ -17,15 +21,16 @@ permissions:
   contents: read
 
 jobs:
-  # Everything is developed on macOS; real-world CI is Linux. Validates the SwiftShader flag set on a
-  # hosted runner, where software GL is ~8x slower than on a desktop machine.
-  linux:
-    runs-on: ubuntu-latest
+  # Everything is developed on macOS; on a hosted Linux runner this validates the SwiftShader flag set where
+  # software GL is ~8x slower than on a desktop machine.
+  suite:
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
     # The suite takes ~21 min here (2 workers). A job that hits its limit is CANCELLED, which looks
     # like neither pass nor fail — keep real headroom.
     timeout-minutes: 45
     env:
       CI: 'true'
+      GEOWRIGHT_PORT: ${{ vars.CI_PORT || '4173' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -37,6 +42,7 @@ jobs:
         id: pw
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
+        if: runner.environment == 'github-hosted' # a persistent runner keeps its browsers on disk
         with:
           path: ~/.cache/ms-playwright
           key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
@@ -44,22 +50,28 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run typecheck
       - run: npm run build
+      - name: Machine load before (a timeout on a busy shared machine is not a verdict)
+        run: uptime
       - name: Full suite
         run: npx playwright test
+      - name: Machine load after
+        if: always()
+        run: uptime
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: linux-test-results
+          name: suite-test-results
           path: test-results/
           retention-days: 5
 
   # The version matrix (Mapbox GL JS 1.13, MapLibre 2-6): one small page, ~60 tests, a few minutes.
   # Its own job and its own Playwright config, so it can never eat into the suite's time limit.
   compat:
-    runs-on: ubuntu-latest
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     env:
       CI: 'true'
+      GEOWRIGHT_PORT: ${{ vars.CI_PORT || '4173' }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -71,6 +83,7 @@ jobs:
         id: pw
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
       - uses: actions/cache@v4
+        if: runner.environment == 'github-hosted' # a persistent runner keeps its browsers on disk
         with:
           path: ~/.cache/ms-playwright
           key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}

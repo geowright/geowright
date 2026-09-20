@@ -17,6 +17,9 @@ permissions:
 
 jobs:
   linux-2x:
+    # Only where CI runs on GitHub-hosted Linux. A repository that routes CI elsewhere (CI_RUNS_ON) has its own
+    # flake check there; the same suite twice on the same machine would add nothing.
+    if: vars.CI_RUNS_ON == ''
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
