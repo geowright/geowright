@@ -1,0 +1,10 @@
+--- upstream/test/examples/animate-a-point.html (v6.10.0)
++++ wild/maplibre-examples/examples/animate-a-point.html
+@@ -25,6 +25,7 @@
+         center: [0, 0],
+         zoom: 2
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     const radius = 20;
+ 

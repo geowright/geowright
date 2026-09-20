@@ -1,0 +1,10 @@
+--- upstream/test/examples/update-a-feature-in-realtime.html (v6.10.0)
++++ wild/maplibre-examples/examples/update-a-feature-in-realtime.html
+@@ -27,6 +27,7 @@
+         style: 'https://tiles.openfreemap.org/styles/bright',
+         zoom: 0
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         // We use D3 to fetch the JSON here so that we can parse and use it separately

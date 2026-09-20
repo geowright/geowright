@@ -1,0 +1,21 @@
+{
+  "private": true,
+  "name": "geowright-wild-svelte-maplibre-gl",
+  "description": "geowright build boilerplate for vendored MIERUNE/svelte-maplibre-gl examples (see UPSTREAM.md). Not upstream.",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "maplibre-gl": "^6.0.0",
+    "svelte-maplibre-gl": "^2.2.1",
+    "bits-ui": "^2.18.1",
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.5.0",
+    "@lucide/svelte": "^1.14.0"
+  },
+  "devDependencies": {
+    "svelte": "^5.46.4",
+    "@sveltejs/vite-plugin-svelte": "^7.3.0",
+    "vite": "^8.2.0"
+  }
+}

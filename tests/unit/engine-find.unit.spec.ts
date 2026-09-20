@@ -127,3 +127,10 @@ test.describe('id-less features with identical properties (found on MapLibre\'s 
     expect(new Engine(makeAdapter([a, b])).find({ layer: 'islands' })).toHaveLength(1);
   });
 });
+
+test('an id-less feature drawn in two WORLD COPIES is one feature (the adapter reports the repeat period)', () => {
+  const copy = (x: number): RenderedFeature => ({ layer: 'quakes', properties: { mag: 5 }, geometry: { type: 'Point', coordinates: [x, 300] } });
+  const adapter = { ...makeAdapter([copy(100), copy(612), copy(1124)]), wrapPx: () => 512 };
+  expect(new Engine(adapter).find({ layer: 'quakes' })).toHaveLength(1);
+  expect(new Engine(makeAdapter([copy(100), copy(612)])).find({ layer: 'quakes' })).toHaveLength(2); // no period known: two things
+});

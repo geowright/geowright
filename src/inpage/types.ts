@@ -102,6 +102,11 @@ export interface CanvasAdapter<W = unknown> {
    */
   lift?(f: RenderedFeature, at: Pt): number;
   /**
+   * Optional: if the surface repeats its content horizontally (a zoomed-out web-mercator map shows the
+   * world several times), the period in pixels. The same feature drawn in two copies is ONE feature.
+   */
+  wrapPx?(): number | undefined;
+  /**
    * Optional: a library-specific reason why a feature that EXISTS in the data is not drawn
    * (MapLibre: "its icon image X is not in the style" — otherwise indistinguishable from a label collision).
    */
@@ -115,7 +120,7 @@ export interface CanvasAdapter<W = unknown> {
    * Optional pixel probe: how much do the surface's pixels around `at` change when `layer` is not
    * drawn? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
    */
-  pixelContribution?(layer: string, at: Pt): number | undefined;
+  pixelContribution?(layer: string, at: Pt, radiusPx?: number): number | undefined;
   /**
    * Optional: DOM things the library positions over the surface (MapLibre: Marker, Popup). They are
    * ordinary elements — tests act on them with ordinary locators — but WHERE they sit is map state.
@@ -152,6 +157,13 @@ export interface WhereOp {
 
 export interface FeatureQuery {
   layer?: string | string[];
+  /**
+   * For apps whose layer ids are GENERATED (svelte-maplibre-gl: `svmlgl-layer-0`, a global counter that
+   * shifts when a layer is added): address layers by what they are instead — their type
+   * ('circle', 'fill', 'symbol', …) and/or their source id. Combined with `layer` they narrow it.
+   */
+  layerType?: string | string[];
+  source?: string | string[];
   id?: string | number;
   where?: Record<string, WhereValue | WhereOp>;
   /** Only features rendered under this world location (hit test). Disambiguates e.g. vertex handles. */

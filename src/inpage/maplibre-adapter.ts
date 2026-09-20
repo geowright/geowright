@@ -225,6 +225,13 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     return metres > 0 ? height * (10 / metres) * Math.sin((pitch * Math.PI) / 180) : 0;
   }
 
+  wrapPx(): number | undefined {
+    if (this.map.getProjection?.()?.type === 'globe' || !this.map.getRenderWorldCopies()) return undefined;
+    const c = this.map.getCenter();
+    const w = this.map.project([c.lng + 360, c.lat]).x - this.map.project([c.lng, c.lat]).x;
+    return w > 0 && w < this.map.getCanvas().clientWidth * 2 ? w : undefined; // only when a second copy can be on screen
+  }
+
   whyNotRendered(f: RenderedFeature): string | undefined {
     const icon = missingIcon(this.map, f);
     return icon ? `its icon image "${icon}" is not in the style (missing from the sprite / never added): MapLibre draws nothing for it` : undefined;
@@ -241,12 +248,12 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
    * composited (no flicker). Costs three renders (~50ms each on SwiftShader), fires 'styledata'
    * and makes MapLibre reload the layer's source afterwards — a probe, not something to run per poll.
    */
-  pixelContribution(layer: string, at: Pt): number | undefined {
+  pixelContribution(layer: string, at: Pt, radiusPx = 2): number | undefined {
     const canvas = this.map.getCanvas();
     const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as WebGLRenderingContext | null;
     if (!gl || !this.map.getLayer(layer) || this.map.getLayoutProperty(layer, 'visibility') === 'none') return undefined;
     const dpr = canvas.width / canvas.clientWidth;
-    const R = 2; // (2R+1)² device pixels around the point
+    const R = Math.max(1, Math.round(radiusPx)); // (2R+1)² device pixels around the point
     const read = () => {
       this.map.redraw();
       const px = new Uint8Array(4 * (2 * R + 1) ** 2);

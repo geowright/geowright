@@ -927,6 +927,37 @@ export const expect = baseExpect.extend({
    * within one task (nothing is composited, but 'styledata' fires) — it runs once, after the cheap
    * paint check has passed, not on every poll.
    */
+  /**
+   * For layers that have no features to ask about — raster, image, canvas, video, heatmap, hillshade:
+   * does `layer` contribute PIXELS at a location? (The canvas pixels there change when the layer is not
+   * drawn: same same-task redraw + readPixels probe as toBeVisibleOnMap, public API only.) Retries.
+   */
+  async toHaveLayerPixels(received: MapHandle, layer: string, options: { at: LngLat; radiusPx?: number; timeout?: number }) {
+    if (!(received instanceof MapHandle)) throw new Error('toHaveLayerPixels: receiver must be a geowright map handle');
+    const deadline = Date.now() + (options.timeout ?? this.timeout);
+    let pass = false;
+    let why = 'never checked';
+    for (let i = 0; ; i++) {
+      try {
+        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number } } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24);
+        pass = r.ok && r.diff > 0;
+        why = !r.ok ? r.message : r.diff > 0 ? `pixels differ by ${r.diff} with and without the layer` : `hiding the layer changes nothing within ${options.radiusPx ?? 24}px of (${Math.round(r.surface.x)},${Math.round(r.surface.y)})`;
+        if (pass !== this.isNot) break;
+      } catch (e) {
+        why = (e as Error).message.split('\n')[0];
+      }
+      const wait = POLL[Math.min(i + 2, POLL.length - 1)];
+      if (Date.now() + wait >= deadline) break;
+      await new Promise((r) => setTimeout(r, wait));
+    }
+    if (pass === this.isNot) await received._attachFailureScreenshot('map screenshot — toHaveLayerPixels', undefined, [{ ...(await received.clientPoint(options.at).catch(() => ({ x: 0, y: 0 }))), kind: 'target', label: layer }]);
+    return {
+      pass,
+      name: 'toHaveLayerPixels',
+      message: () => `expect(map).${this.isNot ? 'not.' : ''}toHaveLayerPixels(${JSON.stringify(layer)}, { at: ${JSON.stringify(options.at)} })\n\n${why}`,
+    };
+  },
+
   async toBeVisibleOnMap(received: FeatureHandle, options?: { timeout?: number; pixels?: boolean }) {
     if (!(received instanceof FeatureHandle)) throw new Error('toBeVisibleOnMap: receiver must be map.feature(...)');
     const timeout = options?.timeout ?? this.timeout;

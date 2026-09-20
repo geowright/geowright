@@ -24,7 +24,14 @@ export class Engine<W = unknown> {
   /* ---------------- matching ---------------- */
 
   private layersOf(q: FeatureQuery): string[] | undefined {
-    return q.layer === undefined ? undefined : Array.isArray(q.layer) ? q.layer : [q.layer];
+    const list = (v: string | string[] | undefined) => (v === undefined ? undefined : Array.isArray(v) ? v : [v]);
+    const ids = list(q.layer), types = list(q.layerType), sources = list(q.source);
+    if (!types && !sources) return ids;
+    // by what the layer IS (generated ids): resolved against the style on every call, so it follows the app
+    return this.adapter
+      .listLayers()
+      .filter((l) => (!ids || ids.includes(l.id)) && (!types || types.includes(l.type)) && (!sources || (l.source !== undefined && sources.includes(l.source))))
+      .map((l) => l.id);
   }
 
   /** `rendered: false` for features that come from source DATA: paint visibility does not apply. */
@@ -74,7 +81,14 @@ export class Engine<W = unknown> {
   private split(pieces: RenderedFeature[]): RenderedFeature[][] {
     if (pieces.length < 2 || pieces[0].id !== undefined) return [pieces];
     // Sweep along x so that thousands of look-alike points cost n·log n, not n².
-    const boxes = pieces.map((p, i) => ({ i, ...this.box(p) })).sort((a, b) => a.x0 - b.x0);
+    // World copies: the same feature drawn once per visible copy of the world is one feature — fold x by the period.
+    const wrap = this.adapter.wrapPx?.();
+    const fold = (b: ReturnType<Engine<W>['box']>) => {
+      if (!wrap) return b;
+      const shift = Math.floor(b.x0 / wrap) * wrap;
+      return { ...b, x0: b.x0 - shift, x1: b.x1 - shift };
+    };
+    const boxes = pieces.map((p, i) => ({ i, ...fold(this.box(p)) })).sort((a, b) => a.x0 - b.x0);
     const parent = pieces.map((_, i) => i);
     const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
     for (let m = 0; m < boxes.length; m++) {
@@ -100,7 +114,9 @@ export class Engine<W = unknown> {
   }
 
   private touch(a: RenderedFeature, b: RenderedFeature): boolean {
-    const p = this.box(a), q = this.box(b);
+    const wrap = this.adapter.wrapPx?.();
+    const fold = (v: ReturnType<Engine<W>['box']>) => (wrap ? { ...v, x0: v.x0 - Math.floor(v.x0 / wrap) * wrap, x1: v.x1 - Math.floor(v.x0 / wrap) * wrap } : v);
+    const p = fold(this.box(a)), q = fold(this.box(b));
     return p.x0 <= q.x1 + TOUCH_PX && q.x0 <= p.x1 + TOUCH_PX && p.y0 <= q.y1 + TOUCH_PX && q.y0 <= p.y1 + TOUCH_PX;
   }
 
@@ -192,7 +208,19 @@ export class Engine<W = unknown> {
     return second;
   }
 
+  /**
+   * Real input can only reach what is inside the BROWSER viewport. A map further down a scrolling page
+   * (found on svelte-maplibre-gl's docs example: canvas at y=720 of a 720px window) has perfectly good
+   * surface pixels that no mouse can touch. Playwright scrolls a locator into view before acting; so do we.
+   */
+  scrollIntoView(): void {
+    const el = this.adapter.surface();
+    const r = el.getBoundingClientRect();
+    if (r.top < 0 || r.left < 0 || r.bottom > window.innerHeight || r.right > window.innerWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+  }
+
   private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions): ActionPointResult {
+    this.scrollIntoView();
     const groups = [...this.group(q).values()];
     if (groups.length === 0) {
       // Say WHY when the only match is painted invisibly — "not found" would send people hunting.
@@ -219,7 +247,7 @@ export class Engine<W = unknown> {
     const rect = this.adapter.surface().getBoundingClientRect();
     let occluder: RenderedFeature | undefined;
     let domCover: Element | undefined;
-    const skipped = { miss: 0, occluded: 0, dom: 0 };
+    const skipped = { miss: 0, occluded: 0, dom: 0, offview: 0 };
 
     for (const [i, c] of cands.entries()) {
       // Bounded: a big shape that is almost entirely under another layer has thousands of covered
@@ -239,6 +267,10 @@ export class Engine<W = unknown> {
         continue;
       }
       const client = { x: rect.left + c.x, y: rect.top + c.y };
+      if (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight) {
+        skipped.offview++; // the map is bigger than the window: this part of it cannot be reached by a pointer
+        continue;
+      }
       const el = topElementAt(client.x, client.y);
       if (el !== this.adapter.surface()) {
         domCover ??= el ?? undefined;
@@ -259,6 +291,7 @@ export class Engine<W = unknown> {
           `Use { force: true } to click anyway, or { ignoreLayers: ['${occluder.layer}'] }.`,
       );
     }
+    if (skipped.offview) return fail('offscreen', 'the feature is on the map, but that part of the map is outside the browser window (the map is larger than the viewport and cannot be scrolled fully into it)');
     return fail('not-found', 'feature matched but no candidate pixel hit-tests back to it');
   }
 
@@ -511,6 +544,9 @@ export class Engine<W = unknown> {
     const known = this.adapter.listLayers();
     const view = this.adapter.getViewState();
     lines.push(`view: ${JSON.stringify(view, (_k, v) => (typeof v === 'number' ? +v.toFixed(5) : v))}`);
+    if (layers && !layers.length && (q.layerType !== undefined || q.source !== undefined)) {
+      lines.push(`no layer matches ${JSON.stringify({ layer: q.layer, layerType: q.layerType, source: q.source })}. Layers: ${known.map((l) => `${l.id}(${l.type}${l.source ? ',' + l.source : ''})`).join(' ')}`);
+    }
     for (const id of layers ?? []) {
       const info = known.find((l) => l.id === id);
       if (!info) {

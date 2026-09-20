@@ -1,0 +1,10 @@
+--- upstream/test/examples/add-a-canvas-source.html (v6.10.0)
++++ wild/maplibre-examples/examples/add-a-canvas-source.html
+@@ -87,6 +87,7 @@
+         center: [95.899147, 18.088694],
+         style: 'https://demotiles.maplibre.org/style.json'
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     map.on('load', () => {
+         map.addSource('canvas-source', {

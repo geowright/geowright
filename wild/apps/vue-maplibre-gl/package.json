@@ -1,0 +1,18 @@
+{
+  "private": true,
+  "name": "geowright-wild-vue-maplibre-gl",
+  "description": "geowright build boilerplate for vendored indoorequal/vue-maplibre-gl examples (see UPSTREAM.md). Not upstream.",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@indoorequal/vue-maplibre-gl": "^9.0.1",
+    "maplibre-gl": "^6.0.0",
+    "vue": "^3.4.18"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.0",
+    "sass": "^1.104.1",
+    "vite": "^8.2.0"
+  }
+}

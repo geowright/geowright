@@ -1,0 +1,10 @@
+--- upstream/test/examples/animate-a-series-of-images.html (v6.10.0)
++++ wild/maplibre-examples/examples/animate-a-series-of-images.html
+@@ -27,6 +27,7 @@
+         zoom: 5,
+         center: [-75.789, 41.874]
+     });
++    (window.__geowright_maps ??= {}).main = map; // geowright: the one-line test hook (the ONLY change to this file)
+ 
+     const frameCount = 5;
+     let currentImage = 0;

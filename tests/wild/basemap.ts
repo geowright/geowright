@@ -33,6 +33,11 @@ export function brightBasemap(center: [number, number], o: { icons?: string[] } 
   ];
 }
 
+/** The synthetic bright basemap answering for MapTiler's hosted "streets-v2" style (proprietary; vue-maplibre-gl's docs use it with a demo key). */
+export function maptilerStreetsBasemap(center: [number, number]): Routes {
+  return [[/^https:\/\/api\.maptiler\.com\/maps\/streets-v2\/style\.json/, { json: brightStyle() }], ...brightBasemap(center).slice(1)];
+}
+
 /**
  * The same synthetic city behind CARTO's hosted basemap styles (positron / dark-matter / voyager), which
  * the react-map-gl examples use. Their real styles and tiles are CARTO's (OSM data, CARTO terms): not
