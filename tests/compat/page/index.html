@@ -1,0 +1,114 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>geowright compat page</title>
+  <style>
+    html, body { margin: 0; height: 100%; font: 14px system-ui; }
+    #map { position: absolute; inset: 0 0 0 260px; }
+    #side { position: absolute; inset: 0 auto 0 0; width: 240px; padding: 10px; background: #f4f4f4; }
+    #side button { display: block; margin: 6px 0; }
+  </style>
+</head>
+<body>
+  <div id="side">
+    <div>library: <b id="lib"></b> <span id="version"></span></div>
+    <button id="add">add place</button>
+    <button id="remove">remove place</button>
+    <button id="toggle-zones">toggle zones</button>
+    <div>clicked: <span id="clicked" data-testid="clicked">-</span></div>
+    <div>hovered: <span id="hovered" data-testid="hovered">-</span></div>
+  </div>
+  <div id="map"></div>
+  <script type="module">
+    // The SAME page for every version. Old builds are UMD (a global); MapLibre 6 is ESM only.
+    const lib = new URLSearchParams(location.search).get('lib') ?? 'maplibre-gl';
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = `/lib/${lib}/dist/${lib.startsWith('mapbox') ? 'mapbox-gl' : 'maplibre-gl'}.css`;
+    document.head.appendChild(css);
+    let gl;
+    if (lib === 'maplibre-gl') {
+      gl = await import('/lib/maplibre-gl/dist/maplibre-gl-dev.mjs');
+      gl = gl.default ?? gl;
+    } else {
+      await new Promise((ok, err) => {
+        const s = document.createElement('script');
+        s.src = `/lib/${lib}/dist/${lib.startsWith('mapbox') ? 'mapbox-gl' : 'maplibre-gl'}.js`;
+        s.onload = ok; s.onerror = () => err(new Error('cannot load ' + s.src));
+        document.head.appendChild(s);
+      });
+      gl = window.maplibregl ?? window.mapboxgl;
+    }
+    document.getElementById('lib').textContent = lib;
+    document.getElementById('version').textContent = gl.version ?? (typeof gl.getVersion === 'function' ? gl.getVersion() : '');
+
+    const pt = (id, lng, lat, properties) => ({ type: 'Feature', id, properties, geometry: { type: 'Point', coordinates: [lng, lat] } });
+    const box = (id, w, s, e, n, properties) => ({ type: 'Feature', id, properties, geometry: { type: 'Polygon', coordinates: [[[w, s], [e, s], [e, n], [w, n], [w, s]]] } });
+    const places = [
+      pt(1, 34.76, 32.06, { name: 'Alpha', kind: 'cafe' }),
+      pt(2, 34.80, 32.08, { name: 'Bravo', kind: 'cafe' }),
+      pt(3, 34.84, 32.06, { name: 'Charlie', kind: 'shop' }),
+      pt(4, 34.78, 32.11, { name: 'Delta', kind: 'shop' }),
+      pt(5, 34.86, 32.11, { name: 'Echo', kind: 'shop' }),   // lies under the "cover" polygon
+      pt(7, 35.60, 32.40, { name: 'Golf', kind: 'cafe' }),   // far outside the initial view
+    ];
+    const fc = (features) => ({ type: 'FeatureCollection', features });
+
+    const map = new gl.Map({
+      container: 'map',
+      center: [34.80, 32.08],
+      zoom: 11,
+      // (mapbox-gl v1 accepts and ignores unknown options)
+      fadeDuration: 0,
+      attributionControl: false,
+      style: {
+        version: 8,
+        glyphs: '/glyphs/{fontstack}/{range}.pbf',
+        sources: {
+          places: { type: 'geojson', data: fc(places) },
+          zones: { type: 'geojson', data: fc([box(10, 34.70, 32.02, 34.74, 32.05, { zone: 'north', use: 'park' }), box(11, 34.88, 32.02, 34.92, 32.05, { zone: 'south', use: 'industry' })]) },
+          cover: { type: 'geojson', data: fc([box(20, 34.845, 32.10, 34.875, 32.12, { what: 'cover' })]) },
+          roads: { type: 'geojson', data: fc([{ type: 'Feature', id: 30, properties: { ref: 'R1' }, geometry: { type: 'LineString', coordinates: [[34.70, 32.14], [34.80, 32.15], [34.92, 32.14]] } }]) },
+          ghosts: { type: 'geojson', data: fc([pt(40, 34.80, 32.03, { name: 'Ghost' })]) },
+          parcels: { type: 'vector', tiles: [location.origin + '/vt/parcels/{z}/{x}/{y}.pbf'], minzoom: 0, maxzoom: 14 },
+        },
+        layers: [
+          { id: 'bg', type: 'background', paint: { 'background-color': '#e8eef2' } },
+          { id: 'parcels', type: 'fill', source: 'parcels', 'source-layer': 'parcels', paint: { 'fill-color': '#9575cd', 'fill-outline-color': '#4527a0' } },
+          { id: 'zones', type: 'fill', source: 'zones', paint: { 'fill-color': ['match', ['get', 'use'], 'park', '#43a047', '#8d6e63'], 'fill-opacity': 0.8 } },
+          { id: 'roads', type: 'line', source: 'roads', paint: { 'line-color': '#f9a825', 'line-width': 6 } },
+          { id: 'places', type: 'circle', source: 'places', paint: { 'circle-radius': 9, 'circle-color': ['match', ['get', 'kind'], 'cafe', '#d32f2f', '#1976d2'], 'circle-stroke-width': 2, 'circle-stroke-color': '#fff' } },
+          { id: 'place-labels', type: 'symbol', source: 'places', layout: { 'text-field': ['get', 'name'], 'text-font': ['Noto Sans Regular'], 'text-size': 13, 'text-offset': [0, 1.4], 'text-allow-overlap': true } },
+          { id: 'ghosts', type: 'circle', source: 'ghosts', paint: { 'circle-radius': 12, 'circle-color': '#000', 'circle-opacity': 0 } },
+          { id: 'cover', type: 'fill', source: 'cover', paint: { 'fill-color': '#455a64' } },
+        ],
+      },
+    });
+    (window.__geowright_maps ??= {}).main = map;   // the one-line hook
+
+    const show = (id, text) => (document.getElementById(id).textContent = text);
+    map.on('click', 'places', (e) => show('clicked', `places:${e.features[0].properties.name}`));
+    map.on('click', 'zones', (e) => show('clicked', `zones:${e.features[0].properties.zone}`));
+    map.on('click', 'parcels', (e) => show('clicked', `parcels:${e.features[0].properties.parcel}`));
+    map.on('mousemove', 'places', (e) => show('hovered', e.features[0].properties.name));
+    map.on('mouseleave', 'places', () => show('hovered', '-'));
+
+    map.on('load', () => {
+      const popup = new gl.Popup({ closeButton: false }).setText('Marker popup');
+      new gl.Marker().setLngLat([34.72, 32.11]).setPopup(popup).addTo(map);
+    });
+    document.getElementById('add').onclick = () => {
+      places.push(pt(6, 34.74, 32.08, { name: 'Foxtrot', kind: 'cafe' }));
+      map.getSource('places').setData(fc(places));
+    };
+    document.getElementById('remove').onclick = () => {
+      const i = places.findIndex((p) => p.id === 6);
+      if (i >= 0) places.splice(i, 1);
+      map.getSource('places').setData(fc(places));
+    };
+    document.getElementById('toggle-zones').onclick = () =>
+      map.setLayoutProperty('zones', 'visibility', map.getLayoutProperty('zones', 'visibility') === 'none' ? 'visible' : 'none');
+  </script>
+</body>
+</html>

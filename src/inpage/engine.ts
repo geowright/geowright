@@ -395,10 +395,10 @@ export class Engine<W = unknown> {
    * not drawn? Catches what paint evaluation cannot (transparent icon image, colour identical to
    * what is underneath). Layer-level differential at a pixel that hit-tests to the feature.
    */
-  pixelProbe(q: FeatureQuery): { ok: true; diff: number | undefined; surface: Pt; layer: string } | { ok: false; message: string } {
+  async pixelProbe(q: FeatureQuery): Promise<{ ok: true; diff: number | undefined; surface: Pt; layer: string } | { ok: false; message: string }> {
     const r = this.actionPointOnce(q, {});
     if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
-    return { ok: true, diff: this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
+    return { ok: true, diff: await this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
   }
 
   /* ---------------- failure artefacts ---------------- */

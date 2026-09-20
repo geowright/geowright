@@ -50,13 +50,13 @@ const api = {
   compareGeometry: async (mapId: string, q: any, expected: any, tolerancePx: number) => (await engine(mapId).learnIdentity(q), engine(mapId).compareGeometry(q, expected, tolerancePx)),
   pixelProbe: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).pixelProbe(q)),
   /** Pixel-only layers (raster, image, canvas, video, heatmap, hillshade): how much do the pixels at a location change when the layer is not drawn? */
-  layerPixels: (mapId: string, layer: string, world: any, radiusPx = 24) => {
+  layerPixels: async (mapId: string, layer: string, world: any, radiusPx = 24) => {
     const a = engine(mapId).adapter;
     if (!a.listLayers().some((l) => l.id === layer)) return { ok: false as const, message: `layer "${layer}" does not exist. Layers: ${a.listLayers().map((l) => l.id).join(', ')}` };
     const p = a.project(world);
     const el = a.surface();
     if (p.x < 0 || p.y < 0 || p.x > el.clientWidth || p.y > el.clientHeight) return { ok: false as const, message: 'that location is outside the viewport' };
-    const diff = a.pixelContribution?.(layer, p, radiusPx); // an AREA: imagery is often transparent at any one pixel
+    const diff = await a.pixelContribution?.(layer, p, radiusPx); // an AREA: imagery is often transparent at any one pixel
     return diff === undefined ? { ok: false as const, message: `layer "${layer}" is hidden (visibility: none), or this map cannot be probed` } : { ok: true as const, diff, surface: p };
   },
   armClick: (mapId: string, q: any, opts: any) => engine(mapId).armClick(q, opts),

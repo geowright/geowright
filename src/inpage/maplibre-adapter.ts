@@ -5,6 +5,10 @@ import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedF
 /**
  * MapLibre GL JS adapter. PUBLIC API ONLY — no underscore fields. (MapGrab, the archived prior
  * art, relied on _styleDirty/_frameRequest/_placementDirty/...; that is what we are avoiding.)
+ *
+ * Versions: written against MapLibre GL JS 6, run against 2–6 and Mapbox GL JS 1.13 (the same API
+ * family) by tests/compat. Newer public methods are FEATURE-DETECTED, never version-sniffed, and what
+ * an old version cannot do is said out loud in caveats() instead of being answered wrongly.
  */
 export class MapLibreAdapter implements CanvasAdapter<LngLat> {
   readonly kind = 'maplibre';
@@ -114,7 +118,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     // fill-extrusion on a globe: BOX queries return nothing at all for it (verified: MapLibre's own globe +
     // fill-extrusion example, 3 extrusions plainly drawn, box query 0, point query hits). Only point queries
     // see them, so sweep a grid of points over those layers. A point hit IS the near side: no check needed.
-    const extrusions = (opts.layers ?? this.map.getLayersOrder()).filter((id) => this.map.getLayer(id)?.type === 'fill-extrusion' && this.map.getLayoutProperty(id, 'visibility') !== 'none');
+    const extrusions = (opts.layers ?? this.layerIds()).filter((id) => this.map.getLayer(id)?.type === 'fill-extrusion' && this.map.getLayoutProperty(id, 'visibility') !== 'none');
     if (extrusions.length) {
       const probe = (x: number, y: number) => {
         if (x < 0 || y < 0 || x > w || y > h) return;
@@ -143,8 +147,13 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     const layer = this.map.getLayer(layerId);
     if (!layer) return null;
     const source = this.map.getSource(layer.source) as GeoJSONSource | undefined;
-    if (!source || source.type !== 'geojson' || typeof source.getData !== 'function') return null;
-    const data = await source.getData();
+    if (!source || source.type !== 'geojson') return null;
+    // GeoJSONSource.getData() is MapLibre >= 4. Before that the public way back to the data is serialize(),
+    // which echoes what the app passed in — the object itself, or only its URL (then: unknowable, like tiles).
+    let data: GeoJSON.GeoJSON | string | undefined;
+    if (typeof source.getData === 'function') data = await source.getData();
+    else data = (source.serialize?.() as { data?: GeoJSON.GeoJSON | string } | undefined)?.data;
+    if (!data || typeof data === 'string') return null;
     const feats = data.type === 'FeatureCollection' ? data.features : data.type === 'Feature' ? [data] : [];
     const promoteId = (source as any).promoteId as string | undefined; // public option, echoed on the source
     return feats
@@ -158,8 +167,13 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
       }));
   }
 
+  /** Layer ids, bottom to top. getLayersOrder() is MapLibre >= 3; the style has said the same thing since v1. */
+  private layerIds(): string[] {
+    return typeof this.map.getLayersOrder === 'function' ? this.map.getLayersOrder() : (this.map.getStyle()?.layers ?? []).map((l) => l.id);
+  }
+
   listLayers(): LayerInfo[] {
-    return this.map.getLayersOrder().map((id) => {
+    return this.layerIds().map((id) => {
       const l = this.map.getLayer(id)!;
       return {
         id,
@@ -194,7 +208,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
       const onIdle = () => {
         // 'idle' does not look at tile state of sources that are still fetching after an error
         // retry etc.; areTilesLoaded() is the public belt-and-braces check.
-        if (this.map.areTilesLoaded()) finish(true);
+        if (this.map.areTilesLoaded?.() ?? true) finish(true);
         else this.map.triggerRepaint();
       };
       const timer = setTimeout(() => finish(false), timeoutMs);
@@ -226,7 +240,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
   }
 
   wrapPx(): number | undefined {
-    if (this.map.getProjection?.()?.type === 'globe' || !this.map.getRenderWorldCopies()) return undefined;
+    if (this.map.getProjection?.()?.type === 'globe' || !(this.map.getRenderWorldCopies?.() ?? true)) return undefined;
     const c = this.map.getCenter();
     const w = this.map.project([c.lng + 360, c.lat]).x - this.map.project([c.lng, c.lat]).x;
     return w > 0 && w < this.map.getCanvas().clientWidth * 2 ? w : undefined; // only when a second copy can be on screen
@@ -238,58 +252,100 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
   }
 
   caveats(): string[] {
-    return unparseableProperties().map((p) => `visibility unknown for layer ${p} — unsupported expression (newer than the bundled style-spec evaluator); treated as visible`);
+    const out = unparseableProperties().map((p) => `visibility unknown for layer ${p} — unsupported expression (newer than the bundled style-spec evaluator); treated as visible`);
+    // What THIS version of the map library cannot do (feature-detected). Said once, in diagnostics and the snapshot.
+    if (typeof this.map.redraw !== 'function') out.push('this map library version has no synchronous redraw(): the pixel probe renders through the frame loop instead (three real frames; the frame without the layer may be seen as a one-frame flicker)');
+    if (this.geojsonWithoutData().length) out.push(`source(s) ${this.geojsonWithoutData().join(', ')}: this map library version has no GeoJSONSource.getData() and the source was given a URL — features outside the viewport and full geometries are unknowable (as for tiled sources)`);
+    return out;
+  }
+
+  private geojsonWithoutData(): string[] {
+    const sources = this.map.getStyle()?.sources ?? {};
+    return Object.keys(sources).filter((id) => {
+      const s = this.map.getSource(id) as GeoJSONSource | undefined;
+      return s?.type === 'geojson' && typeof s.getData !== 'function' && typeof (s.serialize?.() as { data?: unknown } | undefined)?.data === 'string';
+    });
   }
 
   /**
    * Pixel probe. A WebGL canvas without preserveDrawingBuffer reads back zeros — except in the
-   * same task as the draw. `redraw()` (public) renders synchronously, so: draw, read, hide the
-   * layer, draw, read, restore, draw. All in one task, so the intermediate frame is never
+   * same task as the draw. `redraw()` (public, MapLibre >= 2) renders synchronously, so: draw, read, hide
+   * the layer, draw, read, restore, draw. All in one task, so the intermediate frame is never
    * composited (no flicker). Costs three renders (~50ms each on SwiftShader), fires 'styledata'
    * and makes MapLibre reload the layer's source afterwards — a probe, not something to run per poll.
+   *
+   * Without redraw() (Mapbox GL JS v1) the same reads happen inside the public 'render' event, which
+   * fires in the task that drew the frame: triggerRepaint(), read on 'render'. Three REAL frames — the one
+   * without the layer can be composited (a one-frame flicker), and it takes as long as three frames take.
    */
-  pixelContribution(layer: string, at: Pt, radiusPx = 2): number | undefined {
+  pixelContribution(layer: string, at: Pt, radiusPx = 2): number | undefined | Promise<number | undefined> {
     const canvas = this.map.getCanvas();
     const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as WebGLRenderingContext | null;
     if (!gl || !this.map.getLayer(layer) || this.map.getLayoutProperty(layer, 'visibility') === 'none') return undefined;
     const dpr = canvas.width / canvas.clientWidth;
     const R = Math.max(1, Math.round(radiusPx)); // (2R+1)² device pixels around the point
-    const read = () => {
-      this.map.redraw();
+    const grab = () => {
       const px = new Uint8Array(4 * (2 * R + 1) ** 2);
       gl.readPixels(Math.round(at.x * dpr) - R, canvas.height - Math.round(at.y * dpr) - R - 1, 2 * R + 1, 2 * R + 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
       return px;
     };
-    const withLayer = read();
-    let without: Uint8Array;
-    try {
-      this.map.setLayoutProperty(layer, 'visibility', 'none');
-      without = read();
-    } finally {
-      this.map.setLayoutProperty(layer, 'visibility', 'visible');
-      this.map.redraw();
+    const difference = (a: Uint8Array, b: Uint8Array) => {
+      let diff = 0;
+      for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
+      return diff;
+    };
+    if (typeof this.map.redraw === 'function') {
+      const read = () => (this.map.redraw(), grab());
+      const withLayer = read();
+      let without: Uint8Array;
+      try {
+        this.map.setLayoutProperty(layer, 'visibility', 'none');
+        without = read();
+      } finally {
+        this.map.setLayoutProperty(layer, 'visibility', 'visible');
+        this.map.redraw();
+      }
+      return difference(withLayer, without);
     }
-    let diff = 0;
-    for (let i = 0; i < withLayer.length; i++) diff += Math.abs(withLayer[i] - without[i]);
-    return diff;
+    const frame = () =>
+      new Promise<Uint8Array | undefined>((resolve) => {
+        const timer = setTimeout(() => (this.map.off('render', onRender), resolve(undefined)), 2000); // a hidden tab renders no frames
+        const onRender = () => (clearTimeout(timer), this.map.off('render', onRender), resolve(grab()));
+        this.map.on('render', onRender);
+        this.map.triggerRepaint();
+      });
+    return (async () => {
+      const withLayer = await frame();
+      let without: Uint8Array | undefined;
+      try {
+        this.map.setLayoutProperty(layer, 'visibility', 'none');
+        without = await frame();
+      } finally {
+        this.map.setLayoutProperty(layer, 'visibility', 'visible');
+        this.map.triggerRepaint();
+      }
+      return withLayer && without ? difference(withLayer, without) : undefined;
+    })();
   }
 
   /**
    * Markers and popups, found by MapLibre's documented CSS classes inside this map's container
    * (there is no public `map.getMarkers()`). A popup's anchor pixel follows from its
    * `maplibregl-popup-anchor-<side>` class: the tip sits on that side of its box.
+   * The class prefix is `mapboxgl-` on Mapbox GL JS v1 and MapLibre 1; MapLibre 2 writes both.
    */
   overlays(): Overlay[] {
     const container = this.map.getContainer();
     const origin = this.map.getCanvas().getBoundingClientRect();
     const out: Overlay[] = [];
-    for (const [kind, selector] of [['marker', '.maplibregl-marker'], ['popup', '.maplibregl-popup']] as const) {
+    const prefix = container.classList.contains('maplibregl-map') ? 'maplibregl' : 'mapboxgl';
+    for (const [kind, selector] of [['marker', `.${prefix}-marker`], ['popup', `.${prefix}-popup`]] as const) {
       const all = [...document.querySelectorAll(selector)];
       all.forEach((el, index) => {
         if (!container.contains(el)) return;
         const r = el.getBoundingClientRect();
         const rect = { x: r.left - origin.left, y: r.top - origin.top, width: r.width, height: r.height };
-        const side = [...el.classList].find((c) => c.startsWith(`maplibregl-${kind}-anchor-`))?.slice(`maplibregl-${kind}-anchor-`.length);
+        const side = [...el.classList].find((c) => c.startsWith(`${prefix}-${kind}-anchor-`))?.slice(`${prefix}-${kind}-anchor-`.length);
         let anchor: Pt | undefined;
         if (side && kind === 'popup') {
           anchor = {
@@ -298,8 +354,8 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
           };
         }
         // innerText-like: the popup's close button ("×") is chrome, not content
-        const text = [...(el.querySelector('.maplibregl-popup-content') ?? el).childNodes]
-          .filter((n) => !(n instanceof Element && n.classList.contains('maplibregl-popup-close-button')))
+        const text = [...(el.querySelector(`.${prefix}-popup-content`) ?? el).childNodes]
+          .filter((n) => !(n instanceof Element && n.classList.contains(`${prefix}-popup-close-button`)))
           .map((n) => n.textContent ?? '')
           .join(' ');
         out.push({ kind, selector, index, rect, anchor, text: text.replace(/\s+/g, ' ').trim().slice(0, 200) });

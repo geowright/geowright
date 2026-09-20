@@ -1,8 +1,10 @@
 # geowright
 
-Grey-box testing for canvas maps in Playwright. First adapter: MapLibre GL JS 6.
-Prototype quality. Design log and honest caveats: the design notes.
-Tested against apps its author did not write — MapLibre's own examples and react-map-gl / Vue / Svelte wrapper apps — in [`wild/`](wild/README.md); the scoreboard is in the design notes (an earlier phase).
+[![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+
+Grey-box testing for canvas maps in Playwright. First adapter: MapLibre GL JS 2–6 and Mapbox GL JS 1.13 ([support table](#supported-map-library-versions)).
+Early, not yet published to npm. Design decisions, the evidence behind them and honest caveats: [docs/DESIGN.md](docs/DESIGN.md).
+Tested against apps its author did not write — MapLibre's own examples and react-map-gl / Vue / Svelte wrapper apps — in [`wild/`](wild/README.md); the scoreboard is in [docs/DESIGN.md](docs/DESIGN.md).
 
 Closes two gaps a DOM-only Playwright suite has on a WebGL map:
 
@@ -230,7 +232,7 @@ npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/
   (a real click that bubbles to the map, like a MapLibre Marker). Zero instructions. Also usable from tests:
   `page.getByRole('button', { name: /Gas leak/ }).click()`.
 
-`agent/mcp-probe.mjs` exercises the whole path without an LLM; results of real agent runs are in the design notes (an earlier phase).
+`agent/mcp-probe.mjs` exercises the whole path without an LLM; results of real agent runs are in docs/DESIGN.md.
 
 ## Vector tiles without a tile server
 
@@ -269,3 +271,46 @@ wild/             apps we did NOT write (MapLibre examples, react-map-gl / Vue /
 tests/            assert / act / draw / draw2 / dense / camera / overlays / artefacts / touch-keyboard / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs; tests/wild = the wild-apps suite; tests/unit = pure-function tests
 agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
 ```
+
+## Supported map library versions
+
+Developed against MapLibre GL JS 6. The same small page and the same core specs run against every major below
+(`npm run test:compat`, `tests/compat/`, its own CI job; 60 tests). "✓" means asserted by that matrix, not assumed.
+Newer public methods are feature-detected, never version-sniffed; what an old version cannot do is said in failure
+diagnostics and in the snapshot (`note: …`) instead of being answered wrongly.
+
+| | Mapbox GL JS 1.13 (BSD) | MapLibre 2 | MapLibre 3 | MapLibre 4 | MapLibre 5 | MapLibre 6 |
+|---|---|---|---|---|---|---|
+| assert: `toHaveFeature`, counts, `where`, `.not` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| act: click / hover / drag on features and locations, click-time verification | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| occlusion by other features and by DOM, `force`, `ignoreLayers` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| visibility from paint evaluation (opacity 0, transparent colour, zero size) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| pixel probe (`toBeVisibleOnMap`, `toHaveLayerPixels`) | ✓ through the frame loop: 3 real frames, may flicker once | ✓ | ✓ | ✓ | ✓ | ✓ |
+| text snapshot, evaluated colours, entities | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| markers and popups (`map.marker`, `map.popup`, `toHavePopup`) | ✓ (`mapboxgl-` classes) | ✓ | ✓ | ✓ | ✓ | ✓ |
+| vector-tile sources, `routeVectorTiles` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| camera (`toHaveView`), `toHaveGeometry` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| off-screen GeoJSON features: diagnostics, snapshot, `autoPan: true` | ✓ if the source was given an object; a URL: unknowable, and said so | same | same | ✓ | ✓ | ✓ |
+| globe projection (far-side refusal, viewport-query workaround) | n/a | n/a | n/a | n/a | not in the matrix | ✓ (main suite) |
+| terrain, fill-extrusion lift, touch, drawing tools, the wild apps | not in the matrix | not in the matrix | not in the matrix | not in the matrix | not in the matrix | ✓ (main suite) |
+
+Mapbox GL JS **v2 and later are proprietary and are not tested** (the v1 API family they share makes it likely that most
+of this works; nobody here may install them to find out). Style expressions newer than the bundled evaluator are reported
+once and treated as visible; styles OLDER than the evaluator are fine.
+
+## Open source, and staying that way
+
+Everything a test verdict depends on is open source under Apache-2.0 and stays that way: the adapter, the engine,
+actionability and click-time verification, the matchers, the snapshot and accessibility mirror, diagnostics and failure
+artefacts, the offline tile tooling, the agent/MCP integration, and adapters. If paid offerings ever exist they will be
+about what happens to results AFTER a run (support, hosted reporting) — never a feature a test needs in order to pass or
+fail correctly.
+
+## License
+
+[Apache-2.0](LICENSE) — Copyright 2026 Shai Sinai. See [NOTICE](NOTICE).
+The scripts injected into the page bundle MapLibre's style-spec expression evaluator (ISC / BSD-3-Clause) and three
+small libraries; their license texts ship in the package as `dist/THIRD_PARTY_LICENSES.txt`, generated from the
+bundler's own input list. Everything else this repo uses or vendors: [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)
+and [`wild/README.md`](wild/README.md). Contributions: inbound = outbound, with a DCO sign-off — see
+[CONTRIBUTING.md](CONTRIBUTING.md).

@@ -16,7 +16,7 @@ export const WEBGL_SOFTWARE_FLAGS = [
   '--enable-features=AllowSwiftShaderFallback,AllowSoftwareGLFallbackDueToCrashes',
 ];
 
-// Port is configurable so a CI job on a dedicated runner and a local run on the SAME machine
+// Port is configurable so a CI job and a local run on the SAME machine
 // never share (or fight over) one preview server.
 const PORT = Number(process.env.GEOWRIGHT_PORT ?? 4173);
 // The "wild apps" suite (apps we did not write, tests/wild) has its own static server: see wild/serve.mjs.
@@ -24,6 +24,7 @@ export const WILD_PORT = Number(process.env.GEOWRIGHT_WILD_PORT ?? PORT + 1);
 
 export default defineConfig({
   testDir: 'tests',
+  testIgnore: 'compat/**', // the version matrix has its own config: playwright.compat.config.ts
   fullyParallel: true,
   retries: 0, // flakes must be visible
   reporter: [['list']],

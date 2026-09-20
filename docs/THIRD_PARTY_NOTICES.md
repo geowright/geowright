@@ -102,6 +102,24 @@ bundled; the consumer supplies their own copy. See §3 for the installed dev cop
 | `@playwright/mcp` | 0.0.82 | Apache-2.0 | Microsoft Corporation | No — agent/dev tooling only (`agent/`) |
 | `@types/node` | 26.6.2 | MIT | `Copyright (c) Microsoft Corporation.` | No — types only |
 
+### Map library versions for the compat matrix (`tests/compat`, devDependencies under npm aliases)
+
+Installed only so that the version matrix can load them in a browser; never bundled, never shipped.
+
+| Alias → package | Version | SPDX | Copyright | Ships in package? |
+|---|---|---|---|---|
+| `mapbox-gl-1` → `mapbox-gl` | **1.13.3, pinned exactly** | BSD-3-Clause (`package.json` says "SEE LICENSE IN LICENSE.txt"; the text was read: 3-clause BSD) | `Copyright (c) 2020, Mapbox` | No |
+| `maplibre-gl-2` … `maplibre-gl-5` → `maplibre-gl` | 2.4.0, 3.6.2, 4.7.1, 5.24.0 | BSD-3-Clause | MapLibre contributors | No |
+
+**mapbox-gl v2 and later are proprietary (Mapbox Terms of Service) and must never be installed here.** The
+unaliased `mapbox-gl` entry in the lockfile is the same 1.13.3, pulled in as the peer of
+`@mapbox/mapbox-gl-supported`, whose peer range is `<2.0.0`. `npm audit` reports an advisory against the old
+MapLibre majors (HTML sanitising in popups): they are test targets loaded from localhost with fixture
+data, which is the point of a version matrix — not fixed, not shipped.
+
+`lightningcss` (MPL-2.0, a dependency of Vite) is the one non-permissive licence in the lockfile: a
+build tool that is executed, never copied, modified or distributed by this project.
+
 ### Fonts (demo app)
 
 | What | License | Source | Ships? |

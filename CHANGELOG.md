@@ -1,7 +1,17 @@
 # Changelog
 
 Not published; versions start when the package does. Until then this lists what changed per phase
-(details and reasoning: `the design notes`). Breaking changes are marked **BREAKING**.
+(details and reasoning: `docs/DESIGN.md`). Breaking changes are marked **BREAKING**.
+
+## Unreleased — an earlier phase (2026-09-20): publishable and broad
+- **Version matrix**: Mapbox GL JS 1.13 (BSD) and MapLibre GL JS 2, 3, 4, 5, 6 — `npm run test:compat`, support table
+  in the README. Adapter: `getLayersOrder` / `GeoJSONSource.getData` / `areTilesLoaded` / `getRenderWorldCopies` are
+  feature-detected with public fallbacks; `mapboxgl-` marker/popup classes; the pixel probe works without `redraw()`
+  (through the `render` event; seam: `pixelContribution` may return a promise); new caveats say what a version cannot do.
+- **Fixed:** `toBeVisibleOnMap()` could pass without having probed a pixel when the probe threw. `{ pixels: true }` now
+  fails, saying so, on a map that cannot be probed at all.
+- Licensed under **Apache-2.0**: `LICENSE`, `NOTICE`; the package ships `dist/THIRD_PARTY_LICENSES.txt`
+  (license texts of what is bundled into the injected scripts, generated from the bundler's input list).
 
 ## Unreleased — an earlier phase (2026-09-20): apps we did not write
 - `wild/` suite: MapLibre's own examples and real open-source apps, vendored with a one-line hook.

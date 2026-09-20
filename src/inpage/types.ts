@@ -119,8 +119,9 @@ export interface CanvasAdapter<W = unknown> {
   /**
    * Optional pixel probe: how much do the surface's pixels around `at` change when `layer` is not
    * drawn? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
+   * May be async: a library that cannot render synchronously has to wait for real frames.
    */
-  pixelContribution?(layer: string, at: Pt, radiusPx?: number): number | undefined;
+  pixelContribution?(layer: string, at: Pt, radiusPx?: number): number | undefined | Promise<number | undefined>;
   /**
    * Optional: DOM things the library positions over the surface (MapLibre: Marker, Popup). They are
    * ordinary elements — tests act on them with ordinary locators — but WHERE they sit is map state.

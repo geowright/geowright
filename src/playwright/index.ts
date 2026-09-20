@@ -972,20 +972,28 @@ export const expect = baseExpect.extend({
       try {
         await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
         const found = await map._find(query);
-        pass = found.length === 1 && found[0].visible;
+        // The verdict is assigned ONCE, after every check has run: a probe that throws must not leave the paint
+        // check's "visible" standing (it did until the version matrix ran this against a map without redraw()).
+        pass = false;
+        let ok = found.length === 1 && found[0].visible;
         why = found.length === 0 ? 'no rendered feature matches' : found.length > 1 ? `strict mode violation: ${found.length} features match` : found[0].visible ? '' : `paint: ${found[0].invisibleBecause}`;
-        if (pass && options?.pixels !== false) {
+        if (ok && options?.pixels !== false) {
           const probe = await map._call<{ ok: true; diff?: number; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query));
           if (!probe.ok) {
-            pass = false;
+            ok = false;
             why = `pixels: no clean point to probe — ${probe.message}`;
           } else if (probe.diff === 0) {
-            pass = false;
+            ok = false;
             why = `pixels: hiding layer "${probe.layer}" changes nothing at (${probe.surface.x},${probe.surface.y}) — it paints nothing a user could see there`;
+          } else if (probe.diff === undefined && options?.pixels === true) {
+            ok = false;
+            why = 'pixels: this map cannot be probed (no WebGL context to read from, or no frame was rendered — a hidden tab?); { pixels: true } asked for ground truth';
           }
         }
+        pass = ok;
         if (pass !== this.isNot) break;
       } catch (e) {
+        pass = false;
         why = (e as Error).message.split('\n')[0];
       }
       const wait = POLL[Math.min(i + 2, POLL.length - 1)];
