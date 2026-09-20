@@ -62,7 +62,7 @@ test.describe('dense map', () => {
 
     const one = await dense.snapshot({ filter: { layer: 'assets', where: { serial: 'SN-92872' } } });
     expect(one).toMatch(/\[assets\] 1 circle entity/);
-    const [, id, x, y] = one.match(/#(\d+) Point @\((\d+),(\d+)\) id=/)!;
+    const [, id, x, y] = one.match(/#(\d+) Point @\((\d+),(\d+)\) drawn \w+\(#\w+\) id=/)!;
     await page.mouse.click(+x, +y);
     await expect(page.getByTestId('selected')).toHaveText(`assets:${id}`);
   });

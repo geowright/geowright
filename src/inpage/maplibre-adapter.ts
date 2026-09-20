@@ -1,5 +1,5 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { paintVisibility } from './maplibre-paint';
+import { paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
 import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
 
 /**
@@ -138,6 +138,14 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
 
   visibility(f: RenderedFeature): Visibility {
     return paintVisibility(this.map, f);
+  }
+
+  colour(f: RenderedFeature) {
+    return paintColour(this.map, f);
+  }
+
+  caveats(): string[] {
+    return unparseableProperties().map((p) => `visibility unknown for layer ${p} — unsupported expression (newer than the bundled style-spec evaluator); treated as visible`);
   }
 
   /**

@@ -490,6 +490,7 @@ export class Engine<W = unknown> {
       if (nearest) lines.push(`  nearest match without "at": ${describe(nearest.f)}, ${Math.round(nearest.d)}px away`);
     }
     if (!layers) lines.push(`rendered layers with features: ${[...new Set(this.adapter.queryFeatures({}).map((f) => f.layer))].join(', ')}`);
+    for (const c of this.adapter.caveats?.() ?? []) lines.push(`note: ${c}`);
     return lines.join('\n');
   }
 
@@ -640,7 +641,11 @@ export class Engine<W = unknown> {
         if (!list) continue;
         const also = [...new Set(list.flatMap((e) => [...e.byLayer.keys()].filter((x) => x !== e.owner)))];
         sec.push('');
-        sec.push(`[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
+        const colours = list.map((e) => this.adapter.colour?.(e.byLayer.get(e.owner)![0]));
+        const driven = colours.some((c) => c?.dataDriven);
+        const constant = !driven && colours[0] ? `, all drawn ${nameColour(colours[0].colour)}` : '';
+        sec.push(`[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}${constant}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
+        if (driven) sec.push(`  ${colours[0]!.property} is data-driven: ${tally(colours.map((c) => (c ? nameColour(c.colour) : 'unknown')))}`);
         for (const e of list.slice(0, cap)) {
           let loc = located.get(e.key);
           if (!loc) located.set(e.key, (loc = this.locate(e)));
@@ -648,7 +653,8 @@ export class Engine<W = unknown> {
           const pt = loc.pixel ?? loc.coveredPixel;
           const pos = pt ? `@(${Math.round(rect.left + pt.x)},${Math.round(rect.top + pt.y)})` : '@(edge: no clickable pixel in view)';
           const invisible = this.entityInvisible(e.byLayer);
-          sec.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${loc.pixel || !pt ? '' : ' ' + loc.blocked}${invisible ? ` NOT-VISIBLE(${invisible})` : ''} ${fmtProps(f.properties, maxProps)}`);
+          const colour = driven ? this.adapter.colour?.(f) : undefined;
+          sec.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${loc.pixel || !pt ? '' : ' ' + loc.blocked}${invisible ? ` NOT-VISIBLE(${invisible})` : ''}${colour ? ` drawn ${nameColour(colour.colour)}` : ''} ${fmtProps(f.properties, maxProps)}`);
         }
         const rest = list.slice(cap);
         if (rest.length) {
@@ -693,6 +699,7 @@ export class Engine<W = unknown> {
       }
     }
     const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && l.sourceType !== 'raster');
+    for (const c of a.caveats?.() ?? []) out.push(`\nnote: ${c}`);
     if (blind.length) out.push(`\nnote: ${blind.map((l) => l.id).join(', ')} use tiled sources; features outside the viewport are unknowable from here.`);
 
     // Budget: shrink the per-layer cap until the text fits; as a last resort cut it, and say so.
@@ -866,6 +873,29 @@ export function histogram(props: Record<string, unknown>[], total: number): stri
     }
   }
   return parts.length ? `Summary of all ${total} — ${parts.join('; ')}` : '';
+}
+
+/** "red×75, green×3100": counts, most frequent first, at most 8 distinct values. */
+export function tally(values: string[]): string {
+  const counts = new Map<string, number>();
+  for (const v of values) counts.set(v, (counts.get(v) ?? 0) + 1);
+  const sorted = [...counts].sort((a, b) => b[1] - a[1]);
+  return sorted.slice(0, 8).map(([v, c]) => `${v}×${c}`).join(', ') + (sorted.length > 8 ? `, … ${sorted.length - 8} more colours` : '');
+}
+
+/** "#d32f2f" -> "red(#d32f2f)": an everyday colour word, because that is how people (and tasks) refer to map symbols. */
+export function nameColour(hex: string): string {
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255);
+  const max = Math.max(r, g, b), min = Math.min(r, g, b), l = (max + min) / 2, d = max - min;
+  const sat = d === 0 ? 0 : d / (1 - Math.abs(2 * l - 1));
+  let name: string;
+  if (sat < 0.2 || d < 0.08) name = l < 0.15 ? 'black' : l > 0.9 ? 'white' : l > 0.65 ? 'light grey' : l < 0.35 ? 'dark grey' : 'grey';
+  else {
+    const hue = (60 * (max === r ? ((g - b) / d + 6) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4) + 360) % 360;
+    const base = hue < 15 || hue >= 345 ? 'red' : hue < 45 ? (l < 0.4 ? 'brown' : 'orange') : hue < 70 ? 'yellow' : hue < 165 ? 'green' : hue < 195 ? 'teal' : hue < 255 ? 'blue' : hue < 290 ? 'purple' : 'pink';
+    name = base === 'brown' ? base : l < 0.3 ? `dark ${base}` : l > 0.75 ? `light ${base}` : base;
+  }
+  return `${name}(${hex})`;
 }
 
 /**

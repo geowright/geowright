@@ -90,6 +90,16 @@ export interface CanvasAdapter<W = unknown> {
    */
   visibility?(f: RenderedFeature): Visibility;
   /**
+   * Optional: the colour the style paints this feature with ("#rrggbb"), and whether it depends on the
+   * feature (data-driven) or is one constant for the layer. Lets the text snapshot answer "the red ones".
+   */
+  colour?(f: RenderedFeature): { property: string; colour: string; dataDriven: boolean } | undefined;
+  /**
+   * Optional: things the adapter could NOT work out and silently answered safely for (e.g. a style
+   * expression newer than the bundled evaluator -> "visible"). Printed once in diagnostics/snapshot.
+   */
+  caveats?(): string[];
+  /**
    * Optional pixel probe: how much do the surface's pixels around `at` change when `layer` is not
    * drawn? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
    */

@@ -6,7 +6,10 @@ test.describe('map snapshot (agent layer)', () => {
     console.log('\n' + snap + '\n');
     expect(snap).toContain('view: center 34.78,32.08 zoom 12');
     expect(snap).toMatch(/\[alerts\] 3 circle entities \(also drawn by: alerts-labels\)/);
-    expect(snap).toMatch(/#1 Point @\(\d+,\d+\) id=1 name="Gas leak" severity="high"/);
+    // the colour the style evaluates to FOR THAT FEATURE: "the red one" needs no screenshot
+    expect(snap).toMatch(/#1 Point @\(\d+,\d+\) drawn red\(#d32f2f\) id=1 name="Gas leak" severity="high"/);
+    expect(snap).toContain('circle-color is data-driven: red(#d32f2f)×1, orange(#f9a825)×1, blue(#1976d2)×1');
+    expect(snap).toMatch(/\[roads\] 2 line entities, all drawn grey\(#6d6d6d\)/); // constant colour: said once per layer
     expect(snap).toContain('[source alerts] 1 feature(s) OUTSIDE the viewport (pan to see them; directions are geographic): #4 to the east at 35.2,32.08');
     expect(snap).toMatch(/\[source stations\] \d+ feature\(s\) are inside the view but not drawn individually/);
     expect(snap).toMatch(/\[parcels\] 6 fill entities \(also drawn by: parcels-outline\)/);
