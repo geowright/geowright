@@ -7,7 +7,7 @@ import { test, expect } from './fixtures';
 test.describe('touch', () => {
   test.use({ hasTouch: true });
 
-  test('tap a feature and tap a location', async ({ map, page }) => {
+  test('tap a feature and tap a location', async ({ map }) => {
     await map.feature({ layer: 'alerts', id: 2 }).tap();
     await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 2 }, text: 'Road closure' });
     await map.tapAt({ lng: 34.735, lat: 32.125 }); // empty ground: the app closes the popup

@@ -2,7 +2,7 @@ import { test, expect } from './fixtures';
 
 /** Real apps mix canvas features with DOM overlays (maplibregl.Marker / Popup). */
 test.describe('DOM markers and popups', () => {
-  test('popup is anchored on the clicked feature, at the clicked location', async ({ map, page }) => {
+  test('popup is anchored on the clicked feature, at the clicked location', async ({ map }) => {
     await expect(map).not.toHavePopup();
     const alert = map.feature({ layer: 'alerts', id: 1 });
     await alert.click();

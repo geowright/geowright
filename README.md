@@ -148,6 +148,47 @@ start/winding-insensitive. Draw helpers are input choreography, not a binding to
 because draw tools disagree. Tested against terra-draw and mapbox-gl-draw. Note: tools with a drag threshold
 (terra-draw: 8px) offset drag-drawn shapes and whole-shape moves by that much — for real users too.
 
+## API reference
+
+`import { geowright, expect, GeowrightError } from 'geowright'` · `import { routeVectorTiles } from 'geowright/tiles'`
+
+**`geowright(page, options?) → MapHandle`** — `mapId` ('main') · `timeout` (10 000 ms, actions/waits; assertions use Playwright's expect timeout) · `ignoreLayers` · `mirror` (boolean | `{ max }`) · `failureScreenshots` (true)
+
+| MapHandle | |
+|---|---|
+| `feature(query)` / `features(query?)` | lazy handles: strict single feature / a set |
+| `waitForIdle({ timeout? })` | map loaded, still, tiles in, nothing to repaint. Cannot see app-level async — use retrying assertions for that |
+| `viewState()` · `layers()` · `snapshot(opts?)` | camera + bounds + size · layer list with source types · text snapshot (`perLayer`, `maxProps`, `layers`, `skipLayers`, `filter`, `maxChars`) |
+| `clickAt` `dblclickAt` `rightClickAt` `hoverAt` `tapAt` `(lngLat, opts?)` | real input at a location; waits until it is in view, on the visible surface, uncovered, map still |
+| `dragAt(from, to, { steps? })` · `wheelAt(lngLat, deltaY)` | press-move-release · wheel with the pointer there |
+| `pinchAt(lngLat, { scale })` · `twoFingerRotateAt(lngLat, { degrees })` | two-finger gestures via CDP — Chromium only |
+| `keyboard.press(key)` | real key press with the map focused |
+| `draw.polygon` `draw.line` `(vertices, { finish, vertexDelay? })` | `finish`: `click-last` (default) `click-first` `dblclick` `enter` `none` |
+| `draw.rectangle(a, b, opts?)` · `draw.circle(center, edge, opts?)` · `draw.cancel()` | `gesture`: `click-move-click` (default) or `drag`; Escape |
+| `marker(where)` · `popup(where?)` → `Promise<Locator>` | DOM overlays as normal Locators; `where`: `{ at?, feature?, tolerancePx? }` |
+| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel |
+
+| FeatureHandle (`map.feature(q)`) | |
+|---|---|
+| `click` `rightClick` `dblclick` `hover` `tap` `(opts?)` | full actionability + click-time verification |
+| `dragTo(lngLat, opts?)` · `dragBy({ dLng, dLat }, opts?)` | drag a handle to a place · move a whole shape |
+| `info()` · `lngLat()` · `geometry()` | resolved `FeatureSummary` (`layer id properties geometryType pixel client lngLat visible invisibleBecause`) · action point as lng/lat · full geometry from the source |
+
+`FeatureSetHandle` (`map.features(q)`): `all()`, `count()` — snapshots, no waiting.
+
+Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
+
+| Matcher (all retry; `.not` supported) | |
+|---|---|
+| `expect(map).toHaveFeature(query, { visible?, timeout? })` | at least one rendered (optionally: visible) feature |
+| `expect(map.features(q)).toHaveFeatureCount(n)` | exactly n |
+| `expect(map.feature(q)).toBeVisibleOnMap({ pixels? })` | one feature, painted by the style AND contributing pixels |
+| `expect(map.feature(q)).toHaveGeometry(expected, { tolerancePx? = 2 })` | GeoJSON geometry · vertex list · `{ circle: { center, edge } }` |
+| `expect(map).toHavePopup({ at?, feature?, text?, tolerancePx? })` | a popup is open and anchored there |
+| `expect(map).toHaveView({ center?, zoom?, bearing?, pitch? }, { zoomTolerance?, degreesTolerance? })` | camera, with the map at rest |
+
+Failures throw `GeowrightError` (actions) or a normal expect failure; both carry "what is on the map" and attach text + an annotated screenshot.
+
 ## Agents (Playwright MCP)
 
 Browser agents get an empty `region "Map"` from the accessibility snapshot. Two ways to fix that, both via
@@ -187,7 +228,7 @@ No network. Inline style, GeoJSON sources, raster tiles fulfilled with `page.rou
 ```sh
 npm i && npx playwright install chromium
 node demo/scripts/copy-worker.mjs      # MapLibre 6 worker files -> demo/public (after a fresh install)
-npx playwright test                    # builds the demo, serves it on :4173, runs headless
+npx playwright test                    # builds the demo, serves it on :4173, runs headless (e2e + tests/unit)
 npx playwright test --repeat-each=20   # the flake bar
 npm run dev                            # poke at the demo app by hand
 bash scripts/kill-preview.sh           # stop THIS repo's preview server so the next run rebuilds the demo

@@ -41,7 +41,6 @@ function engine(mapId: string): Engine<any> {
 }
 
 const api = {
-  has: (mapId: string) => !!(window as any).__geowright_maps?.[mapId],
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
   find: (mapId: string, q: any) => engine(mapId).find(q),
   actionPoint: (mapId: string, q: any, opts: any) => engine(mapId).actionPoint(q, opts),

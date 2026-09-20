@@ -18,7 +18,7 @@ import type {
   SnapshotOptions,
   WhereOp,
   WhereValue,
-} from '../inpage/types';
+} from '../inpage/types.js'; // explicit extension: the published .d.ts must resolve under moduleResolution nodenext
 
 export type { Geometry, GeometryExpectation, LngLat, WhereOp };
 
@@ -478,7 +478,7 @@ export class MapHandle {
     await step(`map.pinchAt(${fmt(at)}, scale ${o.scale})`, async () => {
       const c = await this._pointAt(at, o, 'map.pinchAt');
       const d0 = (o.startDistancePx ?? 120) / 2;
-      await this._twoFingers(c, o.steps ?? 12, (t) => {
+      await this._twoFingers(o.steps ?? 12, (t) => {
         const d = d0 * (1 + (o.scale - 1) * t);
         return [{ x: c.x - d, y: c.y }, { x: c.x + d, y: c.y }];
       });
@@ -490,7 +490,7 @@ export class MapHandle {
     await step(`map.twoFingerRotateAt(${fmt(at)}, ${o.degrees}°)`, async () => {
       const c = await this._pointAt(at, o, 'map.twoFingerRotateAt');
       const r = o.radiusPx ?? 80;
-      await this._twoFingers(c, o.steps ?? 16, (t) => {
+      await this._twoFingers(o.steps ?? 16, (t) => {
         const a = (o.degrees * t * Math.PI) / 180;
         return [{ x: c.x - r * Math.cos(a), y: c.y - r * Math.sin(a) }, { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) }];
       });
@@ -498,7 +498,7 @@ export class MapHandle {
   }
 
   private cdp?: Promise<CDPSession>;
-  private async _twoFingers(_c: { x: number; y: number }, steps: number, at: (t: number) => { x: number; y: number }[]): Promise<void> {
+  private async _twoFingers(steps: number, at: (t: number) => { x: number; y: number }[]): Promise<void> {
     const browser = this.page.context().browser();
     if (browser && browser.browserType().name() !== 'chromium') {
       throw new GeowrightError('multi-touch gestures need Chromium: Playwright has no multi-touch API (touchscreen.tap only), this uses CDP Input.dispatchTouchEvent');

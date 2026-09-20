@@ -589,8 +589,7 @@ export class Engine<W = unknown> {
     const maxProps = o.maxProps ?? 6;
     const a = this.adapter;
     const view = a.getViewState() as any;
-    const surface = a.surface();
-    const rect = surface.getBoundingClientRect();
+    const rect = a.surface().getBoundingClientRect();
     const size = this.surfaceSize();
     const layers = a.listLayers();
     const skip = new Set(o.skipLayers ?? []);
@@ -731,12 +730,12 @@ interface Collected {
   d: number;
 }
 
-type Part =
+export type Part =
   | { kind: 'point'; coord: number[] }
   | { kind: 'line'; coords: number[][] }
   | { kind: 'polygon'; rings: number[][][] };
 
-function explode(g: Geometry): Part[] {
+export function explode(g: Geometry): Part[] {
   switch (g.type) {
     case 'Point': return [{ kind: 'point', coord: g.coordinates }];
     case 'MultiPoint': return g.coordinates.map((coord) => ({ kind: 'point', coord }));
@@ -753,7 +752,7 @@ function explode(g: Geometry): Part[] {
  * and clickable — so offer a few pixels around it too. They are verified by the hit test like any
  * other candidate, so a ring pixel that misses a small symbol is simply skipped.
  */
-function pointCandidates(c: Pt): Pt[] {
+export function pointCandidates(c: Pt): Pt[] {
   const out = [c];
   for (const r of [3, 6, 10]) {
     for (let k = 0; k < 8; k++) out.push({ x: c.x + r * Math.cos((k * Math.PI) / 4), y: c.y + r * Math.sin((k * Math.PI) / 4) });
@@ -780,17 +779,20 @@ export function sequenceDistance(a: Pt[], b: Pt[], cyclic: boolean): number {
   return best;
 }
 
-function lineCandidates(pts: Pt[]): Pt[] {
+export function lineCandidates(pts: Pt[]): Pt[] {
+  // In order ALONG the line: v0, m0, v1, m1, ..., so "index distance from the middle" means what it says.
+  // (Until an earlier phase this was [midpoints..., vertices...], whose middle index is always the FIRST vertex:
+  // lines were clicked at their start. Found by the unit tests.)
   const c: Pt[] = [];
-  for (let i = 0; i < pts.length - 1; i++) {
-    c.push({ x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 });
+  for (let i = 0; i < pts.length; i++) {
+    c.push(pts[i]);
+    if (i < pts.length - 1) c.push({ x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 });
   }
-  c.push(...pts);
   const mid = (c.length - 1) / 2; // prefer the middle of the line
   return c.map((p, i) => ({ p, d: Math.abs(i - mid) })).sort((a, b) => a.d - b.d).map((e) => e.p);
 }
 
-function polygonCandidates(rings: Pt[][], size: { w: number; h: number }): Pt[] {
+export function polygonCandidates(rings: Pt[][], size: { w: number; h: number }): Pt[] {
   const xs = rings[0].map((p) => p.x);
   const ys = rings[0].map((p) => p.y);
   const x0 = Math.max(0, Math.min(...xs)), x1 = Math.min(size.w, Math.max(...xs));
@@ -808,7 +810,7 @@ function polygonCandidates(rings: Pt[][], size: { w: number; h: number }): Pt[] 
   return scored.sort((a, b) => b.d - a.d).map((s) => s.p);
 }
 
-function inPolygon(p: Pt, rings: Pt[][]): boolean {
+export function inPolygon(p: Pt, rings: Pt[][]): boolean {
   let inside = false;
   for (const ring of rings) {
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -819,7 +821,7 @@ function inPolygon(p: Pt, rings: Pt[][]): boolean {
   return inside;
 }
 
-function distToRing(p: Pt, ring: Pt[]): number {
+export function distToRing(p: Pt, ring: Pt[]): number {
   let best = Infinity;
   for (let i = 0; i < ring.length - 1; i++) {
     const a = ring[i], b = ring[i + 1];
@@ -831,7 +833,7 @@ function distToRing(p: Pt, ring: Pt[]): number {
   return best;
 }
 
-function fmtProps(p: Record<string, unknown>, max: number): string {
+export function fmtProps(p: Record<string, unknown>, max: number): string {
   const keys = Object.keys(p);
   const shown = keys.slice(0, max).map((k) => {
     let v = typeof p[k] === 'string' ? JSON.stringify(p[k]) : String(p[k]);
@@ -842,7 +844,7 @@ function fmtProps(p: Record<string, unknown>, max: number): string {
 }
 
 /** "zoning: residential×20, commercial×15" for low-cardinality props; ranges for numbers. Covers the WHOLE layer, listed rows included, so counts can be read off directly. */
-function histogram(props: Record<string, unknown>[], total: number): string {
+export function histogram(props: Record<string, unknown>[], total: number): string {
   const keys = [...new Set(props.flatMap((p) => Object.keys(p)))].slice(0, 6);
   const parts: string[] = [];
   for (const k of keys) {
@@ -879,7 +881,7 @@ function showWant(v: unknown): string {
   return JSON.stringify(v);
 }
 
-function testWhere(actual: unknown, want: unknown): boolean {
+export function testWhere(actual: unknown, want: unknown): boolean {
   if (want === null || typeof want !== 'object') return (actual ?? null) === want;
   const op = want as WhereOp;
   const present = actual !== undefined && actual !== null;
