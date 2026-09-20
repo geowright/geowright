@@ -1,10 +1,12 @@
 name: ci
 
-# Keep this lean, and use [skip ci] on
-# docs-only / batched commits.
+# Per push: typecheck + the full suite on hosted Linux. The flake check (--repeat-each) lives in
+# flake.yml so that it can never starve this job of its time limit. Use [skip ci] on docs-only /
+# batched commits.
 on:
   push:
     branches: [main]
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -15,15 +17,13 @@ permissions:
   contents: read
 
 jobs:
-  # The job that matters: everything was developed on macOS, real-world CI is Linux. Validates
-  # the SwiftShader flag set and the zero-flake claim on a 4-vCPU hosted runner.
+  # Everything is developed on macOS; real-world CI is Linux. Validates the SwiftShader flag set on a
+  # hosted runner, where software GL is ~8x slower than on a desktop machine.
   linux:
     runs-on: ubuntu-latest
-    # History: 128 tests = suite ~6 min + 5x ~27 min on a 2-worker hosted runner; a 30 min limit once
-    # CANCELLED the job (a cancelled flake check looks like neither pass nor fail). an earlier phase doubled the
-    # suite (258 tests with the wild apps, terrain + globe in software GL), so the repeat went 5x -> 2x:
-    # the 20x bar is run on the Mac, Linux is the different-machine / slower-frames evidence.
-    timeout-minutes: 75
+    # The suite takes ~21 min here (2 workers). A job that hits its limit is CANCELLED, which looks
+    # like neither pass nor fail — keep real headroom.
+    timeout-minutes: 45
     env:
       CI: 'true'
     steps:
@@ -43,10 +43,9 @@ jobs:
       # With a warm cache this only installs the apt deps; the browser download is skipped.
       - run: npx playwright install --with-deps chromium
       - run: npm run typecheck
+      - run: npm run build
       - name: Full suite
         run: npx playwright test
-      - name: Flake check (2x; the 20x bar runs on the Mac)
-        run: npx playwright test --repeat-each=2
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
@@ -54,20 +53,32 @@ jobs:
           path: test-results/
           retention-days: 5
 
-  # Optional extended repetition job.
-  #
-  # mac:
-  #   runs-on: [dedicated, macOS, geowright]
-  #   timeout-minutes: 60
-  #   env:
-  #     CI: 'true'
-  #     GEOWRIGHT_PORT: '4273'
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #     - uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '22'
-  #         cache: 'npm'
-  #     - run: npm ci
-  #     - run: npx playwright install chromium
-  #     - run: npx playwright test --repeat-each=20
+  # The version matrix (Mapbox GL JS 1.13, MapLibre 2-6): one small page, ~60 tests, a few minutes.
+  # Its own job and its own Playwright config, so it can never eat into the suite's time limit.
+  compat:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Playwright version (cache key)
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:compat
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: compat-test-results
+          path: test-results/
+          retention-days: 5

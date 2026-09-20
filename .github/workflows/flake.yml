@@ -1,0 +1,62 @@
+name: flake
+
+# The different-machine flake check: the whole suite twice on hosted Linux (~42 min). Nightly, and
+# only when main changed in the last 24 hours — a quiet repository spends no minutes. The strict
+# bar (--repeat-each=20, zero flakes) is run on a desktop machine shown to be quiet: see CONTRIBUTING.md.
+on:
+  schedule:
+    - cron: '17 1 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: flake
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  linux-2x:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 50
+      - name: Anything new since yesterday?
+        id: fresh
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -n "$(git log --since='25 hours ago' --format=%h -1)" ]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"; echo "no commits in the last 25 hours: nothing to check"
+          fi
+      - uses: actions/setup-node@v4
+        if: steps.fresh.outputs.run == 'true'
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+        if: steps.fresh.outputs.run == 'true'
+      - name: Playwright version (cache key)
+        if: steps.fresh.outputs.run == 'true'
+        id: pw
+        run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        if: steps.fresh.outputs.run == 'true'
+        with:
+          path: ~/.cache/ms-playwright
+          key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
+      - run: npx playwright install --with-deps chromium
+        if: steps.fresh.outputs.run == 'true'
+      - name: Flake check (2x)
+        if: steps.fresh.outputs.run == 'true'
+        run: npx playwright test --repeat-each=2
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: linux-2x-test-results
+          path: test-results/
+          retention-days: 5
