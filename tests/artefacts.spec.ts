@@ -29,7 +29,7 @@ test.describe('failure artefacts', () => {
     await map.marker({ feature: { layer: 'parcels', id: 103 } });
     await map.feature({ layer: 'parcels', id: 103 }).click();
     const notes = testInfo.attachments.filter((a) => a.name.startsWith('pixel — ')).map((a) => a.body!.toString());
-    expect(notes[0]).toMatch(/^client \(\d+(\.\d)?, \d+(\.\d)?\) · canvas \(.*\) · \{"lng":34\.7\d+,"lat":32\.08\d+\}\ncandidate 1 of 25 \(centre first, then a ring around it\)$/);
+    expect(notes[0]).toMatch(/^client \(\d+(\.\d)?, \d+(\.\d)?\) · canvas \(.*\) · \{"lng":34\.7\d+,"lat":32\.08\d+\}\ncandidate 1 of \d+ \(centre first, then a ring around it\)$/);
     expect(notes[1]).toMatch(/candidate \d+ of \d+ \(interior points, farthest from the edge first\); skipped before it: 0 under another feature, \d+ under DOM \(<\w+> in <div\.maplibregl-marker.* data-testid="marker-pin-103">\), 0 not on the feature/);
   });
 

@@ -306,7 +306,7 @@ export class Engine<W = unknown> {
     return {
       ...b.r,
       surface: round(surface),
-      client: round({ x: rect.left + surface.x, y: rect.top + surface.y }),
+      client: { x: Math.round(rect.left + surface.x), y: Math.round(rect.top + surface.y) },
       velocity,
       why: `${b.r.why}; moving: 'allow' — target moves at ${Math.round(speed)}px/s, aimed ${Math.round(reachable ? lead : 0)}ms ahead of where it was drawn; the real event is verified when it arrives`,
     };
@@ -344,7 +344,8 @@ export class Engine<W = unknown> {
       return fail('invisible', `feature is rendered but not visible: ${vis.reason}. A user cannot see it; use { force: true } to act on it anyway.`);
     }
     const size = this.surfaceSize();
-    const cands = this.candidates(pieces, size);
+    const stats = { outside: 0 };
+    const cands = this.candidates(pieces, size, stats);
     if (cands.length === 0) return fail('offscreen', 'feature is rendered but no part of it is inside the viewport');
 
     const ignore = new Set(opts.ignoreLayers ?? []);
@@ -353,7 +354,14 @@ export class Engine<W = unknown> {
     let domCover: Element | undefined;
     const skipped = { miss: 0, occluded: 0, dom: 0, offview: 0 };
 
-    for (const [i, c] of cands.entries()) {
+    // WHOLE client pixels only. Real input arrives with fractional coordinates (pointerdown at 339.6, 641.4), but the
+    // map library handles `click` / `mousedown` MouseEvents, whose coordinates the browser truncates (339, 641) — so a
+    // pixel verified at 339.6 is not the pixel the app hit-tests. Found on the dense basemap: the edge of a POI label
+    // ran between the two, we said "the building is on top" and MapLibre said "the label is". Snap first, then verify.
+    // A shape thinner than a pixel (a country squeezed against the limb of a globe) may contain the candidate but not
+    // its nearest whole pixel: the four whole pixels around it are tried too, each verified like any other candidate.
+    const whole = wholePixels(cands, rect);
+    for (const [i, c] of whole.entries()) {
       // Bounded: a big shape that is almost entirely under another layer has thousands of covered
       // candidates (a country under the app's own polygons: 25,000, ~0.4ms each, twice per action).
       // A user does not hunt for the one uncovered sliver either; after MAX_TRIES it is "occluded".
@@ -382,20 +390,23 @@ export class Engine<W = unknown> {
         continue;
       }
       const why =
-        `candidate ${i + 1} of ${cands.length} (${pieces[0].geometry.type.includes('Polygon') ? `interior points, farthest from the edge first${this.adapter.lift?.(pieces[0], c) ? '; extruded: roof, then walls, then footprint' : ''}` : pieces[0].geometry.type.includes('Line') ? 'middle of the line first' : 'centre first, then a ring around it'})` +
+        `candidate ${i + 1} of ${whole.length} (${pieces[0].geometry.type.includes('Polygon') ? `interior points, farthest from the edge first${this.adapter.lift?.(pieces[0], c) ? '; extruded: roof, then walls, then footprint' : ''}` : pieces[0].geometry.type.includes('Line') ? 'middle of the line first' : 'centre first, then a ring around it'})` +
         (i ? `; skipped before it: ${skipped.occluded} under another feature${occluder ? ` (${occluder.layer}${occluder.id !== undefined ? '#' + occluder.id : ''})` : ''}, ${skipped.dom} under DOM${domCover ? ` (${describeEl(domCover)})` : ''}, ${skipped.miss} not on the feature` : '') +
         (opts.force ? '; force: occlusion not checked' : '');
-      return { ok: true, client: round(client), surface: round(c), feature: this.summarize(pieces), why };
+      return { ok: true, client: { x: Math.round(client.x), y: Math.round(client.y) }, surface: round(c), feature: this.summarize(pieces), why };
     }
     if (domCover) return fail('dom-covered', `every candidate point is covered by DOM element ${describeEl(domCover)}`);
     if (occluder) {
       return fail(
         'occluded',
-        `${cands.length > MAX_TRIES ? `the ${MAX_TRIES} best of ${cands.length} candidate points are all` : 'every candidate point is'} covered by another feature; topmost is ${describe({ ...occluder, geometryType: occluder.geometry.type })}. ` +
+        `${whole.length > MAX_TRIES ? `the ${MAX_TRIES} best of ${whole.length} candidate points are all` : 'every candidate point is'} covered by another feature; topmost is ${describe({ ...occluder, geometryType: occluder.geometry.type })}. ` +
           `Use { force: true } to click anyway, or { ignoreLayers: ['${occluder.layer}'] }.`,
       );
     }
     if (skipped.offview) return fail('offscreen', 'the feature is on the map, but that part of the map is outside the browser window (the map is larger than the viewport and cannot be scrolled fully into it)');
+    // Found on a dense 3D city: a building whose footprint is below the viewport edge with a sliver of wall in view.
+    // "not found" sent the reader looking for a missing feature; what is true is that it is (almost) off screen.
+    if (stats.outside > cands.length) return fail('offscreen', `most of the feature is outside the viewport (${stats.outside} of ${stats.outside + cands.length} candidate points), and none of the points inside hit-tests back to it: only a sliver is in view. Move the camera, or pass { autoPan: true }.`);
     return fail('not-found', 'feature matched but no candidate pixel hit-tests back to it');
   }
 
@@ -408,7 +419,7 @@ export class Engine<W = unknown> {
    *    from the polygon edge (a cheap pole-of-inaccessibility). Never the centroid: for a
    *    concave polygon the centroid can be outside.
    */
-  private candidates(pieces: RenderedFeature[], size: { w: number; h: number }): Pt[] {
+  private candidates(pieces: RenderedFeature[], size: { w: number; h: number }, stats?: { outside: number }): Pt[] {
     const inView = (p: Pt) => p.x >= 2 && p.y >= 2 && p.x <= size.w - 2 && p.y <= size.h - 2;
     const proj = (c: number[]) => this.adapter.project(this.adapter.worldFromCoord(c));
     const out: Pt[] = [];
@@ -435,6 +446,7 @@ export class Engine<W = unknown> {
     }
     poly.sort((a, b) => a.tier - b.tier || b.d - a.d);
     for (const c of poly) out.push(c.p);
+    if (stats) stats.outside = out.filter((p) => !inView(p)).length;
     return out.filter(inView);
   }
 
@@ -826,7 +838,8 @@ export class Engine<W = unknown> {
     // Candidates come from the GEOMETRY; what is hit-tested is what is DRAWN. They differ for a label placed
     // along a line, an icon with an offset, or a symbol hidden by collision at the pixels we tried.
     let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
-    for (const c of (e.cands ?? []).slice(0, 40)) {
+    // whole client pixels, exactly as actionPointOnce() tries them: what the snapshot lists as clickable is what click() uses
+    for (const c of wholePixels((e.cands ?? []).slice(0, 40), rect)) {
       const hits = this.adapter.queryFeatures({ at: c });
       const all = [...e.byLayer.values()].flat();
       if (!hits.some((h) => this.sameEntity(h, all))) continue;
@@ -1070,6 +1083,17 @@ export type Part =
   | { kind: 'point'; coord: number[] }
   | { kind: 'line'; coords: number[][] }
   | { kind: 'polygon'; rings: number[][][] };
+
+/** Candidates as WHOLE client pixels (surface-relative): the nearest one first, then the four around it; no duplicates. */
+export function wholePixels(cands: Pt[], rect: { left: number; top: number }): Pt[] {
+  const tried = new Set<string>();
+  return cands.flatMap((raw) => {
+    const fx = rect.left + raw.x, fy = rect.top + raw.y;
+    return [[Math.round(fx), Math.round(fy)], [Math.floor(fx), Math.floor(fy)], [Math.ceil(fx), Math.floor(fy)], [Math.floor(fx), Math.ceil(fy)], [Math.ceil(fx), Math.ceil(fy)]]
+      .filter(([x, y]) => !tried.has(`${x},${y}`) && !!tried.add(`${x},${y}`))
+      .map(([x, y]) => ({ x: x - rect.left, y: y - rect.top }));
+  });
+}
 
 export function explode(g: Geometry): Part[] {
   switch (g.type) {

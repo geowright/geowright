@@ -19,11 +19,20 @@ import { makeSprite } from './png';
  */
 export const POI_CLASSES = ['restaurant', 'cafe', 'bar', 'museum', 'school', 'hospital', 'bank', 'shop', 'theatre', 'music', 'bicycle', 'bus', 'park', 'library', 'hotel', 'fuel'];
 
-export function brightBasemap(center: [number, number], o: { icons?: string[] } = {}): Routes {
+/**
+ * `dense: true` — label density and layer count closer to a REAL basemap (opt-in, so that the specs written against
+ * the sparse city keep meaning what they meant): ~400 named POIs in three rank tiers, a house number on every
+ * building, neighbourhood labels, street names from zoom 13, and a style of 60+ layers (landcover / landuse
+ * classes, tunnel / bridge / casing variants, one label layer per place class) instead of ~25. All generated here;
+ * nothing is copied from any real style or dataset. It exists for ONE question: what happens to an app's features
+ * when basemap LABELS are drawn on top of them — which is where an app that inserts its layers "below the labels"
+ * (the recommended practice, and what MapLibre's 3D-buildings example does) really lives.
+ */
+export function brightBasemap(center: [number, number], o: { icons?: string[]; dense?: boolean } = {}): Routes {
   const sprite = makeSprite([...new Set([...POI_CLASSES, 'oneway', 'circle', 'star', 'marker', ...(o.icons ?? [])])]);
-  const city = syntheticCity(center);
+  const city = syntheticCity(center, o.dense);
   return [
-    ['https://tiles.openfreemap.org/styles/bright', { json: brightStyle() }],
+    ['https://tiles.openfreemap.org/styles/bright', { json: brightStyle(o.dense) }],
     ['https://tiles.openfreemap.org/planet', { json: { tilejson: '3.0.0', tiles: ['https://tiles.openfreemap.org/planet/synthetic/{z}/{x}/{y}.pbf'], minzoom: 0, maxzoom: 14, bounds: [-180, -85, 180, 85], vector_layers: Object.keys(city).map((id) => ({ id, fields: {} })) } }],
     [/^https:\/\/tiles\.openfreemap\.org\/planet\/synthetic\/\d+\/\d+\/\d+\.pbf/, vectorTileHandler(city)],
     [/^https:\/\/tiles\.openfreemap\.org\/sprites\/ofm_f384\/ofm(@2x)?\.json/, { json: sprite.json }],
@@ -71,7 +80,7 @@ export function cartoBasemap(name: 'positron' | 'dark-matter' | 'voyager', cente
 /** Metres east/north of `center` -> [lng, lat]. */
 const offset = (center: [number, number]) => (x: number, y: number): [number, number] => [center[0] + x / (111_320 * Math.cos((center[1] * Math.PI) / 180)), center[1] + y / 111_320];
 
-export function syntheticCity(center: [number, number]): Record<string, FeatureCollection> {
+export function syntheticCity(center: [number, number], dense = false): Record<string, FeatureCollection> {
   const at = offset(center);
   let id = 1;
   const f = (geometry: Feature['geometry'], properties: Record<string, unknown>): Feature => ({ type: 'Feature', id: id++, geometry, properties });
@@ -118,8 +127,34 @@ export function syntheticCity(center: [number, number]): Record<string, FeatureC
     ),
   ];
 
+  const housenumber: Feature[] = [];
+  const landcover: Feature[] = [];
+  if (dense) {
+    // a named POI in (almost) every block corner and mid-block, ranks spread so that every tier has plenty
+    const words = ['Corner', 'Old', 'Little', 'Grand', 'Blue', 'Green', 'Union', 'Market', 'Harbour', 'Station', 'Garden', 'Royal'];
+    let n = POI_CLASSES.length;
+    for (let bx = -5; bx < 5; bx++) {
+      for (let by = -5; by < 5; by++) {
+        for (const [dx, dy] of [[6, 60], [60, 6], [60, 114], [114, 60]]) {
+          const cls = POI_CLASSES[Math.floor(rand() * POI_CLASSES.length)];
+          n++;
+          poi.push(f({ type: 'Point', coordinates: at(bx * 120 + dx, by * 120 + dy) }, { class: cls, subclass: cls, name: `${words[n % words.length]} ${cls[0].toUpperCase()}${cls.slice(1)} ${n}`, rank: 1 + (n % 30) }));
+        }
+      }
+    }
+    building.forEach((b, i) => {
+      const ring = (b.geometry as any).coordinates[0] as [number, number][];
+      housenumber.push(f({ type: 'Point', coordinates: [(ring[0][0] + ring[2][0]) / 2, (ring[0][1] + ring[2][1]) / 2] }, { housenumber: String(1 + ((i * 7) % 240)) }));
+    });
+    ['Foundry', 'Saltmarsh', 'Kiln Hill', 'Weavers', 'Tanners Row', 'Orchard', 'Lockside', 'Millrace', 'Cooperage'].forEach((name, i) =>
+      place.push(f({ type: 'Point', coordinates: at(((i % 3) - 1) * 420, (Math.floor(i / 3) - 1) * 420) }, { class: i % 2 ? 'neighbourhood' : 'suburb', name, 'name:latin': name, rank: 12 + i })),
+    );
+    landcover.push(f(box(-2400, 700, -1300, 1250), { class: 'wood' }), f(box(1300, 950, 2600, 1250), { class: 'grass' }), f(box(-2400, -1250, -1300, -700), { class: 'sand' }));
+  }
+
   const fc = (features: Feature[]): FeatureCollection => ({ type: 'FeatureCollection', features });
   return {
+    ...(dense ? { housenumber: fc(housenumber), landcover: fc(landcover) } : {}),
     water: fc([f(box(1300, -900, 2600, 900), { class: 'lake' })]),
     water_name: fc([f({ type: 'Point', coordinates: at(1950, 0) }, { class: 'lake', name: 'Lake Fixture', 'name:latin': 'Lake Fixture' })]),
     park: fc([f(box(-2400, -600, -1300, 600), { class: 'public_park', name: 'Harness Park' })]),
@@ -133,7 +168,7 @@ export function syntheticCity(center: [number, number]): Record<string, FeatureC
 }
 
 /** Our own style with the bright basemap's contract (source, source-layers, the layer ids examples rely on). */
-export function brightStyle() {
+export function brightStyle(dense = false) {
   const src = (sourceLayer: string) => ({ source: 'openmaptiles', 'source-layer': sourceLayer });
   const cls = (...c: string[]) => ['match', ['get', 'class'], c, true, false];
   const font = ['Noto Sans Regular'];
@@ -151,6 +186,7 @@ export function brightStyle() {
     layout: { 'text-field': ['coalesce', ['get', 'name:latin'], ['get', 'name']], 'text-font': font, 'text-size': size, 'text-max-width': 8 },
     paint: { 'text-color': '#2b2b2b', 'text-halo-color': 'rgba(255,255,255,0.85)', 'text-halo-width': 1.4 },
   });
+  if (dense) return denseStyle({ src, cls, font, roadLayers, poi, label });
   return {
     version: 8,
     name: 'geowright synthetic bright (OpenMapTiles contract, own design)',
@@ -181,6 +217,68 @@ export function brightStyle() {
       label('label_city', 'city', 16),
     ],
   };
+}
+
+/**
+ * The dense variant: same contract and the same well-known ids (`water`, `building`, `poi_r1`, `label_city`, …) in
+ * the same relative order, with what a production style adds around them. Own work; the layer ids that are not part
+ * of the contract are ordinary descriptive names, not a copy of any style's list.
+ */
+function denseStyle(h: { src: (l: string) => any; cls: (...c: string[]) => any; font: string[]; roadLayers: any[]; poi: (id: string, maxRank: number, minzoom: number) => any; label: (id: string, c: string, size: number) => any }) {
+  const { src, cls, font } = h;
+  const base: any = brightStyle(false);
+  const byId = (id: string) => base.layers.find((l: any) => l.id === id);
+  const fill = (id: string, layer: string, c: string, colour: string) => ({ id, type: 'fill', ...src(layer), filter: cls(c), paint: { 'fill-color': colour } });
+  const variants = (['minor', 'primary', 'motorway'] as const).flatMap((c) =>
+    (['tunnel', 'bridge'] as const).flatMap((brunnel) => [
+      { id: `${brunnel}-${c}-casing`, type: 'line', ...src('transportation'), filter: ['all', cls(c), ['==', ['get', 'brunnel'], brunnel]], paint: { 'line-color': '#b8b0a4', 'line-width': 3 } },
+      { id: `${brunnel}-${c}`, type: 'line', ...src('transportation'), filter: ['all', cls(c), ['==', ['get', 'brunnel'], brunnel]], paint: { 'line-color': '#fff', 'line-width': 2 } },
+    ]),
+  );
+  const poiTier = (id: string, lo: number, hi: number, minzoom: number) => ({ ...h.poi(id, hi, minzoom), filter: ['all', ['>', ['get', 'rank'], lo], ['<=', ['get', 'rank'], hi]] });
+  const text = (id: string, layer: string, field: any, size: number, minzoom: number, extra: any = {}) => ({
+    id, type: 'symbol', ...src(layer), minzoom, ...extra,
+    layout: { 'text-field': field, 'text-font': font, 'text-size': size, ...(extra.layout ?? {}) },
+    paint: { 'text-color': '#4a4a4a', 'text-halo-color': 'rgba(255,255,255,0.85)', 'text-halo-width': 1.2 },
+  });
+  const layers = [
+    byId('background'), byId('natural_earth'),
+    fill('landcover-wood', 'landcover', 'wood', '#b9d6a3'), fill('landcover-grass', 'landcover', 'grass', '#d8ebc4'), fill('landcover-sand', 'landcover', 'sand', '#f0e6c0'),
+    fill('landcover-ice', 'landcover', 'ice', '#eef5f8'), fill('landcover-wetland', 'landcover', 'wetland', '#cfe0d2'),
+    byId('landuse-residential'),
+    ...['commercial', 'industrial', 'cemetery', 'hospital', 'school', 'stadium', 'pitch', 'railway'].map((c) => fill(`landuse-${c}`, 'landuse', c, '#e6e0d6')),
+    byId('park'),
+    { id: 'park-outline', type: 'line', ...src('park'), paint: { 'line-color': '#a9cf8a', 'line-dasharray': [2, 2] } },
+    byId('water'),
+    { id: 'water-outline', type: 'line', ...src('water'), paint: { 'line-color': '#8bb6e0' } },
+    { id: 'waterway-river', type: 'line', ...src('waterway'), filter: cls('river'), paint: { 'line-color': '#a9cdf0', 'line-width': 2 } },
+    { id: 'waterway-stream', type: 'line', ...src('waterway'), filter: cls('stream', 'canal'), paint: { 'line-color': '#a9cdf0' } },
+    { id: 'aeroway-area', type: 'fill', ...src('aeroway'), paint: { 'fill-color': '#e3e0ea' } },
+    { id: 'aeroway-runway', type: 'line', ...src('aeroway'), filter: cls('runway'), paint: { 'line-color': '#d0cbe0', 'line-width': 4 } },
+    byId('building'), byId('building-top'),
+    ...variants.filter((l) => l.id.startsWith('tunnel')),
+    ...h.roadLayers,
+    { id: 'highway-path', type: 'line', ...src('transportation'), filter: cls('path', 'track'), paint: { 'line-color': '#cba', 'line-dasharray': [1, 1] } },
+    byId('railway'),
+    { id: 'railway-hatching', type: 'line', ...src('transportation'), filter: cls('rail'), paint: { 'line-color': '#9a9a9a', 'line-width': 5, 'line-dasharray': [0.2, 4] } },
+    ...variants.filter((l) => l.id.startsWith('bridge')),
+    { id: 'boundary-3', type: 'line', ...src('boundary'), filter: ['>=', ['get', 'admin_level'], 3], paint: { 'line-color': '#9e9cab', 'line-dasharray': [4, 2] } },
+    { id: 'boundary-2', type: 'line', ...src('boundary'), filter: ['==', ['get', 'admin_level'], 2], paint: { 'line-color': '#8d8b9d', 'line-width': 1.5 } },
+    // ---- labels: everything below is a symbol layer, as in a production style ----
+    byId('road_oneway'),
+    text('housenumber', 'housenumber', ['get', 'housenumber'], 10, 15),
+    byId('water_name_point_label'),
+    text('waterway-name', 'waterway', ['get', 'name'], 11, 13, { layout: { 'symbol-placement': 'line' } }),
+    text('park-name', 'park', ['get', 'name'], 12, 12),
+    poiTier('poi_r20', 14, 30, 15), poiTier('poi_r7', 6, 14, 15), poiTier('poi_r1', 0, 6, 14),
+    { ...byId('highway-name-minor'), minzoom: 14 }, byId('highway-name-major'),
+    text('highway-shield', 'transportation_name', ['get', 'ref'], 10, 10, { filter: ['has', 'ref'] }),
+    text('airport-label', 'aerodrome_label', ['get', 'name'], 11, 10),
+    h.label('label_neighbourhood', 'neighbourhood', 11), h.label('label_suburb', 'suburb', 12), h.label('label_village', 'village', 12),
+    byId('label_town'), byId('label_city'),
+    h.label('label_state', 'state', 13), h.label('label_country_3', 'country', 13), h.label('label_country_2', 'country', 15), h.label('label_country_1', 'country', 17),
+  ];
+  return { ...base, name: 'geowright synthetic bright, dense (OpenMapTiles contract, own design)', layers };
 }
 
 function mulberry32(seed: number) {

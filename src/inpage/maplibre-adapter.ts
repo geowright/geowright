@@ -255,10 +255,17 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     const never = 'Such a map NEVER becomes idle: do not wait for idle here; retrying assertions and actions work without it';
     const tiled = w.pending.filter((p) => p.type !== 'geojson');
     if (tiled.length) return `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`;
+    // Deterministic, whatever the frame rate: an animated canvas source or a video source repaints the map for ever.
+    const sources = this.map.getStyle()?.sources ?? {};
+    const animated = Object.keys(sources).filter((id) => {
+      const spec = sources[id] as { type?: string; animate?: boolean };
+      return spec.type === 'video' || (spec.type === 'canvas' && spec.animate !== false);
+    });
+    if (animated.length) return `source(s) ${animated.join(', ')}: an animated canvas / video source repaints the map on every frame. ${never}`;
     // A GeoJSON source that is "loading" for seconds on end is not the network: it is being re-set faster than it settles.
-    if (w.pending.length && w.frames >= 3) return `the app keeps replacing the data of GeoJSON source(s) ${w.pending.map((p) => p.id).join(', ')} (setData in a requestAnimationFrame loop or a timer: ${w.frames} frames rendered in ${Math.round(w.ms)}ms with the camera at rest). ${never}`;
+    if (w.pending.length && w.frames >= 2) return `the app keeps replacing the data of GeoJSON source(s) ${w.pending.map((p) => p.id).join(', ')} (setData in a requestAnimationFrame loop or a timer: ${w.frames} frames rendered in ${Math.round(w.ms)}ms with the camera at rest). ${never}`;
     // (loaded() stays false for a map with an animated source, so it cannot be a condition here)
-    if (w.frames >= 3) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image / canvas / video source). ${never}`;
+    if (w.frames >= 2) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image / canvas / video source). ${never}`;
     return w.loaded ? undefined : 'the style or a source has not finished loading';
   }
 

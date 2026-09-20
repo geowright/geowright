@@ -19,8 +19,8 @@ test.describe('wild: add-a-canvas-source', () => {
 
   test('the map never becomes idle while the canvas keeps animating (animate: true)', async ({ wild }) => {
     const map = await wild.open(example('add-a-canvas-source'), { routes: DEMOTILES, waitForIdle: false });
-    // an animated canvas source: nothing is loading, the camera is at rest, and frames keep coming — the error says so
-    await expect(map.waitForIdle({ timeout: 2500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — the map rendered \d+ frames in \d+ms with the camera at rest and no source loading: the app repaints it continuously/);
+    // an animated canvas source — the error names it (read from the style: independent of how fast frames come)
+    await expect(map.waitForIdle({ timeout: 2500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — source\(s\) canvas-source: an animated canvas \/ video source repaints the map on every frame\. Such a map NEVER becomes idle/);
   });
 
   test('zooming out is clamped at the map\'s minZoom (4)', async ({ wild }) => {

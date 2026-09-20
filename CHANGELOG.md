@@ -11,6 +11,17 @@ Not published; versions start when the package does. Until then this lists what 
 - **`{ moving: 'allow' }`** on `click` / `dblclick` / `rightClick` / `tap` / `hover`: act on a feature that never stops
   moving. Skips the at-rest and two-frame checks, aims ahead along the measured velocity (lead learnt from misses), and
   relies on the click-time verification: late input is swallowed and retried, never delivered to something else.
+- **Fixed (precision):** action points and snapshot pixels are WHOLE client pixels, verified as such. Real input arrives
+  with fractional coordinates, but map libraries handle `click` / `mousedown` MouseEvents, which the browser truncates;
+  a pixel verified at 339.6 was not the pixel MapLibre hit-tested at 339 (found under dense basemap labels: we said
+  "building on top", MapLibre said "label on top"). For shapes thinner than a pixel the four whole pixels around a
+  candidate are tried too.
+- The default action timeout scales with the test's timeout (`test.slow()`, `test.setTimeout()`); an action's `timeout` is
+  wall-clock (side-effect-free round trips are abandoned at the deadline; real input never is).
+- `waitForIdle()` on a map that never idles says why: an animated canvas / video source, a GeoJSON source re-set in a
+  loop, continuous repainting, tiles still loading, or a moving camera.
+- Snapshot: basemap layers (a tiled source with 8+ layers) give up their rows before the app's layers do.
+- A feature with only a sliver inside the viewport is reported `offscreen` with that explanation, not `not-found`.
 - **Fixed:** a GeoJSON source holding a bare geometry (`{ type: 'Point', … }`, no Feature wrapper) was read as having no
   features, which disabled off-screen diagnostics, `autoPan: true`, full geometries and identity learning for it.
 - **Fixed:** `toBeVisibleOnMap()` could pass without having probed a pixel when the probe threw. `{ pixels: true }` now

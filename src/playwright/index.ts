@@ -380,8 +380,9 @@ export class MapHandle {
     const timeout = opts.timeout ?? this.timeout;
     await step(`map.waitForIdle()`, () =>
       this._retry('map.waitForIdle()', timeout, async (deadline) => {
-        // (grace: the in-page wait is itself bounded; on a page that renders two frames a second the answer needs time to get back)
-        const ok = await this._callBy<boolean>(deadline + 3000, 'waitForIdle', Math.max(50, Math.min(deadline - Date.now() - 300, 2000)));
+        // Not abandoned at the deadline: the in-page wait is bounded by itself (<= 2s), and its answer carries the
+        // diagnosis ("an animated source: never idle") that is the whole point of the error message.
+        const ok = await this._call<boolean>('waitForIdle', Math.max(50, Math.min(deadline - Date.now(), 2000)));
         if (!ok) {
           const why = await this._call<string | undefined>('idleDiagnosis').catch(() => undefined);
           return { retry: `map did not become idle (still moving, loading tiles, or repainting)${why ? ` — ${why}` : ''}` };
