@@ -1,0 +1,27 @@
+name: My map app does not work with geowright
+description: The hook does not register, waitForIdle() never returns, or a wrapper / map-library version behaves differently.
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        geowright is tested against apps its authors did not write, and reports like this are how that list grows.
+        First check docs/RECIPES.md — "The map never becomes idle" and the wrapper hooks cover the common cases.
+  - type: textarea
+    id: app
+    attributes:
+      label: The app
+      description: Map library and version, wrapper and version, bundler / dev server. A public repository or a minimal page helps most.
+    validations:
+      required: true
+  - type: textarea
+    id: hook
+    attributes:
+      label: The hook line you added, and where
+      render: text
+  - type: textarea
+    id: output
+    attributes:
+      label: What geowright printed
+      description: The full error text. `console.log(await map.snapshot())` output is welcome when the map does load.
+      render: text

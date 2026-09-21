@@ -1,0 +1,30 @@
+# Version updates: weekly, grouped, so that a quiet week is one pull request.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 5
+    # other people's apps, vendored verbatim (one added line each): never updated here
+    exclude-paths: ["wild/**"]
+    groups:
+      dev-minor-and-patch:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # The version matrix installs OLD majors on purpose, under npm aliases (maplibre-gl-2 … maplibre-gl-5), and
+      # aliases are resolved to the real package name. A major bump of any of them would delete a column of the
+      # support table, so majors are moved by hand (a new MapLibre major = a new alias AND a new column).
+      # Only majors are ignored: minor / patch updates — and with them security fixes inside a major — still arrive.
+      - dependency-name: "maplibre-gl*"
+        update-types: ["version-update:semver-major"]
+      # Mapbox GL JS is pinned to 1.13.3, the last BSD-licensed release. v2 and later are proprietary: never update.
+      - dependency-name: "mapbox-gl*"
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]

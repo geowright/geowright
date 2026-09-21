@@ -3,7 +3,7 @@
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 Grey-box testing for canvas maps in Playwright. First adapter: MapLibre GL JS 2–6 and Mapbox GL JS 1.13 ([support table](#supported-map-library-versions)).
-Early, not yet published to npm. Design decisions, the evidence behind them and honest caveats: [docs/DESIGN.md](docs/DESIGN.md).
+Early (0.x): the API may still change. Design decisions, the evidence behind them and honest caveats: [docs/DESIGN.md](docs/DESIGN.md).
 Tested against apps its author did not write — MapLibre's own examples and react-map-gl / Vue / Svelte wrapper apps — in [`wild/`](wild/README.md); the scoreboard is in [docs/DESIGN.md](docs/DESIGN.md).
 
 Closes two gaps a DOM-only Playwright suite has on a WebGL map:
@@ -63,16 +63,11 @@ await map.feature({ layer: 'parcels', id: 123 }).click();
 await map.feature({ layer: 'alerts', id: 4 }).click({ autoPan: true });   // map's scrollIntoView, opt-in
 await map.feature({ layer: 'td-point', at: vertex }).dragTo({ lng, lat });
 await map.clickAt({ lng: 34.78, lat: 32.08 });
-await map.rightClickAt({ lng: 34.81, lat: 32.07 });
-await map.feature({ layer: 'alerts', id: 1 }).click({ modifiers: ['Shift'] });
 await map.wheelAt({ lng: 34.8, lat: 32.1 }, -600);                        // zooms around the pointer
-await map.feature({ layer: 'buildings', id: 1028 }).click({ autoPan: { lng: 35.2, lat: 32.09 } }); // tiled source
 await map.draw.polygon([a, b, c, d], { finish: 'click-first' });          // finish gesture is tool-specific
-await map.draw.rectangle(corner, opposite);                                // or { gesture: 'drag' }
 await map.draw.circle(center, edge, { gesture: 'drag' });
 await map.draw.cancel();                                                  // Escape
 await map.feature({ layer: 'td-point', where: { midPoint: true }, at: mid }).dragTo(to);   // insert a vertex
-await map.feature({ layer: 'td-polygon' }).dragBy({ dLng: -0.02, dLat: 0.01 });           // move the whole shape
 await expect(map.feature({ layer: 'td-polygon' })).toHaveGeometry([a, b, c, d], { tolerancePx: 2 });  // read from the MAP
 ```
 
@@ -94,20 +89,14 @@ await expect(map.feature({ layer: 'td-polygon' })).toHaveGeometry([a, b, c, d], 
 `map.feature(q)` is **strict** (exactly one match, like a Locator); `map.features(q)` is a set.
 Handles are lazy: nothing is resolved until an action or assertion runs.
 
-### Rendered is not visible
+### Visible by default
 
-MapLibre's `queryRenderedFeatures` also returns features painted with opacity 0, a transparent colour, zero
-radius/width or `text-opacity: 0` — so a plain `toHaveFeature` can pass on something no user can see.
-
-- **Queries match only what a user can see, by default.** The layer's paint properties are evaluated **for that
-  feature** — data-driven expressions, zoom, feature-state — with MapLibre's own expression evaluator. Cheap; failure
-  messages say which property (`[NOT VISIBLE: circle-opacity evaluates to 0]`). Opt out with `visible: 'any'`
-  (in the query, or `toHaveFeature(q, { visible: 'any' })`); `visible: false` matches only the invisible ones.
-- `expect(map.feature(q)).toBeVisibleOnMap()`: the paint check **and** a pixel probe (do the canvas pixels at the
-  feature change when its layer is not drawn?). Catches a transparent icon image. The probe re-renders three
-  times and toggles the layer within one task — use it where it matters, `{ pixels: false }` skips it.
-- Actions refuse an invisible feature by default (`{ force: true }` overrides). Every `FeatureSummary` has
-  `visible` / `invisibleBecause`; the snapshot tags `NOT-VISIBLE(...)`.
+MapLibre's `queryRenderedFeatures` also returns features painted with opacity 0, a transparent colour or zero size — so a
+naive "the feature exists" check passes on something no user can see. Here queries match **only what a user can see**: the
+layer's paint properties are evaluated for that feature (data-driven expressions, zoom, feature-state), and a failure says
+which property hid it (`[NOT VISIBLE: circle-opacity evaluates to 0]`). `visible: 'any'` opts out; `visible: false` matches
+only the invisible ones. `expect(map.feature(q)).toBeVisibleOnMap()` adds a pixel probe (catches a transparent icon image).
+Actions refuse an invisible feature unless `{ force: true }`. How it works: [DESIGN — Visibility](docs/DESIGN.md#visibility-rendered-is-not-visible).
 
 ### What an action waits for (actionability)
 
@@ -119,29 +108,14 @@ radius/width or `text-opacity: 0` — so a plain `toHaveFeature` can pass on som
 5. no DOM element (popup, control, overlay) covers the pixel
 6. at the instant the real `pointerdown` arrives, the hit test is re-run; if the target is no longer there the click is swallowed and the action retries
 
-Works unchanged on rotated, pitched, globe and terrain maps (pixels come from `map.project()`, candidates are verified by MapLibre's hit test). A location on the far side of the globe, behind the camera or **hidden behind a mountain** is an error, never a click on whatever is drawn at that pixel. `fill-extrusion` features are acted on where they are **drawn** — roof first, then walls, then footprint — so a tower whose footprint is outside the viewport is still clickable.
+Works unchanged on rotated, pitched, globe and terrain maps. A location on the far side of the globe, behind the camera or
+hidden behind a mountain is an error, never a click on whatever is drawn at that pixel. Features need **no ids**: identity
+is id + properties, and id-less look-alikes are told apart by where they are drawn.
 
-**On a globe, MapLibre's own viewport-wide `queryRenderedFeatures` is wrong** (6.10: it returns a fraction of the visible
-features, or features on the far side, and nothing at all for `fill-extrusion`), so queries without `at` go through a
-workaround built from public API: a 4×4 grid of box queries filtered to the near side, plus — for extrusions — a 16 px grid
-of point queries and one point query at each footprint's centre. Known gap: an extrusion narrower than 16 px on screen whose
-footprint centre is off-screen or on the far side can be missed by `toHaveFeature` / counts / the snapshot. It is never
-mis-clicked, and a query `at` its location finds it (point queries are exact on a globe).
-
-Features need **no ids**: identity is id + properties, and id-less features with identical properties (three POIs that are all `{ icon: "music" }`) are told apart by where they are drawn. Layer and source ids may be generated by a wrapper (`jsx-source-0`): query by layer id, read the rest from `map.layers()` / `map.snapshot()`.
-
-Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map), `{ autoPan: true }`, `{ timeout }`.
-
-**Features that never stop moving** (an animated vehicle, a map that keeps panning) fail check 2 forever — `unstable`. A person
-can still click a slowly moving dot, and so can a test: `click({ moving: 'allow' })` (also `dblclick`, `rightClick`, `tap`,
-`hover`). Checks 1 and 3–6 stay; the pointer is aimed AHEAD of the target along its measured velocity and curvature, how far
-ahead is learnt from each miss, and check 6 is the guard: a press that arrives late is swallowed — the app never sees it — and
-the action tries again. It can take several attempts and it can time out; it never clicks the wrong thing. Rule of thumb for
-what is clickable: the time the target spends under one pixel (diameter ÷ speed) must be longer than a frame of the page under
-test. Measured: a 9 px dot at 60–200 px/s on a light page, first try; MapLibre's "animate a point" (10 px dot, 114 px/s, full-screen
-basemap in software GL) clicked 30/30 with five parallel workers on that spec — and timed out once in three full-suite runs on a
-loaded machine, every late press swallowed: landing depends on the machine, not mis-clicking does not. `hover` is weaker than `click` — a `mousemove` is delivered on
-a frame boundary — and is only dependable when frames are short compared with that dwell time.
+Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map), `{ autoPan: true }`, `{ timeout }`, and
+`{ moving: 'allow' }` for a target that never stops moving (the pointer leads it; a press that arrives late is swallowed
+before the app sees it — it can time out, it never clicks the wrong thing). The reasoning and the measurements:
+[DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
 
 ### When something fails, it says what WAS on the map
 
@@ -186,18 +160,16 @@ await expect(await map.popup()).toContainText('Severity: high');
 const p = await map.clientPoint({ lng: 34.82, lat: 32.11 });      // lng/lat -> client pixel, for page.mouse
 ```
 
-`map.marker()` / `map.popup()` Locators are pinned to **their element** (a custom selector engine, no DOM mutation): other markers may come and go; if the app removes or replaces the element the Locator matches nothing. Works with wrapper-rendered markers (react-map-gl `<Marker>`).
-
-Feature actions never click through a marker: covered candidate pixels are skipped, and a fully covered feature fails with `dom-covered`, naming the element.
+`map.marker()` / `map.popup()` return normal Locators pinned to their element. Feature actions never click through a marker:
+covered pixels are skipped, and a fully covered feature fails with `dom-covered`, naming the element.
 
 ### Geometry and drawing
 
-`toHaveGeometry` compares the feature's **full** geometry as the map's source holds it (rendered geometry is
-tile-clipped) against a GeoJSON geometry, a vertex list, or `{ circle: { center, edge } }` — in pixels, ring
-start/winding-insensitive. Draw helpers are input choreography, not a binding to one tool: `finish`
-(`click-last | click-first | dblclick | enter | none`) and `gesture` (`click-move-click | drag`) are explicit
-because draw tools disagree. Tested against terra-draw and mapbox-gl-draw. Note: tools with a drag threshold
-(terra-draw: 8px) offset drag-drawn shapes and whole-shape moves by that much — for real users too.
+`toHaveGeometry` compares the feature's **full** geometry as the map's source holds it (rendered geometry is tile-clipped)
+against a GeoJSON geometry, a vertex list, or `{ circle: { center, edge } }` — in pixels. Draw helpers are input
+choreography, not a binding to one tool: `finish` and `gesture` are explicit because draw tools disagree. Tested against
+terra-draw and mapbox-gl-draw. Tools with a drag threshold (terra-draw: 8 px) offset drag-drawn shapes and whole-shape
+moves by that much — for real users too.
 
 ## API reference
 
@@ -243,8 +215,8 @@ Failures throw `GeowrightError` (actions) or a normal expect failure; both carry
 
 ## Agents (Playwright MCP)
 
-Browser agents get an empty `region "Map"` from the accessibility snapshot. Two ways to fix that, both via
-Playwright MCP's `--init-script` (no custom MCP server):
+A browser agent gets an empty `region "Map"` from the accessibility snapshot. Two fixes, both through Playwright MCP's
+`--init-script` (no custom MCP server):
 
 ```sh
 npm run build:inpage      # dist/inpage.js        -> adapter + window.__geowright.snapshot()
@@ -253,13 +225,13 @@ npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/
     --init-script dist/inpage.js --caps=vision        # or dist/inpage-agent.js, no caps needed
 ```
 
-- **Text snapshot** — per entity: properties, a verified clickable pixel, the **colour the style evaluates to for that feature** (`drawn red(#d32f2f)`; per layer when constant), feature-state; per map: projection / terrain, pixel-only layers, what is outside the viewport. The agent calls `browser_evaluate` with `window.__geowright.snapshot('main')` (see `agent/MAP_SKILL.md`) and
-  clicks the listed client pixels with `browser_mouse_click_xy`. Most efficient in our runs.
-- **Accessibility mirror** — features appear in the normal `browser_snapshot` as buttons; normal `browser_click` works
-  (a real click that bubbles to the map, like a MapLibre Marker). Zero instructions. Also usable from tests:
-  `page.getByRole('button', { name: /Gas leak/ }).click()`.
+- **Text snapshot** — `window.__geowright.snapshot('main')` lists, per entity, its properties, a verified clickable pixel and
+  the colour the style evaluates to for it; the agent clicks the listed pixels. The most efficient in our runs.
+- **Accessibility mirror** — features appear in the normal `browser_snapshot` as buttons, and a normal `browser_click` works
+  (a real click that reaches the map). Zero instructions. Also usable from tests: `page.getByRole('button', { name: /Gas leak/ }).click()`.
 
-`agent/mcp-probe.mjs` exercises the whole path without an LLM; results of real agent runs are in docs/DESIGN.md.
+The skill text is [`agent/MAP_SKILL.md`](agent/MAP_SKILL.md); `agent/mcp-probe.mjs` exercises the whole path without an LLM; results of
+real agent runs: [DESIGN — The agent layer](docs/DESIGN.md#the-agent-layer-text-snapshot-and-accessibility-mirror).
 
 ## Vector tiles without a tile server
 
@@ -272,32 +244,19 @@ Real MVT tiles are cut from a GeoJSON fixture inside `page.route`; the app keeps
 `vectorTileHandler(layers)` is the same thing as a plain route handler (for `context.route` or a routing table). `tests/wild/basemap.ts` builds a whole offline basemap this way (style + synthetic city + sprite + glyphs).
 For tiled sources the browser cannot know what is off-screen, and the failure messages say so.
 
-## Determinism
+## Limits
 
-No network. Inline style, GeoJSON sources, raster tiles fulfilled with `page.route`, glyphs served by the app (Noto Sans, OFL). The `map` fixture aborts and fails the test on any non-local request. Headless software WebGL flags (same set MapLibre uses in its own CI) are documented in `playwright.config.ts`.
+- **Tested on Chromium** with software WebGL (the flag set MapLibre uses in its own CI; `npx geowright init` writes it).
+  Touch gestures beyond `tap` go through CDP — Chromium only.
+- **One line in the app is required.** Auto-discovery is not possible for bundled ESM apps (`tests/discovery.spec.ts` proves it).
+- **`waitForIdle()` cannot see app-level async** (a fetch that adds a layer later) — use the retrying assertions for that.
+- **Tiled sources:** the browser cannot know what is off-screen, and the failure messages say so.
+- **On a globe** MapLibre's own viewport-wide query is wrong; the workaround is a grid: an extrusion narrower than 16 px whose
+  footprint centre is off-screen can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
+- **`hover` on a moving target** is only dependable when frames are short; `click` holds up.
+- The injected script is ~135 KB (it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
 
-## Run
-
-```sh
-npm i && npx playwright install chromium
-node demo/scripts/copy-worker.mjs      # MapLibre 6 worker files -> demo/public (after a fresh install)
-npx playwright test                    # builds the demo, serves it on :4173, runs headless (e2e + tests/unit)
-npx playwright test --repeat-each=20   # the flake bar
-npm run dev                            # poke at the demo app by hand
-bash scripts/kill-preview.sh           # stop THIS repo's preview server so the next run rebuilds the demo
-npm run pack:local                     # dist/geowright-0.0.0.tgz for trying it in another project (for local testing)
-```
-
-## Layout
-
-```
-demo/             the system under test (Vite + MapLibre 6 + terra-draw; dense.html = 5k points; draw2.html = mapbox-gl-draw), no test code inside
-src/inpage/       injected into the page: adapter seam (types.ts), engine (library-agnostic), MapLibre adapter
-src/playwright/   geowright(page), handles, expect matchers
-wild/             apps we did NOT write (MapLibre examples, react-map-gl / Vue / Svelte apps), one-line hook each, their licenses, fixtures
-tests/            assert / act / draw / draw2 / dense / camera / overlays / artefacts / touch-keyboard / input / visibility / vector-tiles / two-maps / discovery / snapshot / mirror specs; tests/wild = the wild-apps suite; tests/unit = pure-function tests
-agent/            Playwright MCP config, init-page hook, skill text, MCP probe + CLI bridge
-```
+The full list, with costs measured on a dense map: [DESIGN — Costs and known limitations](docs/DESIGN.md#costs-and-known-limitations).
 
 ## Supported map library versions
 
@@ -324,6 +283,19 @@ diagnostics and in the snapshot (`note: …`) instead of being answered wrongly.
 Mapbox GL JS **v2 and later are proprietary and are not tested** (the v1 API family they share makes it likely that most
 of this works; nobody here may install them to find out). Style expressions newer than the bundled evaluator are reported
 once and treated as visible; styles OLDER than the evaluator are fine.
+
+## Developing geowright
+
+```sh
+npm i && npx playwright install chromium
+node demo/scripts/copy-worker.mjs      # MapLibre 6 worker files -> demo/public (after a fresh install)
+npx playwright test                    # builds the demo, serves it on :4173, runs headless
+```
+
+The suite needs no network: everything a page fetches is answered from fixtures (`page.route`), and a non-local request
+fails the test. `demo/` is the app under test, `src/inpage/` is injected into the page (adapter seam, engine, MapLibre adapter),
+`src/playwright/` is the test-side API, `wild/` holds apps we did not write, `agent/` the Playwright MCP pieces.
+Ground rules, the flake bar and the sign-off: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Open source, and staying that way
 

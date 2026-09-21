@@ -1,0 +1,46 @@
+name: Bug report
+description: Something geowright did wrong — a false pass, a false failure, a click on the wrong thing, a crash.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. A failing geowright call prints **"What is on the map"** — that text is usually most of the diagnosis, so please paste it whole.
+        For a security problem, do not open an issue: use **Security → Report a vulnerability** (see SECURITY.md).
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+      description: The call you made (`map.feature(...).click()`, `expect(map).toHaveFeature(...)`, …) and what the map was showing.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Failure output
+      description: The full error text, including "What is on the map". If the report has a `map screenshot — …` attachment, add it.
+      render: text
+  - type: textarea
+    id: repro
+    attributes:
+      label: The smallest page and test that show it
+      description: A style with inline GeoJSON is ideal — no tile server, no API key. A link to a repository is fine too.
+  - type: input
+    id: versions
+    attributes:
+      label: Versions
+      description: geowright · map library and version (e.g. maplibre-gl 5.6.0, mapbox-gl 1.13.3) · wrapper, if any (react-map-gl, …) · @playwright/test · OS
+      placeholder: geowright 0.1.0 · maplibre-gl 6.10.0 · @playwright/test 1.63.0 · Ubuntu 24.04
+    validations:
+      required: true
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where does it fail?
+      options:
+        - Everywhere
+        - Only in CI / on a slower machine
+        - Only locally
+        - Only sometimes (flaky)
+    validations:
+      required: true

@@ -24,6 +24,7 @@ node demo/scripts/copy-worker.mjs
 npx playwright test            # e2e (demo app + wild apps) and unit tests
 npm run typecheck
 bash scripts/kill-preview.sh   # stop THIS repo's servers (never pkill by pattern on a shared machine)
+npm run pack:local             # a .tgz for trying the package in another project
 ```
 Design decisions, dead ends and the evidence behind them are recorded in `docs/DESIGN.md`; read the
 relevant section before re-opening a settled question. API changes update `README.md` (API reference table)

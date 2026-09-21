@@ -616,7 +616,8 @@ could not: the floating building parts mentioned under actionability.
 
 31 applications not written for this project — 23 official MapLibre examples, 3 React (react-map-gl)
 applications, 2 Svelte (svelte-maplibre-gl) applications, and 3 Vue (vue-maplibre-gl) applications —
-covering 130 specs in total:
+covering 132 specs in total (`tests/wild` holds 140: the other 8 are the dense-basemap and opt-in real-basemap
+realism specs, which are not apps):
 
 | app | specs | result |
 |---|---|---|
@@ -631,12 +632,12 @@ covering 130 specs in total:
 | filter-symbols-by-toggling-a-list | 5 | after a library fix (id-less identity; missing-icon message) |
 | filter-symbols-by-text-input | 4 | after a library fix (id-less identity) |
 | variable-label-placement | 4 | untouched; needs an extended timeout for the example's own animation |
-| display-a-popup-on-click | 5 | after a library fix (id-less identity) |
+| display-a-popup-on-click | 6 | after a library fix (id-less identity; property-identical look-alikes) |
 | center-the-map-on-a-clicked-symbol | 4 | after a library fix (id-less and property-less symbols) |
-| animate-a-point | 4 | untouched, with a real limit: a perpetually moving feature can be asserted but never clicked |
+| animate-a-point | 6 | untouched, with a real limit: a perpetually moving point is refused by default (later: `{ moving: 'allow' }` clicks it) |
 | update-a-feature-in-realtime | 5 | untouched (the map never idles by design) |
 | add-a-canvas-source | 5 | after a library addition (`toHaveLayerPixels`) |
-| animate-a-series-of-images | 5 | untouched (plus one new spec for the new matcher) |
+| animate-a-series-of-images | 4 | untouched (a pixel assertion on it was removed: under load the app itself paints nothing for seconds) |
 | create-a-draggable-point | 5 | untouched |
 | measure-distances | 5 | untouched |
 | draw-polygon-with-mapbox-gl-draw | 2 | untouched library; the fixture (a bundled third-party dependency) was the hard part |
@@ -652,7 +653,7 @@ covering 130 specs in total:
 | vue-maplibre-gl / geojson | 1 | untouched |
 | vue-maplibre-gl / marker-popup | 2 | untouched |
 
-**31 apps, 130 specs. Worked untouched: 15 (48%). Worked after a library fix or addition: 16 (52%).
+**31 apps, 132 specs (re-counted against `--list` on 2026-09-21). Worked untouched: 15 (48%). Worked after a library fix or addition: 16 (52%).
 Could not be tested at all: 0.** That zero deserves its caveats stated alongside it, honestly: some
 applications were excluded before ever being tried, purely on licensing grounds (one video-based
 example with no license found for its video asset; anything that would otherwise need real OSM or
