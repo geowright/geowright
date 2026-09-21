@@ -52,8 +52,20 @@ jobs:
       - run: npm run build
       - name: Machine load before (a timeout on a busy shared machine is not a verdict)
         run: uptime
-      - name: Full suite
-        run: npx playwright test
+      # The machine load goes into this step's log once a minute ("[load] …" between the test lines): four timeouts
+      # inside one loaded minute are a different finding from four timeouts spread over a quiet run.
+      - name: Full suite, with the machine load once a minute
+        run: |
+          ( while true; do
+              if [ "$(uname)" = Darwin ]; then busiest=" | busiest process of another user: $(ps -Ao pcpu,user,comm -r | awk -v me="$(id -un)" 'NR>1 && $2!=me {print; exit}' | cut -c1-90)"; else busiest=""; fi
+              echo "[load] $(uptime)$busiest"
+              sleep 60
+            done ) &
+          LOGGER=$!
+          code=0
+          npx playwright test || code=$?
+          kill "$LOGGER" 2>/dev/null || true
+          exit $code
       - name: Machine load after
         if: always()
         run: uptime
