@@ -40,3 +40,8 @@ git ls-files -z --cached --others --exclude-standard | COPYFILE_DISABLE=1 tar --
     fi
     exit $code
   ' bash "$@"
+
+# A full green run on a clean tree leaves a verdict for that commit (git-ignored): release tooling asks for it.
+if [ "$#" -eq 0 ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+  mkdir -p .scratch/verdicts && date -u +%Y-%m-%dT%H:%M:%SZ > ".scratch/verdicts/linux-$(git rev-parse HEAD).ok"
+fi

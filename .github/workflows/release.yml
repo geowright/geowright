@@ -1,0 +1,61 @@
+name: release
+
+# Publishes the package to npm when a version tag is pushed — from a GitHub-hosted runner, through npm TRUSTED
+# PUBLISHING (OpenID Connect): there is no npm token anywhere, not in this repository's secrets and not on a laptop.
+# npm attaches a provenance statement automatically (this commit, this workflow run).
+#
+# npm side (package settings on npmjs.com -> Trusted publisher): this repository, workflow file `release.yml`,
+# environment `npm`. And, once it has worked: Publishing access -> "Require two-factor authentication and disallow
+# tokens". Trusted publishing needs npm >= 11.5.1 and Node >= 22.14, on a GitHub-hosted runner.
+#
+# The `npm` environment is restricted to `v*` tags and asks a maintainer to approve the job before it runs.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    # Never from a fork, and never from a copy of this repository under another name.
+    if: github.repository == 'geowright/geowright'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm
+    permissions:
+      contents: read
+      actions: read # to check that ci passed on this commit
+      id-token: write # OIDC: what npm trusts instead of a token
+    steps:
+      # The one workflow that can publish pins its actions to commits, not to tags that can move.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+          package-manager-cache: false # no caches in a release build
+      - name: The tag is the version, and the tagged commit is on main
+        run: |
+          version=$(node -p "require('./package.json').version")
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "tag $GITHUB_REF_NAME != package.json version $version"; exit 1; }
+          [ "$(node -p "require('./package.json').private === true")" = false ] || { echo "package.json is private"; exit 1; }
+          git fetch --no-tags --depth=200 origin main
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main || { echo "$GITHUB_SHA is not on main"; exit 1; }
+      - name: ci passed on this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ok=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$GITHUB_SHA&status=success" --jq '.total_count')
+          [ "$ok" -ge 1 ] || { echo "no successful ci run for $GITHUB_SHA — not publishing"; exit 1; }
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm pack --dry-run
+      - run: npm publish --access public
