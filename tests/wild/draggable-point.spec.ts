@@ -34,7 +34,7 @@ test.describe('wild: create-a-draggable-point', () => {
   test('the point can be dragged again to a second location (the drag handlers survive a full drag cycle)', async ({ wild, page }) => {
     // The longest test of the file: TWO 12-step drags on a full-screen basemap where every mousemove makes the app call
     // setData. With five software-GL workers it runs out of the 30s budget inside `mouse.move` — never on an assertion —
-    // about 1 time in 10 (first 20x on the dedicated runner: 4/20; alone with its neighbours: 2/20; and once in this
+    // about 1 time in 10 on a busy machine (a full 20x: 4/20; alone with its neighbours: 2/20; and once in this
     // phase's very first baseline, before any code had changed). A timeout multiplier, not a retry: it cannot hide a
     // flake, only a false alarm.
     test.slow();
