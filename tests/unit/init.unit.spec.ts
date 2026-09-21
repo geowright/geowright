@@ -19,14 +19,18 @@ for (const [app, wrapper, hook] of [
   ['svelte-maplibre-gl', 'svelte-maplibre-gl', '<MapLibre onload={(e) => ((window.__geowright_maps ??= {}).main = e.target)}'],
   ['vue-maplibre-gl', 'vue-maplibre-gl', '@map:load="e => ((e.map.getContainer().ownerDocument.defaultView.__geowright_maps ??= {}).main = e.map)"'],
 ] as const) {
-  test(`init in a ${app} app: detects the wrapper, prints ITS hook, writes three files, never overwrites`, () => {
+  test(`init in a ${app} app: detects the wrapper, prints ITS hook, writes three files + a config where there is none, never overwrites`, () => {
     const cwd = scratch(app);
     const lines: string[] = [];
     const first = init({ cwd, log: (l) => lines.push(l) });
     expect(first.detection.wrappers.map((w) => w.name)).toEqual([wrapper]);
     expect(first.detection.mapLibrary).toMatchObject({ pkg: 'maplibre-gl', supported: true });
     expect(lines.join('\n')).toContain(hook);
-    expect(first.written).toHaveLength(3);
+    expect(first.written).toHaveLength(4); // fixture, flags, first spec — and a whole Playwright config: the scratch app has none
+    const config = readFileSync(join(cwd, first.config!), 'utf8');
+    expect(config).toContain(`from './tests/geowright.webgl.js'`);
+    expect(config).toContain('launchOptions: { args: WEBGL_SOFTWARE_FLAGS }');
+    expect(config).toContain(`command: 'npm run dev'`);
     for (const f of first.written) expect(existsSync(join(cwd, f))).toBe(true);
     const spec = first.written.find((f) => f.includes('map.spec'))!;
     expect(readFileSync(join(cwd, spec), 'utf8')).toContain('console.log(await map.snapshot())');
@@ -41,8 +45,14 @@ for (const [app, wrapper, hook] of [
     const second = init({ cwd, log: () => {} });
     expect(second.written).toHaveLength(0);
     expect(second.skipped).toHaveLength(3);
+    expect(second.config).toBeUndefined();
     expect(readFileSync(join(cwd, spec), 'utf8')).toBe('// mine now');
-    expect(init({ cwd, force: true, log: () => {} }).written).toHaveLength(3);
+    // --force rewrites OUR three files; a Playwright config is the user's file and is never overwritten
+    writeFileSync(join(cwd, first.config!), '// my config');
+    const forced = init({ cwd, force: true, log: (l) => lines.push(l) });
+    expect(forced.written).toHaveLength(3);
+    expect(readFileSync(join(cwd, first.config!), 'utf8')).toBe('// my config');
+    expect(lines.join('\n')).toContain('three lines for YOUR playwright.config');
   });
 }
 

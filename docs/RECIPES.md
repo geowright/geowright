@@ -13,7 +13,10 @@ npx geowright init            # [--dir tests] [--url /] [--force]
 Writes `geowright.fixture.ts` (a `map` fixture), `geowright.webgl.ts` (the software-WebGL launch flags) and `map.spec.ts`
 (a first spec that prints `map.snapshot()` — read it once: it tells you your layer ids and property names). It looks at
 your `package.json`, recognises react-map-gl, `@vis.gl/react-maplibre`, svelte-maplibre-gl and vue-maplibre-gl, and prints
-the hook in the form that wrapper needs. It never overwrites a file without `--force`.
+the hook in the form that wrapper needs. It never overwrites a file without `--force`. Where the project has no
+`playwright.config.*` it writes a complete one (flags wired in, `baseURL`, `webServer`) with two lines marked CHECK: where
+your app is served and how it is started. An existing config is never edited, not even with `--force`: `init` prints the
+three lines to add.
 
 ## The one line, per wrapper
 

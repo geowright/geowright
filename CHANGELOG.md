@@ -8,7 +8,8 @@ Not published; versions start when the package does. Until then this lists what 
   in the README. Adapter: `getLayersOrder` / `GeoJSONSource.getData` / `areTilesLoaded` / `getRenderWorldCopies` are
   feature-detected with public fallbacks; `mapboxgl-` marker/popup classes; the pixel probe works without `redraw()`
   (through the `render` event; seam: `pixelContribution` may return a promise); new caveats say what a version cannot do.
-- **`npx geowright init`** (fixture, WebGL flags, first spec, the hook for the detected wrapper) and `docs/RECIPES.md`.
+- **`npx geowright init`** (fixture, WebGL flags, first spec, the hook for the detected wrapper; a complete
+  `playwright.config` where the project has none — an existing one is never edited) and `docs/RECIPES.md`.
 - **`{ moving: 'allow' }`** on `click` / `dblclick` / `rightClick` / `tap` / `hover`: act on a feature that never stops
   moving. Skips the at-rest and two-frame checks, aims ahead along the measured velocity (lead learnt from misses), and
   relies on the click-time verification: late input is swallowed and retried, never delivered to something else.

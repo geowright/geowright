@@ -119,6 +119,32 @@ test('what is on my map?', async ({ map }) => {
 `,
 });
 
+/**
+ * A whole Playwright config — written ONLY where there is none (a cold user of `init` had to compose one from the
+ * three-line comment in geowright.webgl). Never overwritten, not even with --force: a config is the user's file.
+ */
+export const CONFIG_NAMES = ['ts', 'js', 'mts', 'mjs', 'cts', 'cjs'].map((e) => `playwright.config.${e}`);
+
+export function configFile(dir: string, pkgJson: { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }): string {
+  const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
+  const script = pkgJson.scripts?.dev ? 'npm run dev' : pkgJson.scripts?.start ? 'npm start' : 'npm run dev';
+  const port = 'vite' in deps ? 5173 : 3000;
+  return `import { defineConfig, devices } from '@playwright/test';
+import { WEBGL_SOFTWARE_FLAGS } from './${dir}/geowright.webgl.js';
+
+// Written by \`geowright init\` because this project had no Playwright config. CHECK the two marked lines.
+const baseURL = process.env.BASE_URL ?? 'http://localhost:${port}'; // <- CHECK: where your app is served
+
+export default defineConfig({
+  testDir: './${dir}',
+  use: { baseURL },
+  // Headless Chromium has no GPU: without these flags a WebGL map does not render.
+  projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: WEBGL_SOFTWARE_FLAGS } } }],
+  webServer: { command: '${script}', url: baseURL, reuseExistingServer: true }, // <- CHECK: how your app is started
+});
+`;
+}
+
 export interface InitOptions {
   cwd: string;
   dir?: string;
@@ -127,11 +153,12 @@ export interface InitOptions {
   log?: (line: string) => void;
 }
 
-export function init(o: InitOptions): { written: string[]; skipped: string[]; detection: Detection } {
+export function init(o: InitOptions): { written: string[]; skipped: string[]; detection: Detection; config?: string } {
   const log = o.log ?? console.log;
   const pkgPath = join(o.cwd, 'package.json');
   if (!existsSync(pkgPath)) throw new Error(`geowright init: no package.json in ${o.cwd} — run it in the root of the app's project`);
-  const detection = detect(JSON.parse(readFileSync(pkgPath, 'utf8')));
+  const pkgJson = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  const detection = detect(pkgJson);
   const ext = detection.typescript || existsSync(join(o.cwd, 'tsconfig.json')) ? 'ts' : 'js';
   const dir = o.dir ?? (existsSync(join(o.cwd, 'e2e')) ? 'e2e' : 'tests');
   const written: string[] = [], skipped: string[] = [];
@@ -144,6 +171,12 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
     mkdirSync(dirname(file), { recursive: true });
     writeFileSync(file, body.replace('${dir}', dir));
     written.push(relative(o.cwd, file));
+  }
+  let config: string | undefined;
+  if (!CONFIG_NAMES.some((n) => existsSync(join(o.cwd, n)))) {
+    config = `playwright.config.${ext}`;
+    writeFileSync(join(o.cwd, config), configFile(dir, pkgJson));
+    written.push(config);
   }
 
   log('geowright init');
@@ -163,9 +196,10 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
   if (detection.mapLibrary && !detection.mapLibrary.supported) log(`\n   WARNING: ${detection.mapLibrary.pkg}@${detection.mapLibrary.range} — ${detection.mapLibrary.why}`);
   if (!detection.mapLibrary) log('\n   note: neither maplibre-gl nor mapbox-gl is a dependency of this package. geowright supports MapLibre GL JS 2–6 and Mapbox GL JS 1.13.');
   log('');
-  log(`2. Headless WebGL needs launch flags: see ${dir}/geowright.webgl.${ext} (three lines for playwright.config).`);
+  if (config) log(`2. There was no Playwright config: wrote ${config} with the headless-WebGL launch flags in it.\n   CHECK its two marked lines: where your app is served, and how it is started.`);
+  else log(`2. Headless WebGL needs launch flags: see ${dir}/geowright.webgl.${ext} (three lines for YOUR playwright.config; init never edits it).`);
   if (!detection.playwright) log('   @playwright/test is not installed here yet:  npm i -D @playwright/test geowright && npx playwright install chromium');
   log('');
   log(`3. npx playwright test ${dir}/map.spec.${ext}   — prints what is on your map; write assertions from that.`);
-  return { written, skipped, detection };
+  return { written, skipped, detection, config };
 }

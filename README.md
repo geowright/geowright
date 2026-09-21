@@ -17,7 +17,8 @@ Actions are **real input** (`page.mouse` at projected pixels), never `map.fire()
 
 ```sh
 npm i -D geowright @playwright/test && npx playwright install chromium
-npx geowright init      # a fixture, the software-WebGL flags, a first spec that prints map.snapshot(), and the hook for YOUR wrapper
+npx geowright init      # a fixture, the software-WebGL flags (+ a whole playwright.config if you have none), a first spec
+                        # that prints map.snapshot(), and the hook for YOUR wrapper
 ```
 More: [docs/RECIPES.md](docs/RECIPES.md).
 
