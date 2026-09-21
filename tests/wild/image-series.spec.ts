@@ -49,5 +49,5 @@ test.describe('wild: animate-a-series-of-images', () => {
   // REMOVED after the 20x: `toHaveLayerPixels` on this layer. The example swaps the source image every 200 ms; when
   // the machine cannot deliver and decode an image in 200 ms (5 workers of software GL), the layer paints nothing
   // for seconds — the app's behaviour under starvation, faithfully observed: 7 failures in 160 under contention, 0 in
-  // 40 alone. An assertion that depends on the machine being fast is not one for this suite (the design notes).
+  // 40 alone. An assertion that depends on the machine being fast is not one for this suite.
 });

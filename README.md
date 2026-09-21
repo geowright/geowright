@@ -44,7 +44,7 @@ The in-page adapter is injected by Playwright at test time. (Auto-discovery is n
 ## Test side
 
 ```ts
-import { geowright, expect } from '../src/playwright';
+import { geowright, expect } from 'geowright';   // inside this repository: '../src/playwright'
 
 const map = geowright(page);                       // { mapId?: 'main', timeout?, ignoreLayers?, mirror?, failureScreenshots? }
 await map.waitForIdle();

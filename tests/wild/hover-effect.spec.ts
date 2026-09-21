@@ -30,7 +30,7 @@ test.describe('wild: create-a-hover-effect', () => {
     expect((await map.feature({ layer: 'state-fills', where: { STATE_NAME: 'Texas' } }).info()).state).toBeUndefined();
     // The USA polygon is almost entirely under the app's state-fills: to a user, and to geowright, it is covered.
     // (Pixel-exact truth: a sliver of northern Alaska is not, where the two coastlines disagree. Found after 15,000
-    // hit tests before the search was bounded — see the design notes.)
+    // hit tests before the search was bounded.)
     await expect(map.feature({ layer: 'countries-fill', where: { NAME: 'United States of America' } }).hover({ timeout: 3000 })).rejects.toThrow(/candidate points are all covered by another feature; topmost is state-(fills|borders)/);
   });
 });

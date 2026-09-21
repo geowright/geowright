@@ -155,7 +155,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     else data = (source.serialize?.() as { data?: GeoJSON.GeoJSON | string } | undefined)?.data;
     if (!data || typeof data === 'string') return null;
     // A source may hold a bare GEOMETRY ({ type: 'Point', … } — MapLibre's "animate a point" example does):
-    // MapLibre renders it as one feature without properties, so that is what it is here too. Until an earlier phase it
+    // MapLibre renders it as one feature without properties, so that is what it is here too. Originally it
     // was read as "no features", which silently disabled every question the engine asks the source.
     const feats: GeoJSON.Feature[] =
       data.type === 'FeatureCollection' ? data.features : data.type === 'Feature' ? [data] : [{ type: 'Feature', properties: {}, geometry: data }];

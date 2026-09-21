@@ -137,7 +137,7 @@ test.describe('lineCandidates', () => {
     expect(out).toHaveLength(5); // 3 vertices + 2 midpoints
   });
 
-  // Regression: until an earlier phase the candidates were ranked by index in [midpoints..., vertices...],
+  // Regression: originally the candidates were ranked by index in [midpoints..., vertices...],
   // whose middle index is always the FIRST vertex — lines were clicked at their start, not their
   // middle. These unit tests found it.
   test('first candidate is the middle of the line, ends come last', () => {

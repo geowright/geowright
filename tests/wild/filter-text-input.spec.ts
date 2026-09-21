@@ -44,7 +44,7 @@ test.describe('wild: filter-symbols-by-text-input', () => {
   test(
     'the snapshot lists the 3 id-less, property-identical "music" symbols as 3 entities (was 1: fixed in the library)',
     async ({ wild }) => {
-      // FIXED IN THE LIBRARY (an earlier phase): this test was written as `test.fixme` — id-less features with identical
+      // FIXED IN THE LIBRARY: this test was written as `test.fixme` — id-less features with identical
       // properties used to collapse into ONE. The engine now splits same-key, id-less pieces by whether they touch on screen.
       const map = await wild.open(example('filter-symbols-by-text-input'), { routes });
       const snap = await map.snapshot({ layers: ['poi-music'] });

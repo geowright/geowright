@@ -34,7 +34,7 @@ client-side. Verified present in `dist/inpage.js` by grepping for symbols unique
 deps (`quickselect`, `tinyqueue`, `unitbezier` all matched; `jsonlint`, `minimist`,
 `json-stringify-pretty-compact` — used only by the style-spec's *validator*, not its evaluator — did
 not, i.e. tree-shaken out of this particular build). Re-checked from esbuild's metafile
-on 2026-09-20 (an earlier phase): the same four packages, nothing else from `node_modules`.
+on 2026-09-20: the same four packages, nothing else from `node_modules`.
 
 | Package | Version | SPDX | Copyright | Notice required? |
 |---|---|---|---|---|

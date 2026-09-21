@@ -549,7 +549,7 @@ export class MapHandle {
   /** @internal */
   async _drag(a: { x: number; y: number }, b: { x: number; y: number }, steps = 12, modifiers?: Modifier[]): Promise<void> {
     await this.page.mouse.move(a.x, a.y, { steps: 3 });
-    // The keys go down BEFORE the button (shift+drag = MapLibre box zoom, not a pan). Until an earlier phase drags
+    // The keys go down BEFORE the button (shift+drag = MapLibre box zoom, not a pan). Originally drags
     // accepted `modifiers` in their type and silently ignored them — found on MapLibre's boxzoom example.
     await withModifiers(this.page, modifiers, async () => {
       await this.page.mouse.down();

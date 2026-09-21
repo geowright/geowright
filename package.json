@@ -39,7 +39,7 @@
     "@maplibre/vt-pbf": "^4.3.2",
     "@types/geojson": "^7946.0.16"
   },
-  "description": "Grey-box Playwright testing for canvas maps (MapLibre GL JS). Early prototype.",
+  "description": "Grey-box Playwright testing for canvas maps: assert on and act on MapLibre GL JS features with real input.",
   "bin": {
     "geowright": "./dist/cli.js"
   },

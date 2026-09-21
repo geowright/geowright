@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import { cartoBasemap } from './basemap';
 import { expect, test, type Routes } from './harness';
 
-// MIERUNE/svelte-maplibre-gl examples (Svelte 5). The friction predicted in an earlier phase, for real: NO layer or source
+// MIERUNE/svelte-maplibre-gl examples (Svelte 5). The friction predicted earlier, for real: NO layer or source
 // has an id — the wrapper generates `svmlgl-layer-0, -1, -2` / `svmlgl-source-0` from a global counter, so an id
 // says nothing and shifts when the app adds a layer. Queries here go by what a layer IS: `layerType` + `where`.
 const MAPLIBRE_CSS = fileURLToPath(new URL('../../node_modules/maplibre-gl/dist/maplibre-gl.css', import.meta.url));

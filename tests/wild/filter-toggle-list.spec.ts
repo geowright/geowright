@@ -52,7 +52,7 @@ test.describe('wild: filter-symbols-by-toggling-a-list', () => {
   test(
     'three "music" POIs with no id and identical properties are counted as 3 (was 1: fixed in the library)',
     async ({ wild }) => {
-      // FIXED IN THE LIBRARY (an earlier phase): this test was written as `test.fixme` — id-less features with identical
+      // FIXED IN THE LIBRARY: this test was written as `test.fixme` — id-less features with identical
       // properties used to collapse into ONE. The engine now splits same-key, id-less pieces by whether they touch on screen.
       const map = await wild.open(example('filter-symbols-by-toggling-a-list'), { routes });
       await expect(map.features({ layer: 'poi-music' })).toHaveFeatureCount(3);

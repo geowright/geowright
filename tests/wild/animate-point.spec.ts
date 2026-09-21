@@ -5,8 +5,8 @@ import { DEMOTILES, example, expect, test } from './harness';
 // Almost always `unstable`. Rarely (≈1 in 20 under heavy contention) `ambiguous`: the source is re-set every frame
 // and for an instant the dot is rendered from two tile generations, 30px apart — two id-less, property-identical
 // pieces that do not touch. The engine asks the source data ("one feature? then it is one") and that removes most
-// of it, not all: recorded as an open issue in the design notes. Either way the action refuses; it never mis-clicks.
-// Since an earlier phase an action's timeout is wall-clock: on an overloaded machine the refusal can also be "the page did not
+// of it, not all: a known limit (docs/DESIGN.md, "still wrong"). Either way the action refuses; it never mis-clicks.
+// An action's timeout is wall-clock: on an overloaded machine the refusal can also be "the page did not
 // answer in the time that was left" — equally true, equally not a click.
 const REFUSED = /unstable: feature position changed between two animation frames|ambiguous: strict mode violation: query resolved to 2 features: point \{\}|the page did not answer "actionPoint" in the time that was left/;
 
@@ -87,7 +87,7 @@ test.describe('wild: animate-a-point', () => {
   });
 
   test('the source holds a bare GeoJSON geometry (no Feature wrapper): the library can still ask it about the point', async ({ wild }) => {
-    // Until an earlier phase a bare geometry read as "no features", so identity could never be learnt from this source —
+    // Originally a bare geometry read as "no features", so identity could never be learnt from this source —
     // the cause of the rare `ambiguous` above. `from: 'data'` proves the source answered.
     const map = await wild.open(example('animate-a-point'), { routes: DEMOTILES, waitForIdle: false });
     await expect(map).toHaveFeature({ layer: 'point' }, { timeout: 15_000 });

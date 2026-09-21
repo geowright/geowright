@@ -38,7 +38,7 @@ test.describe('wild: center-the-map-on-a-clicked-symbol', () => {
   test(
     '3 symbols with no id AND no properties at all are 3 features (was 1: fixed in the library)',
     async ({ wild }) => {
-      // FIXED IN THE LIBRARY (an earlier phase): this test was written as `test.fixme` — id-less features with identical
+      // FIXED IN THE LIBRARY: this test was written as `test.fixme` — id-less features with identical
       // properties used to collapse into ONE. The engine now splits same-key, id-less pieces by whether they touch on screen.
       const map = await wild.open(example('center-the-map-on-a-clicked-symbol'), { routes });
       await expect(map.features({ layer: 'symbols' })).toHaveFeatureCount(3);

@@ -16,7 +16,7 @@ test.describe('wild: select-features-with-boxzoomend-callback', () => {
   // `withModifiers`, unlike every other action (clickAt, wheelAt, ...). So the modifier key is never
   // actually held during the gesture, and MapLibre's default drag-PAN handler runs instead of
   // boxZoom. This is a real gap for any app whose box-select/box-zoom depends on a held modifier.
-  // FIXED IN THE LIBRARY (an earlier phase): written as test.fixme — dragAt accepted `modifiers` in its type and dropped them.
+  // FIXED IN THE LIBRARY: written as test.fixme — dragAt accepted `modifiers` in its type and dropped them.
   test('shift+drag selects earthquakes inside the box, via dragAt({ modifiers })', async ({ wild, page }) => {
     const map = await wild.open(example('select-features-with-boxzoomend-callback'), { routes });
     const from = { lng: -110, lat: 47 };
@@ -44,11 +44,11 @@ test.describe('wild: select-features-with-boxzoomend-callback', () => {
   });
 
   // The example's highlight layer NEVER draws anything, although its counter says features are selected. The cause
-  // (verified in an earlier phase against raw MapLibre 3.6 / 4.7 / 5.24 / 6.10, no test library in the page): the source uses
+  // (verified against raw MapLibre 3.6 / 4.7 / 5.24 / 6.10, no test library in the page): the source uses
   // `promoteId: 'id'` with STRING ids, queryRenderedFeatures() reports those strings as `feature.id`, and the example
   // feeds them into `['in', ['id'], ['literal', ids]]` — but a layer filter's `['id']` does not see promoted string
   // ids (0 matches on every version; `['get', 'id']` matches). The earlier explanation here ("queries go stale after
-  // setFilter") was wrong: nothing is stale, the filter matches nothing. This behavior is documented in the design notes.
+  // setFilter") was wrong: nothing is stale, the filter matches nothing.
   test('surprising: the selected-highlight layer never becomes queryable, even though the DOM says it is populated', async ({ wild, page }) => {
     const map = await wild.open(example('select-features-with-boxzoomend-callback'), { routes });
     await shiftDrag(map, page, { lng: -110, lat: 47 }, { lng: -85, lat: 26 });

@@ -53,7 +53,7 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
   test('countries are found WITHOUT `at`, near side only — MapLibre\'s own viewport query gets this wrong on a globe', async ({ wild, page }) => {
     // Written as test.fixme by the example run: raw map.queryRenderedFeatures() with no geometry returns ~24
     // countries here (Americas + South Asia) and omits Gabon, Nigeria… which ARE on screen; box queries return
-    // the far side as well. The adapter now asks in a grid and keeps near-side pieces (the design notes).
+    // the far side as well. The adapter now asks in a grid and keeps near-side pieces.
     const map = await open(wild);
     const raw = await page.evaluate(() => new Set((window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['countries-fill'] }).map((f: any) => f.properties.NAME)).size);
     expect(raw).toBeLessThan(40); // the upstream behaviour this test exists for; if this starts failing, MapLibre fixed it

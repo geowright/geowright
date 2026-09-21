@@ -53,6 +53,14 @@ An animated source, a `setData` loop, a rotating camera: `waitForIdle()` times o
 not wait for idle on such a page — assertions and actions retry by themselves. To act on a feature that never stops
 moving: `click({ moving: 'allow' })` (README, "Features that never stop moving").
 
+**A static map that times out with "source(s) … have not finished loading"** is usually not a test problem: the app's
+map is broken in the browser too. The common case is MapLibre GL JS 6 under Vite's DEV server — the dependency
+optimizer moves `maplibre-gl` and its worker file is not found (the dev server's log says `maplibre-gl-worker.mjs …
+does not exist … Try adding it to optimizeDeps.exclude`), so no source ever loads. In `vite.config`:
+`optimizeDeps: { exclude: ['maplibre-gl'] }`, or test the built app (`vite build && vite preview`), which is what this
+repository does. Note also that MapLibre 6 is ESM with named exports only: `import { Map } from 'maplibre-gl'`
+(or `import * as maplibregl`), not a default import.
+
 ## Layer ids I do not control
 
 svelte-maplibre-gl generates `svmlgl-layer-0…` from a counter that shifts when a layer is added. Address layers by

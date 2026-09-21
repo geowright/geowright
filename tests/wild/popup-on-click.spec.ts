@@ -50,7 +50,7 @@ test.describe('wild: display-a-popup-on-click', () => {
   test(
     'two places sharing every queried property are two features (was one: fixed in the library)',
     async ({ wild }) => {
-      // FIXED IN THE LIBRARY (an earlier phase): this test was written as `test.fixme` — id-less features with identical
+      // FIXED IN THE LIBRARY: this test was written as `test.fixme` — id-less features with identical
       // properties used to collapse into ONE. The engine now splits same-key, id-less pieces by whether they touch on screen.
       const map = await wild.open(example('display-a-popup-on-click'), { routes });
       await expect(map.features({ layer: 'places', where: { icon: 'theatre' } })).toHaveFeatureCount(2);
@@ -65,7 +65,7 @@ test.describe('wild: display-a-popup-on-click', () => {
     expect(snap).toContain('[places] 9 symbol entities');
     expect(snap.match(/^  - Point @\(\d+,\d+\).* description=/gm)?.length).toBe(9);
     // … while the basemap's busiest layer (40 streets, on a tiled source with 8+ layers) has given up most or all of its
-    // rows. Before an earlier phase it was the other way round: top-down order spent the budget on the basemap first.
+    // rows. Originally it was the other way round: top-down order spent the budget on the basemap first.
     const unlisted = Number(/\[highway-minor\] 40 line entities[\s\S]*?… (\d+) more not listed/.exec(snap)?.[1]);
     expect(unlisted).toBeGreaterThanOrEqual(33);
   });

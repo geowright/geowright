@@ -72,7 +72,7 @@ export class Engine<W = unknown> {
 
   /**
    * Features with NO id and IDENTICAL properties — three POIs that are all just `{ icon: "music" }`, buildings
-   * with no attributes at all — have the same key, and until an earlier phase they silently became ONE feature (found on
+   * with no attributes at all — have the same key, and originally they silently became ONE feature (found on
    * MapLibre's own symbol examples). Geometry is all that tells them apart, but it cannot simply go into the
    * key: pieces of one tiled polygon have different (clipped) geometries. What pieces of ONE feature do is
    * touch: neighbouring tiles overlap by their buffer. So same-key, id-less pieces are split into connected
@@ -219,7 +219,7 @@ export class Engine<W = unknown> {
 
   /**
    * The feature a USER sees at the top of a pixel. Features the style paints invisibly (an opacity-0
-   * hit area, a muted symbol) hide nothing, so they are not occluders — until an earlier phase they were.
+   * hit area, a muted symbol) hide nothing, so they are not occluders — originally they were.
    * (MapLibre delivers layer-scoped events to every layer under the pointer, so "on top" was never
    * about who gets the click; it is about what the person clicking can see.)
    */
@@ -948,7 +948,7 @@ export class Engine<W = unknown> {
     const located = new Map<string, ReturnType<Engine<W>['locate']>>();
     const header = out.splice(0);
     // A basemap is a tiled source with many layers on it. Its rows are the least interesting thing on the page to
-    // whoever asked for a snapshot of an APP, and until an earlier phase they ate the budget first (top-down order): "… 54
+    // whoever asked for a snapshot of an APP, and originally they ate the budget first (top-down order): "… 54
     // more not listed" for every basemap layer and zero rows for the app's own. Now basemap layers give up their
     // rows first; the app's layers shrink only when that was not enough. Counts and histograms are never dropped.
     const perSource = new Map<string, number>();
@@ -1147,7 +1147,7 @@ export function sequenceDistance(a: Pt[], b: Pt[], cyclic: boolean): number {
 
 export function lineCandidates(pts: Pt[]): Pt[] {
   // In order ALONG the line: v0, m0, v1, m1, ..., so "index distance from the middle" means what it says.
-  // (Until an earlier phase this was [midpoints..., vertices...], whose middle index is always the FIRST vertex:
+  // (Originally this was [midpoints..., vertices...], whose middle index is always the FIRST vertex:
   // lines were clicked at their start. Found by the unit tests.)
   const c: Pt[] = [];
   for (let i = 0; i < pts.length; i++) {

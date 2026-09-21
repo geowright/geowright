@@ -34,7 +34,7 @@ test.describe('wild: add-a-canvas-source', () => {
     await expect(page.locator('#canvasID')).toBeHidden();
   });
 
-  // FIXED IN THE LIBRARY (an earlier phase): written as test.fixme — "a team wanting a pixel-content regression test for a
+  // FIXED IN THE LIBRARY: written as test.fixme — "a team wanting a pixel-content regression test for a
   // raster / canvas / image layer has no geowright API for it". `toHaveLayerPixels` is the feature-less sibling of
   // toBeVisibleOnMap: do the canvas pixels at a location change when the layer is not drawn?
   test('the canvas layer paints pixels inside its quad and nothing outside it', async ({ wild }) => {
