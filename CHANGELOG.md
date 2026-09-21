@@ -1,9 +1,9 @@
 # Changelog
 
-Not published; versions start when the package does. Until then this lists what changed per phase
+Not published; versions start when the package does. Until then this lists what changed, newest first
 (details and reasoning: `docs/DESIGN.md`). Breaking changes are marked **BREAKING**.
 
-## Unreleased — an earlier phase (2026-09-20): publishable and broad
+## Unreleased — publishable and broad
 - **Version matrix**: Mapbox GL JS 1.13 (BSD) and MapLibre GL JS 2, 3, 4, 5, 6 — `npm run test:compat`, support table
   in the README. Adapter: `getLayersOrder` / `GeoJSONSource.getData` / `areTilesLoaded` / `getRenderWorldCopies` are
   feature-detected with public fallbacks; `mapboxgl-` marker/popup classes; the pixel probe works without `redraw()`
@@ -30,7 +30,7 @@ Not published; versions start when the package does. Until then this lists what 
 - Licensed under **Apache-2.0**: `LICENSE`, `NOTICE`; the package ships `dist/THIRD_PARTY_LICENSES.txt`
   (license texts of what is bundled into the injected scripts, generated from the bundler's input list).
 
-## Unreleased — an earlier phase (2026-09-20): apps we did not write
+## Unreleased — apps we did not write
 - `wild/` suite: MapLibre's own examples and real open-source apps, vendored with a one-line hook.
 - fill-extrusion features are acted on where they are DRAWN (roof, walls), not only on their footprint.
 - Polygon action points are ranked across all parts/tile pieces; grid density follows on-screen size;
@@ -55,11 +55,11 @@ Not published; versions start when the package does. Until then this lists what 
 - New: `expect(map).toHaveLayerPixels()`, `map.touchDragAt()`, `map.doubleTapAt()`, `viewState().projection` /
   `.terrain`; failure text names a missing icon image; `toHaveGeometry` validates vertex lists.
 
-## an earlier phase (2026-09-20)
+## Unreleased — visibility, dense maps, drawing, touch
 - **BREAKING** queries match VISIBLE features by default (`visible: 'any'` opts out).
 - Visibility (paint evaluation + pixel probe), dense-map candidates, drawing helpers, `toHaveGeometry`,
   globe far-side fix, markers / popups, failure screenshots, touch + keyboard, unit tests, Linux CI.
 
-## Phases 1–4 (2026-09-20)
+## Unreleased — the core
 - Adapter seam, engine, MapLibre adapter, retrying matchers, actionability, click-time verification,
   text snapshot + accessibility mirror for agents, vector tiles from GeoJSON, packaging.

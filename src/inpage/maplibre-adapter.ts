@@ -277,7 +277,11 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     if (tiled.length) return `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`;
     if (w.pending.length) return `source(s) ${w.pending.map((p) => p.id).join(', ')} have not finished loading`;
     // (loaded() stays false for a map with an animated source, so it cannot be a condition here)
-    if (w.frames >= 2) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image / canvas / video source). ${never}`;
+    // Few frames prove nothing: a page that is merely SLOW (software GL on a starved CI machine: 3 frames in 2.5s) looks
+    // the same as one that animates. Found on Linux in a container, where this line accused five static apps of animating.
+    const fps = w.frames / (w.ms / 1000);
+    if (w.frames >= 10 && fps >= 4) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image). ${never}`;
+    if (w.frames >= 2) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms (${fps.toFixed(1)} per second) with the camera at rest and no source loading. Either the page is slow and still settling (raise the timeout: test.slow()), or the app repaints the map continuously — in which case it never becomes idle and waiting for idle is the mistake`;
     return w.loaded ? undefined : 'the style or a source has not finished loading';
   }
 

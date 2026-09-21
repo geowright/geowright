@@ -14,3 +14,4 @@ wild/maplibre-examples/.upstream/
 # the export script output: the would-be public tree (never committed here)
 .public-export/
 .scratch/
+test-results-linux/
