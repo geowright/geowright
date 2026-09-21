@@ -18,6 +18,14 @@ test.describe('timeouts', () => {
     expect(map.timeout).toBe(10_000); // never below the plain default
   });
 
+  base('waitForIdle() is a load, not an action: its default is two thirds of the test timeout', async ({ page }) => {
+    const map = geowright(page);
+    expect(map.idleTimeout).toBe(20_000); // 30s test timeout
+    base.setTimeout(90_000);
+    expect(map.idleTimeout).toBe(60_000);
+    expect(geowright(page, { timeout: 2500 }).idleTimeout).toBe(2500); // an explicit option applies to everything
+  });
+
   test('an action times out by the clock even while the page cannot answer (busy main thread)', async ({ map, page }) => {
     // 4s of synchronous work in the page: every round trip into it blocks for that long.
     void page.evaluate(() => {

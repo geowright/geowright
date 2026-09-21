@@ -235,6 +235,24 @@ export class MapHandle {
     return Math.max(10_000, Math.round(testTimeout / 3));
   }
 
+  /**
+   * Default timeout of `waitForIdle()`: two thirds of the test's timeout (20s under Playwright's default 30s), at least
+   * `timeout`. The first idle after a navigation is a LOAD — style, sources, tiles, first render — not an action on a
+   * page that is already there, and Playwright bounds loads by the test timeout only. Measured on 5 third-party apps
+   * with five parallel software-GL workers on a busy machine: 4–9s to the first idle (1.7–2.2s alone) — a 10s budget
+   * was a coin toss exactly where CI is slow. An explicit `geowright(page, { timeout })` still applies to everything.
+   */
+  get idleTimeout(): number {
+    if (this.fixedTimeout !== undefined) return this.fixedTimeout;
+    let testTimeout = 0;
+    try {
+      testTimeout = test.info().timeout;
+    } catch {
+      /* not under @playwright/test */
+    }
+    return Math.max(this.timeout, Math.round((testTimeout * 2) / 3));
+  }
+
   /** @internal */
   async _find(q: FeatureQuery): Promise<FeatureSummary[]> {
     return (await this._call<WireSummary[]>('find', toWire(q))).map(fromWire);
@@ -377,7 +395,7 @@ export class MapHandle {
    * use retrying assertions for that, not waitForIdle.
    */
   async waitForIdle(opts: { timeout?: number } = {}): Promise<void> {
-    const timeout = opts.timeout ?? this.timeout;
+    const timeout = opts.timeout ?? this.idleTimeout;
     await step(`map.waitForIdle()`, () =>
       this._retry('map.waitForIdle()', timeout, async (deadline) => {
         // Not abandoned at the deadline: the in-page wait is bounded by itself (<= 2s), and its answer carries the

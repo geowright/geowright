@@ -435,7 +435,10 @@ repainting with nothing loading, tiles still loading, or a moving camera.
 Assertions are unaffected, since their own idle wait is bounded rather than blocking; only an explicit,
 unconditional wait for idle needs to be opted out for a map like this.
 
-**Timeouts mean what they say.** The default action timeout is a third of the test's timeout (at least 10 s) and is
+**Timeouts mean what they say.** `waitForIdle()` defaults to two thirds of the test's timeout: the first idle after a
+navigation is a load — style, sources, tiles, first render — and Playwright bounds loads by the test timeout only.
+Measured on five third-party apps: 1.7–2.2 s to the first idle alone, 4–9 s with five parallel software-GL workers on a
+busy machine; the earlier 10 s budget failed exactly where CI is slow. The default action timeout is a third of the test's timeout (at least 10 s) and is
 read when used, so `test.slow()` scales it — a page that is slow enough to need `test.slow()` needed every geowright
 timeout raised by hand before. And an action's `timeout` is wall-clock: a side-effect-free round trip into a busy page
 (finding the pixel) is abandoned at the deadline — measured before: 33 s for `{ timeout: 2000 }` on an overloaded

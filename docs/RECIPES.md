@@ -79,7 +79,8 @@ label density). For a REAL basemap on your own machine only: `scripts/fetch-real
 
 ## Slow pages (terrain, a globe, software GL in CI)
 
-`test.slow()` — geowright's default action timeout follows the test's timeout (a third of it, at least 10 s). An action's
+`test.slow()` — geowright's default timeouts follow the test's timeout: a third of it for actions and assertions (at
+least 10 s), two thirds for `waitForIdle()` (the first idle is a page load, not an action). An action's
 `timeout` is wall-clock.
 
 ## Old versions

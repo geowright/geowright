@@ -17,6 +17,7 @@ Not published; versions start when the package does. Until then this lists what 
   a pixel verified at 339.6 was not the pixel MapLibre hit-tested at 339 (found under dense basemap labels: we said
   "building on top", MapLibre said "label on top"). For shapes thinner than a pixel the four whole pixels around a
   candidate are tried too.
+- `waitForIdle()` defaults to two thirds of the test timeout (it is a load, not an action): 20 s instead of 10 s.
 - The default action timeout scales with the test's timeout (`test.slow()`, `test.setTimeout()`); an action's `timeout` is
   wall-clock (side-effect-free round trips are abandoned at the deadline; real input never is).
 - `waitForIdle()` on a map that never idles says why: an animated canvas / video source, a GeoJSON source re-set in a
