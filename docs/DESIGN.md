@@ -470,10 +470,11 @@ under actionability; a `.not.toHaveView()` matcher that could be satisfied merel
 being in motion (visible only on a slower rendering pipeline, since a fast one had usually already
 finished its ease-out by the time the check ran — fixed by requiring the camera to be genuinely at
 rest in both the affirmative and the negated form of the check); and the animated-source identity edge
-case described under identity. On a fully quiet machine, the complete suite as it stood on 2026-09-20
-(277 tests) passed **5,540 of 5,540 at `--repeat-each=20`, zero flakes, zero retries.** The suite has
-grown since (the version matrix, moving targets, basemap realism); the bar is re-run on the grown suite
-before anything is released, and a number is only written here once a quiet machine has produced it. The same suite has
+case described under identity. On a quiet machine, the complete suite as it stood on 2026-09-21
+(299 tests, plus 7 that are opt-in and skipped) passed **5,980 of 5,980 at `--repeat-each=20`, zero
+flakes, zero retries**, in 50 minutes with five workers — the machine's load was logged once a minute
+through the run, and a number is only written here once a quiet machine has produced it (the smaller
+suite of the day before, 277 tests, had passed 5,540 of 5,540 the same way). The same suite has
 also been run through hosted Linux continuous integration (software rendering, no GPU, few CPU cores),
 which is measurably slower — the base suite alone runs in on the order of 20 minutes there versus about
 two and a half minutes locally — and which found two more, purely hardware-driven issues invisible on a faster
