@@ -77,6 +77,10 @@ test.describe('dense map', () => {
   });
 
   test('measurements (printed, not asserted: wall-clock limits are flakes waiting to happen)', async ({ dense, page }) => {
+    // The UNCAPPED entity list below is the deliberately expensive path: every entity without a clean pixel tries up to
+    // 40 of them (1,436 such entities here) — ~10 s on the development Mac, 43 s at a 4x slower CPU
+    // (GEOWRIGHT_CPU_THROTTLE=4). What users get is capped (mirror: 80, snapshot: per layer): 0.1–0.5 s even at 4x.
+    test.slow();
     await dense.viewState();
     const r = await page.evaluate(async () => {
       const g = (window as any).__geowright;

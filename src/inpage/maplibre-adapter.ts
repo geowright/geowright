@@ -2,6 +2,38 @@ import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl
 import { extrusionBase, extrusionHeight, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
 import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
 
+/** A source that is not loaded right now: its type, whether its GeoJSON is inline (nothing to download), and how long
+ *  it has been pending as far as this adapter has seen (the retries of one waitForIdle() share that clock). */
+export interface PendingSource {
+  id: string;
+  type: string;
+  inline: boolean;
+  forMs: number;
+}
+
+export const DEAD_WORKER_AFTER_MS = 5000;
+
+/**
+ * Inline GeoJSON needs no network: MapLibre parses it in a web worker. When it has not loaded for seconds AND no
+ * worker-backed source (GeoJSON, vector) on the map has loaded at all, the worker is almost always dead — its script
+ * was not found or could not start (MapLibre 6 under Vite's dev server, a worker URL the page cannot load, a CSP).
+ * A loaded GeoJSON / vector source proves the workers run; then it is something else, and this says nothing.
+ * Before this, a first-time user with exactly that setup got "source(s) places have not finished loading": true, and useless.
+ */
+export function deadWorkerDiagnosis(pending: PendingSource[], workerSourcesLoaded: number): string | undefined {
+  if (workerSourcesLoaded > 0) return undefined;
+  const stuck = pending.filter((p) => p.inline && p.forMs >= DEAD_WORKER_AFTER_MS);
+  if (!stuck.length) return undefined;
+  const secs = Math.floor(Math.min(...stuck.map((p) => p.forMs)) / 1000);
+  return (
+    `source(s) ${stuck.map((p) => p.id).join(', ')} hold inline GeoJSON (nothing to download) and have not loaded for ${secs}s, ` +
+    `and no GeoJSON or vector source of this map has loaded at all. MapLibre parses GeoJSON in a web worker: this is ` +
+    `almost always a DEAD WORKER — its script was not found or could not start. The browser console (and a dev server's ` +
+    `log) says which. Common case: MapLibre GL JS 6 under Vite's dev server needs optimizeDeps: { exclude: ['maplibre-gl'] } ` +
+    `(docs/RECIPES.md, "The map never becomes idle"). If the machine is merely starved, a longer timeout will show it`
+  );
+}
+
 /**
  * MapLibre GL JS adapter. PUBLIC API ONLY — no underscore fields. (MapGrab, the archived prior
  * art, relied on _styleDirty/_frameRequest/_placementDirty/...; that is what we are avoiding.)
@@ -219,9 +251,10 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
         this.map.off('idle', onIdle);
         this.map.off('render', onRender);
         this.map.off('sourcedataloading', onSourceData as any);
-        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), pending: this.pendingSources(), replaced: [...replaced].filter(([, n]) => n >= 2).map(([id, n]) => ({ id, n })) };
+        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), pending: this.pendingSources(), workerSourcesLoaded: this.workerSourcesLoaded(), replaced: [...replaced].filter(([, n]) => n >= 2).map(([id, n]) => ({ id, n })) };
         resolve(v);
       };
+      this.pendingSources(); // starts the "pending since" clock of every source that is not loaded yet
       this.map.on('render', onRender);
       this.map.on('sourcedataloading', onSourceData as any);
       const onIdle = () => {
@@ -236,20 +269,40 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     });
   }
 
-  private lastWait?: { frames: number; ms: number; moving: boolean; loaded: boolean; pending: { id: string; type: string }[]; replaced: { id: string; n: number }[] };
+  private lastWait?: { frames: number; ms: number; moving: boolean; loaded: boolean; pending: PendingSource[]; workerSourcesLoaded: number; replaced: { id: string; n: number }[] };
+  /** When each source was first seen not loaded; forgotten when it loads. */
+  private readonly pendingSince = new Map<string, number>();
 
-  /** Sources that are not loaded right now (public isSourceLoaded), with their type. */
-  private pendingSources(): { id: string; type: string }[] {
+  private sourceLoaded(id: string): boolean | undefined {
+    try {
+      return this.map.isSourceLoaded(id);
+    } catch {
+      return undefined; // (a source removed in between)
+    }
+  }
+
+  /** Sources that are not loaded right now (public isSourceLoaded), with their type and how long they have waited. */
+  private pendingSources(): PendingSource[] {
     const sources = this.map.getStyle()?.sources ?? {};
-    return Object.keys(sources)
-      .filter((id) => {
-        try {
-          return !this.map.isSourceLoaded(id);
-        } catch {
-          return false;
-        }
-      })
-      .map((id) => ({ id, type: String((sources[id] as { type?: string }).type) }));
+    const now = performance.now();
+    const out: PendingSource[] = [];
+    for (const id of Object.keys(sources)) {
+      const loaded = this.sourceLoaded(id);
+      if (loaded !== false) {
+        this.pendingSince.delete(id);
+        continue;
+      }
+      if (!this.pendingSince.has(id)) this.pendingSince.set(id, now);
+      const spec = sources[id] as { type?: string; data?: unknown };
+      out.push({ id, type: String(spec.type), inline: spec.type === 'geojson' && typeof spec.data === 'object' && spec.data !== null, forMs: now - this.pendingSince.get(id)! });
+    }
+    return out;
+  }
+
+  /** How many GeoJSON / vector sources are loaded: each one is proof that MapLibre's workers run. */
+  private workerSourcesLoaded(): number {
+    const sources = this.map.getStyle()?.sources ?? {};
+    return Object.keys(sources).filter((id) => ['geojson', 'vector'].includes(String((sources[id] as { type?: string }).type)) && this.sourceLoaded(id) === true).length;
   }
 
   /**
@@ -273,6 +326,9 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     // inferred it from "a GeoJSON source is pending and frames are rendered" and blamed a setData loop on an app that
     // merely loaded slowly on an overloaded machine. A wrong diagnosis is worse than none.)
     if (w.replaced.length) return `the app keeps replacing the data of source(s) ${w.replaced.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`;
+    // Before "tiles are still loading": inline GeoJSON needs no network, so a dead worker is the stronger explanation.
+    const dead = deadWorkerDiagnosis(w.pending, w.workerSourcesLoaded);
+    if (dead) return dead;
     const tiled = w.pending.filter((p) => ['vector', 'raster', 'raster-dem'].includes(p.type));
     if (tiled.length) return `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`;
     if (w.pending.length) return `source(s) ${w.pending.map((p) => p.id).join(', ')} have not finished loading`;

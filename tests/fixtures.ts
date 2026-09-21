@@ -2,6 +2,7 @@ import { test as base } from '@playwright/test';
 import { makeTilePng } from './tile-png';
 import { BUILDINGS } from './buildings';
 import { routeVectorTiles } from '../src/playwright/tiles';
+import { throttleFromEnv } from './slow-machine';
 import { geowright, type MapHandle } from '../src/playwright';
 
 export { expect } from '../src/playwright';
@@ -9,6 +10,10 @@ export { expect } from '../src/playwright';
 const TILE = makeTilePng();
 
 export const test = base.extend<{ map: MapHandle }>({
+  page: async ({ page }, use) => {
+    await throttleFromEnv(page); // opt-in slow machine (tests/slow-machine.ts); nothing when unset
+    await use(page);
+  },
   map: async ({ page, baseURL }, use) => {
     // Determinism guard: nothing may leave the machine. Any non-local request fails the test.
     const external: string[] = [];

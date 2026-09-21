@@ -22,7 +22,8 @@ Not published; versions start when the package does. Until then this lists what 
 - The default action timeout scales with the test's timeout (`test.slow()`, `test.setTimeout()`); an action's `timeout` is
   wall-clock (side-effect-free round trips are abandoned at the deadline; real input never is).
 - `waitForIdle()` on a map that never idles says why: an animated canvas / video source, a GeoJSON source re-set in a
-  loop, continuous repainting, tiles still loading, or a moving camera.
+  loop, continuous repainting, tiles still loading, or a moving camera — and, when inline GeoJSON has not loaded for
+  seconds while no GeoJSON / vector source has loaded at all, that MapLibre's web worker is almost certainly dead.
 - Snapshot: basemap layers (a tiled source with 8+ layers) give up their rows before the app's layers do.
 - A feature with only a sliver inside the viewport is reported `offscreen` with that explanation, not `not-found`.
 - **Fixed:** a GeoJSON source holding a bare geometry (`{ type: 'Point', … }`, no Feature wrapper) was read as having no

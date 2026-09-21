@@ -26,6 +26,17 @@ test.describe('timeouts', () => {
     expect(geowright(page, { timeout: 2500 }).idleTimeout).toBe(2500); // an explicit option applies to everything
   });
 
+  base('a map whose web worker never starts: waitForIdle() says so, not just "not finished loading"', async ({ page }) => {
+    // The worker script is not found — what Vite's dev server does to MapLibre 6 without optimizeDeps.exclude. The
+    // dense page holds only inline GeoJSON: nothing to download, so nothing but the worker can be missing.
+    await page.route('**/maplibre/maplibre-gl-worker.mjs', (route) => route.fulfill({ status: 404, body: 'not found' }));
+    await page.goto('/dense.html');
+    const err = await geowright(page).waitForIdle({ timeout: 8000 }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('timed out after 8000ms');
+    expect(err?.message).toMatch(/source\(s\) (lots, assets|assets, lots) hold inline GeoJSON/);
+    expect(err?.message).toContain('DEAD WORKER');
+  });
+
   test('an action times out by the clock even while the page cannot answer (busy main thread)', async ({ map, page }) => {
     // 4s of synchronous work in the page: every round trip into it blocks for that long.
     void page.evaluate(() => {

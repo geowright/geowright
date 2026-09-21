@@ -25,6 +25,7 @@ npx playwright test            # e2e (demo app + wild apps) and unit tests
 npm run typecheck
 bash scripts/kill-preview.sh   # stop THIS repo's servers (never pkill by pattern on a shared machine)
 npm run pack:local             # a .tgz for trying the package in another project
+GEOWRIGHT_CPU_THROTTLE=4 npx playwright test --workers=3   # the suite on a 4x slower CPU: for measuring, not a verdict
 ```
 Design decisions, dead ends and the evidence behind them are recorded in `docs/DESIGN.md`; read the
 relevant section before re-opening a settled question. API changes update `README.md` (API reference table)

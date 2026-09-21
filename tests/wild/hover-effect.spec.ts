@@ -31,6 +31,8 @@ test.describe('wild: create-a-hover-effect', () => {
     // The USA polygon is almost entirely under the app's state-fills: to a user, and to geowright, it is covered.
     // (Pixel-exact truth: a sliver of northern Alaska is not, where the two coastlines disagree. Found after 15,000
     // hit tests before the search was bounded.)
-    await expect(map.feature({ layer: 'countries-fill', where: { NAME: 'United States of America' } }).hover({ timeout: 3000 })).rejects.toThrow(/candidate points are all covered by another feature; topmost is state-(fills|borders)/);
+    // (6 s, not the default: a refusal takes the whole timeout. ONE bounded search here is 0.2–0.4 s on the development
+    // Mac, 0.9–1.4 s at a 4x slower CPU and 2.4–3.5 s at 8x — 3 s, the old value, was a single attempt at 8x.)
+    await expect(map.feature({ layer: 'countries-fill', where: { NAME: 'United States of America' } }).hover({ timeout: 6000 })).rejects.toThrow(/candidate points are all covered by another feature; topmost is state-(fills|borders)/);
   });
 });

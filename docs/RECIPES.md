@@ -54,10 +54,10 @@ URLs nobody answered — copy that idea).
 
 An animated source, a `setData` loop, a rotating camera: `waitForIdle()` times out and says which of these it saw. Do
 not wait for idle on such a page — assertions and actions retry by themselves. To act on a feature that never stops
-moving: `click({ moving: 'allow' })` (README, "Features that never stop moving").
+moving: `click({ moving: 'allow' })` (README, "What an action waits for"; the reasoning: DESIGN, "Targets that never stop moving").
 
-**A static map that times out with "source(s) … have not finished loading"** is usually not a test problem: the app's
-map is broken in the browser too. The common case is MapLibre GL JS 6 under Vite's DEV server — the dependency
+**A static map that times out with "… DEAD WORKER …"** (or, for sources loaded from a URL, "source(s) … have not
+finished loading") is usually not a test problem: the app's map is broken in the browser too. The common case is MapLibre GL JS 6 under Vite's DEV server — the dependency
 optimizer moves `maplibre-gl` and its worker file is not found (the dev server's log says `maplibre-gl-worker.mjs …
 does not exist … Try adding it to optimizeDeps.exclude`), so no source ever loads. In `vite.config`:
 `optimizeDeps: { exclude: ['maplibre-gl'] }`, or test the built app (`vite build && vite preview`), which is what this

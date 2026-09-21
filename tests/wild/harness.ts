@@ -2,6 +2,7 @@ import { test as base, type Page, type Route } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { makeTilePng } from '../tile-png';
+import { throttleFromEnv } from '../slow-machine';
 import { geowright, type GeowrightOptions, type MapHandle } from '../../src/playwright';
 
 export { expect } from '../../src/playwright';
@@ -66,6 +67,10 @@ export const glyphs = (pattern: string | RegExp): Routes[number] => [
 export const rasterTiles = (pattern: string | RegExp): Routes[number] => [pattern, { body: TILE, contentType: 'image/png' }];
 
 export const test = base.extend<{ wild: Wild }>({
+  page: async ({ page }, use) => {
+    await throttleFromEnv(page); // opt-in slow machine (tests/slow-machine.ts); nothing when unset
+    await use(page);
+  },
   wild: async ({ page }, use) => {
     const unrouted: string[] = [];
     const tolerated: RegExp[] = [];
