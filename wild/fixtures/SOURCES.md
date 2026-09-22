@@ -20,6 +20,8 @@ More fixtures, one record per app that needed them (`sources/*.md`, same columns
 | `sources/measure-distances.md` | `vendor/turf@7/turf.min.js` (also served, wrapped as an ES module, for the mapbox-gl-draw example's `esm.sh` import) | MIT (LICENSE kept) |
 | `sources/draw-geometries-with-terra-draw.md` | `vendor/maplibre-gl-terradraw@1.0.1/` (UMD + CSS) | MIT (LICENSE kept) |
 | `sources/react-map-gl.md` | `react-map-gl/us-income.geojson`, `react-map-gl/counties.KS-NE-OK.json` (trimmed from 6 MB) | MIT ×2 (LICENSE files kept) |
+| `sources/deck-gl.md` | deck.gl app's CARTO style and POI data requests, answered by generated test data | Synthetic data, no copied third-party asset |
+| `sources/pmtiles.md` | Protomaps example's ODbL Firenze archive URL, answered by `pmtiles/synthetic-firenze.pmtiles` | First-party synthetic MVT data in a PMTiles v3 container; no upstream tile data |
 
 Served from `node_modules` rather than copied: `@mapbox/mapbox-gl-draw` 1.5.2 JS + CSS (ISC) for the example
 that asks unpkg for 1.5.0; `maplibre-gl.css` 6.10.0 (BSD-3) for svelte-maplibre-gl, which links it from unpkg.

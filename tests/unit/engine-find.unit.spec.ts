@@ -41,6 +41,12 @@ test.describe('Engine.find with a fake adapter', () => {
     expect(found).toHaveLength(1);
   });
 
+  test('tile pieces with the same properties in different key orders remain ONE feature', () => {
+    const a = point('parcels', 1, { name: 'Pier', kind: 'lot' }, [10, 10]);
+    const b = point('parcels', 1, { kind: 'lot', name: 'Pier' }, [20, 20]);
+    expect(new Engine(makeAdapter([a, b])).find({ layer: 'parcels', id: 1 })).toHaveLength(1);
+  });
+
   test('two features with the same coerced id but different properties are TWO results', () => {
     const a = point('parcels', 1, { type: 'a' }, [1, 1]);
     const b = point('parcels', 1, { type: 'b' }, [2, 2]);
@@ -133,6 +139,19 @@ test('an id-less feature drawn in two WORLD COPIES is one feature (the adapter r
   const adapter = { ...makeAdapter([copy(100), copy(612), copy(1124)]), wrapPx: () => 512 };
   expect(new Engine(adapter).find({ layer: 'quakes' })).toHaveLength(1);
   expect(new Engine(makeAdapter([copy(100), copy(612)])).find({ layer: 'quakes' })).toHaveLength(2); // no period known: two things
+});
+
+test('full source geometry matches a rendered feature when property keys are reordered', async () => {
+  const rendered: RenderedFeature = {
+    layer: 'lots', properties: { name: 'Pier', kind: 'lot' },
+    geometry: { type: 'Polygon', coordinates: [[[0, 0], [10, 0], [10, 10], [0, 10], [0, 0]]] },
+  };
+  const full: RenderedFeature = {
+    layer: 'lots', properties: { kind: 'lot', name: 'Pier' },
+    geometry: { type: 'Polygon', coordinates: [[[0, 0], [20, 0], [20, 20], [0, 20], [0, 0]]] },
+  };
+  const engine = new Engine({ ...makeAdapter([rendered]), queryData: async () => [full] });
+  expect(await engine.geometry({ layer: 'lots', where: { name: 'Pier' } })).toEqual({ ok: true, geometry: full.geometry, from: 'data' });
 });
 
 test('look-alike pieces far apart are ONE feature when the source data holds exactly one such feature (a dot re-set every frame, seen in two tile generations)', async () => {

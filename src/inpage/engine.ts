@@ -58,7 +58,7 @@ export class Engine<W = unknown> {
    * always share identical properties, so id + properties is both safe and collision-free.
    */
   private key(f: RenderedFeature): string {
-    return `${f.layer}|${f.id ?? ''}|${JSON.stringify(f.properties)}`;
+    return `${f.layer}|${f.id ?? ''}|${stableProperties(f.properties)}`;
   }
 
   /**
@@ -67,7 +67,7 @@ export class Engine<W = unknown> {
    * user it is the same thing. Without this, every labelled point is "occluded" by its own label.
    */
   private entityKey(f: RenderedFeature): string {
-    return `${f.source ?? f.layer}|${f.id ?? ''}|${JSON.stringify(f.properties)}`;
+    return `${f.source ?? f.layer}|${f.id ?? ''}|${stableProperties(f.properties)}`;
   }
 
   /**
@@ -112,6 +112,9 @@ export class Engine<W = unknown> {
   private single = new Set<string>();
 
   async learnIdentity(q: FeatureQuery): Promise<void> {
+    // A registered map may have been removed while Playwright was waiting. MapLibre's
+    // feature query then throws inside getProjection instead of returning no features.
+    if (this.adapter.surface().isConnected === false) return;
     if (!this.adapter.queryData) return;
     const at = q.at ? this.adapter.project(q.at as W) : undefined;
     const byKey = new Map<string, RenderedFeature[]>();
@@ -127,8 +130,8 @@ export class Engine<W = unknown> {
       if (pieces.length < 2 || this.splitAlways(pieces).length < 2) continue;
       const layer = pieces[0].layer;
       if (!data.has(layer)) data.set(layer, (await this.adapter.queryData(layer)) ?? null);
-      const props = JSON.stringify(pieces[0].properties);
-      const n = data.get(layer)?.filter((d) => JSON.stringify(d.properties) === props).length;
+      const props = stableProperties(pieces[0].properties);
+      const n = data.get(layer)?.filter((d) => stableProperties(d.properties) === props).length;
       if (n === 1) this.single.add(k);
       else this.single.delete(k);
     }
@@ -324,7 +327,14 @@ export class Engine<W = unknown> {
   }
 
   private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions): ActionPointResult {
+    if (this.adapter.surface().isConnected === false) {
+      return fail('offscreen', 'map canvas is detached from the document; the map was removed or its container was detached');
+    }
     this.scrollIntoView();
+    const size = this.surfaceSize();
+    if (size.w < 1 || size.h < 1) {
+      return fail('offscreen', `map canvas is ${size.w}x${size.h}; show or size the map container and call map.resize() before acting`);
+    }
     const groups = [...this.group(q).values()];
     if (groups.length === 0) {
       // Say WHY when the only match is painted invisibly — "not found" would send people hunting.
@@ -343,7 +353,6 @@ export class Engine<W = unknown> {
     if (!vis.visible && !opts.force) {
       return fail('invisible', `feature is rendered but not visible: ${vis.reason}. A user cannot see it; use { force: true } to act on it anyway.`);
     }
-    const size = this.surfaceSize();
     const stats = { outside: 0 };
     const cands = this.candidates(pieces, size, stats);
     if (cands.length === 0) return fail('offscreen', 'feature is rendered but no part of it is inside the viewport');
@@ -547,8 +556,8 @@ export class Engine<W = unknown> {
     if (groups.length > 1) return { ok: false, message: `strict mode violation: query resolved to ${groups.length} features` };
     const f = groups[0][0];
     const data = await this.adapter.queryData?.(f.layer);
-    const props = JSON.stringify(f.properties);
-    const sameProps = data?.filter((d) => JSON.stringify(d.properties) === props) ?? [];
+    const props = stableProperties(f.properties);
+    const sameProps = data?.filter((d) => stableProperties(d.properties) === props) ?? [];
     const hit = sameProps.length === 1 ? sameProps[0] : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && String(d.id) === String(f.id));
     if (hit) return { ok: true, geometry: hit.geometry, from: 'data' };
     return { ok: true, geometry: f.geometry, from: 'rendered' };
@@ -704,11 +713,19 @@ export class Engine<W = unknown> {
 
   /** What IS there, for failure messages: same-layer features, layer visibility, off-screen matches. */
   async explain(q: FeatureQuery): Promise<string> {
+    if (this.adapter.surface().isConnected === false) {
+      return 'map canvas is detached from the document; the map was removed or its container was detached';
+    }
     const lines: string[] = [];
     const layers = this.layersOf(q);
     const known = this.adapter.listLayers();
     const view = this.adapter.getViewState();
     lines.push(`view: ${JSON.stringify(view, (_k, v) => (typeof v === 'number' ? +v.toFixed(5) : v))}`);
+    const size = this.surfaceSize();
+    if (size.w < 1 || size.h < 1) {
+      lines.push(`map canvas is ${size.w}x${size.h}; rendered-feature queries may be stale until the container is shown and the map is resized`);
+      return lines.join('\n');
+    }
     if (layers && !layers.length && (q.layerType !== undefined || q.source !== undefined)) {
       lines.push(`no layer matches ${JSON.stringify({ layer: q.layer, layerType: q.layerType, source: q.source })}. Layers: ${known.map((l) => `${l.id}(${l.type}${l.source ? ',' + l.source : ''})`).join(' ')}`);
     }
@@ -901,6 +918,9 @@ export class Engine<W = unknown> {
    *  - says what it cannot see: off-screen matches (geojson sources) and their direction
    */
   async snapshot(o: SnapshotOptions = {}): Promise<string> {
+    if (this.adapter.surface().isConnected === false) {
+      return 'MAP: canvas is detached from the document; the map was removed or its container was detached';
+    }
     const perLayer = o.perLayer ?? 15;
     const maxProps = o.maxProps ?? 6;
     const a = this.adapter;
@@ -919,6 +939,10 @@ export class Engine<W = unknown> {
       out.push(`view: center ${n(view.center.lng)},${n(view.center.lat)} zoom ${n(view.zoom, 2)} bearing ${n(view.bearing, 1)} pitch ${n(view.pitch, 1)}${extras.length ? ' · ' + extras.join(' · ') : ''}`);
     }
     if (view.bounds) out.push(`bounds: west ${n(view.bounds.west)} south ${n(view.bounds.south)} east ${n(view.bounds.east)} north ${n(view.bounds.north)}`);
+    if (size.w < 1 || size.h < 1) {
+      out.push('note: zero-sized canvas; map content cannot be acted on until the container is shown and the map is resized');
+      return out.join('\n');
+    }
 
     const entities = this.collect({ layers: o.layers, skipLayers: o.skipLayers, filter: o.filter });
     const byLayer = new Map<string, Collected[]>();
@@ -1302,6 +1326,14 @@ export function compass(dLng: number, dLat: number, atLat: number): string {
 }
 
 const avg = (n: number[]) => n.reduce((s, v) => s + v, 0) / n.length;
+// Tile generations and source data can enumerate the same attributes in different orders.
+// Their identity is the values, not the insertion order of the JavaScript object.
+function stableProperties(properties: Record<string, unknown>): string {
+  return JSON.stringify(properties, (_key, value: unknown) => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return value;
+    return Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
+  });
+}
 const round = (p: Pt): Pt => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const fail = (reason: Exclude<ActionPointResult, { ok: true }>['reason'], message: string): ActionPointResult => ({ ok: false, reason, message });

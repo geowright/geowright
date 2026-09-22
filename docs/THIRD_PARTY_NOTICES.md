@@ -135,6 +135,11 @@ header reads `/** MapLibre GL JS * @license 3-Clause BSD ... v6.10.0 ... */`. De
 
 ### `wild/` — apps, examples and fixtures we did not write
 
+| Vendored app | Upstream and license | Notice kept in tree |
+|---|---|---|
+| `wild/apps/deck-gl/` | `visgl/deck.gl` at `b28503d8742e3551a37372b9cb911aa1cc9b6706`, MIT, Copyright Vis.gl contributors | `wild/apps/deck-gl/LICENSE`; one-line map hook shown in `UPSTREAM.md` |
+| `wild/apps/pmtiles/` | `protomaps/PMTiles` at `aec8fa1341222fdddb3318e9ffa8e18e19b312f7`, BSD-3-Clause, Copyright 2021 Protomaps LLC | `wild/apps/pmtiles/LICENSE`; copied MapLibre/fflate bundle licenses in `dist/vendor/`; one-line map hook shown in `UPSTREAM.md` |
+
 Full inventory and per-item licensing already tracked in `wild/README.md` (the table of
 `maplibre-examples/`, `apps/`, `fixtures/`) and `wild/fixtures/SOURCES.md` (per-fixture origin,
 license and size) — referenced here rather than duplicated so the two don't drift. Summary:

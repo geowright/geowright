@@ -74,6 +74,14 @@ what they are: `{ layerType: 'circle', source: 'earthquakes' }`, or give your la
 Identity is id + properties, and id-less features with identical properties are told apart by where they are drawn. To
 pick one of several look-alikes, say where: `map.feature({ layer: 'poi', where: { icon: 'music' }, at: { lng, lat } })`.
 
+## A deck.gl overlay on MapLibre
+
+The MapLibre map remains accessible through the usual one-line hook, even when deck.gl interleaves custom layers in
+its WebGL canvas. `map.layers()` can show those custom layer IDs, and geowright can act on MapLibre-rendered features
+underneath. deck.gl's own scatterplots, arcs, and text are picked by deck.gl, not by MapLibre's `queryRenderedFeatures`,
+so they are not addressable with `map.feature()`. The [vendored MapboxOverlay app](../wild/apps/deck-gl/) exercises that
+boundary offline.
+
 ## Labels of the basemap cover my features
 
 If your layers are inserted below the basemap's labels (the usual advice), labels ARE on top of them. geowright then
@@ -87,6 +95,10 @@ vector tiles from GeoJSON inside `page.route`; [`tests/wild/basemap.ts`](../test
 OpenMapTiles-shaped basemap that way (style, sprite, glyphs, a synthetic city — `{ dense: true }` for production-like
 label density). For a REAL basemap on your own machine only: `scripts/fetch-real-basemap.sh` +
 `GEOWRIGHT_REAL_BASEMAP=1` (the data is ODbL: cached outside the repository, never committed).
+
+For a `pmtiles://https://…` source, route the underlying HTTPS archive URL and serve a local synthetic archive with
+HTTP byte ranges (`206`, `Content-Range`, `Accept-Ranges`). The [Protomaps wild spec](../tests/wild/pmtiles.spec.ts) is
+a working example; its upstream Firenze archive is ODbL-derived and is never fetched by tests.
 
 ## Slow pages (terrain, a globe, software GL in CI)
 

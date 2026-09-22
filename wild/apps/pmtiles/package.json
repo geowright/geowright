@@ -1,0 +1,12 @@
+{
+  "private": true,
+  "name": "geowright-wild-pmtiles",
+  "description": "geowright build boilerplate for the vendored Protomaps PMTiles MapLibre example (see UPSTREAM.md).",
+  "scripts": {
+    "build": "node scripts/build.mjs"
+  },
+  "dependencies": {
+    "maplibre-gl": "5.13.0",
+    "pmtiles": "4.5.0"
+  }
+}

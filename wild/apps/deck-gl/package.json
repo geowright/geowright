@@ -1,0 +1,20 @@
+{
+  "private": true,
+  "name": "geowright-wild-deck-gl",
+  "description": "geowright build boilerplate for the vendored visgl/deck.gl MapLibre overlay example (see UPSTREAM.md).",
+  "scripts": {
+    "build": "vite build"
+  },
+  "dependencies": {
+    "@deck.gl/core": "^8.9.0",
+    "@deck.gl/layers": "^8.9.0",
+    "@deck.gl/mapbox": "^8.9.0",
+    "maplibre-gl": "^3.0.0",
+    "react": "^18.0.0",
+    "react-dom": "^18.0.0",
+    "react-map-gl": "^7.1.0"
+  },
+  "devDependencies": {
+    "vite": "^7.3.1"
+  }
+}

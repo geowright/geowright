@@ -13,6 +13,8 @@ licenses, each made testable with **the one-line hook and nothing else**:
 | `maplibre-examples/examples/` | MapLibre GL JS's own examples (`maplibre/maplibre-gl-js`, tag v6.10.0, `test/examples/`) | BSD-3-Clause — `maplibre-examples/LICENSE.txt` | as-is at `/test/examples/<name>.html`; their `../../dist/maplibre-gl-dev.mjs` import resolves to `node_modules/maplibre-gl/dist` |
 | `maplibre-examples/patches/` | one unified diff per example: upstream → vendored. **Must be exactly one added line.** | | `bash wild/scripts/examples.sh verify` re-fetches upstream and checks |
 | `apps/` | real open-source apps (React / Svelte / Vue wrappers), source + prebuilt `dist/` | see each app's LICENSE | `/apps/<name>/` |
+| `apps/deck-gl/` | deck.gl's MapLibre `MapboxOverlay` React test app, interleaved WebGL layers | MIT — `apps/deck-gl/LICENSE` | `/apps/deck-gl/` |
+| `apps/pmtiles/` | Protomaps' MapLibre example, custom `pmtiles://` vector protocol and byte-range archive reads | BSD-3-Clause — `apps/pmtiles/LICENSE` | `/apps/pmtiles/` |
 | `fixtures/` | everything the apps fetch from the network, answered by `page.route` | `fixtures/SOURCES.md` | never served by `serve.mjs`; the tests own the network |
 
 Rules: permissive licenses only, license files kept; the apps are not bent

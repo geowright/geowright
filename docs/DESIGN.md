@@ -249,6 +249,8 @@ comes back once per internal tile it happens to be sliced into, each time with a
 piece of its geometry. For this reason **identity is `layer + id + properties`, and geometry received
 from the renderer is treated as a possibly-partial piece, never the authoritative shape** — the full
 shape, when it is needed (drawing / geometry assertions), is read from the source's own data instead.
+Property objects are compared by their values with keys in a stable order: tile generations and source data can
+enumerate the same fields differently, and that difference must not split one feature into two identities.
 
 Related layers that draw one logical thing are folded into a single entity for the purposes of a
 handle or a snapshot row — a circle, its label, and its outline, drawn on three separate layers, are
@@ -616,9 +618,10 @@ could not: the floating building parts mentioned under actionability.
 
 ### Scoreboard
 
-31 applications not written for this project — 23 official MapLibre examples, 3 React (react-map-gl)
-applications, 2 Svelte (svelte-maplibre-gl) applications, and 3 Vue (vue-maplibre-gl) applications —
-covering 132 specs in total (`tests/wild` holds 140: the other 8 are the dense-basemap and opt-in real-basemap
+33 applications not written for this project — 23 official MapLibre examples, 3 React (react-map-gl)
+applications, 1 deck.gl MapLibre React application, 1 Protomaps PMTiles application,
+2 Svelte (svelte-maplibre-gl) applications, and 3 Vue (vue-maplibre-gl) applications —
+covering 135 specs in total (`tests/wild` holds 143: the other 8 are the dense-basemap and opt-in real-basemap
 realism specs, which are not apps):
 
 | app | specs | result |
@@ -649,18 +652,20 @@ realism specs, which are not apps):
 | react-map-gl / controls | 4 | untouched (React-rendered markers and popups) |
 | react-map-gl / geojson | 4 | after a library fix (snapshot colour reporting) |
 | react-map-gl / filter | 5 | after a library fix (nested property values in the snapshot) |
+| deck.gl / MapboxOverlay React | 2 | untouched; custom deck layers share the MapLibre canvas, while the MapLibre buildings remain addressable |
+| Protomaps / PMTiles MapLibre | 1 | untouched; a synthetic PMTiles v3 archive is loaded through the app's custom byte-range protocol |
 | svelte-maplibre-gl / hover-styles | 3 | after a library addition (querying by layer type / source) |
 | svelte-maplibre-gl / clusters | 3 | after a library fix (a map positioned below the fold) |
 | vue-maplibre-gl / filter | 2 | after a library fix (world copies) |
 | vue-maplibre-gl / geojson | 1 | untouched |
 | vue-maplibre-gl / marker-popup | 2 | untouched |
 
-**31 apps, 132 specs (re-counted against `--list` on 2026-09-21). Worked untouched: 15 (48%). Worked after a library fix or addition: 16 (52%).
+**33 apps, 135 specs (re-counted against `--list` on 2026-09-22). Worked untouched: 17 (52%). Worked after a library fix or addition: 16 (48%).
 Could not be tested at all: 0.** That zero deserves its caveats stated alongside it, honestly: some
 applications were excluded before ever being tried, purely on licensing grounds (one video-based
 example with no license found for its video asset; anything that would otherwise need real OSM or
 commercial vendor tiles ran against the synthetic basemaps described above instead). And every fix
-behind the 52% figure was made by people who could see both the failing test and the library's source
+behind the 48% figure was made by people who could see both the failing test and the library's source
 at the same time, on the same day — an outside team hitting "three markers silently counted as one" or
 "hovering does nothing on a map positioned below the fold" would more plausibly have filed a bug, or
 given up, than fixed the library themselves. The honest reading of this scoreboard is not "0% failure
