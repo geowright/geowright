@@ -30,7 +30,12 @@ test.describe('wild: animate-a-series-of-images', () => {
     for (let i = 0; i < 5; i++) await map.keyboard.press('-');
     await expect(map).toHaveView({ zoom: 4 });
     await map.waitForIdle();
-    for (let i = 0; i < 5; i++) await map.keyboard.press('+');
+    // Each key starts a smooth zoom; wait for it to finish before sending the next key.
+    // Back-to-back presses can coalesce into one zoom on a busy (or very fast) browser.
+    for (let i = 0; i < 5; i++) {
+      await map.keyboard.press('+');
+      await map.waitForIdle();
+    }
     await expect.poll(async () => (await map.viewState()).zoom).toBeLessThanOrEqual(5.99);
     await expect.poll(async () => (await map.viewState()).zoom).toBeGreaterThan(5.9);
   });
