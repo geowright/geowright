@@ -64,6 +64,9 @@
       "types": "./dist/types/playwright/tiles.d.ts",
       "default": "./dist/tiles.js"
     },
+    "./app": {
+      "types": "./dist/types/app.d.ts"
+    },
     "./inpage.js": "./dist/inpage.js",
     "./inpage-agent.js": "./dist/inpage-agent.js"
   },
