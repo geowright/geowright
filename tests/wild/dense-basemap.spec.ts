@@ -74,9 +74,8 @@ test.describe('wild: dense, label-heavy basemap', () => {
   });
 
   test('snapshot of an app on a production-sized basemap: the app layer keeps its rows within the default budget', async ({ wild }) => {
-    // KNOWN LIBRARY BUG — see "KNOWN BUG — snapshot budget" below. It passed on the 71-layer dense basemap before an earlier issue (few
-    // enough basemap layers had content at this view); on the denser one the app layer keeps 1 row of 374. Remove when fixed.
-    test.fail(true, 'snapshot budget: basemap sections crowd out the app layer rows on a production-sized basemap');
+    // Was a known library bug (an earlier change): on this basemap the app layer kept 1 row of 374. 3d-buildings is on the
+    // basemap's own source; it counts as the app's because it is the only fill-extrusion layer there.
     const map = await wild.open(example('display-buildings-in-3d'), { routes: NYC });
     const snap = await map.snapshot();
     expect(snap.length).toBeLessThanOrEqual(8000);
@@ -84,18 +83,39 @@ test.describe('wild: dense, label-heavy basemap', () => {
     expect(snap.match(/^  #\d+ Polygon @\(\d+,\d+\).* render_height=/gm)?.length ?? 0).toBeGreaterThanOrEqual(7);
   });
 
-  // KNOWN LIBRARY BUG, found by the dense default basemap (an earlier change). On a production-sized basemap, snapshot() keeps
-  // every basemap layer's section (count, histogram, "to list specific ones" hint) and, to fit the budget, shrinks the
-  // APP's own rows to zero and then cuts the text — the opposite of what engine.ts promises ("basemap layers give up
-  // their rows first; the app's layers shrink only when that was not enough"): with 25+ basemap layers in view, their
-  // row-less sections alone exceed the budget. The sparse basemap (9 of 9 rows listed) never showed it; the REAL
-  // OpenFreeMap style does (display-buildings-in-3d: 0 of 1,025 building rows). Workaround: snapshot({ layers: [...] }).
-  // Library code is out of scope for an earlier issue: this pins the bug down. Remove `test.fail` when it is fixed.
-  test("KNOWN BUG — snapshot budget: an app's 9 symbols on a production-sized basemap are all listed within the default budget", async ({ wild }) => {
-    test.fail(true, 'snapshot budget: basemap sections crowd out the app layer rows on a production-sized basemap');
+  // Was a KNOWN LIBRARY BUG (an earlier change), found by the dense default basemap (an earlier change): snapshot() kept every basemap
+  // layer's section (count, histogram, "to list specific ones" hint) and every basemap layer id in the header, and to
+  // fit the budget shrank the APP's own rows to zero and then cut the text: with 25+ basemap layers in view, their
+  // row-less sections alone exceeded the budget. The REAL OpenFreeMap style did the same (display-buildings-in-3d: 0 of
+  // 1,025 building rows). Now the basemap is condensed in stages first (engine.ts, snapshot budget).
+  test("snapshot budget: an app's 9 symbols on a production-sized basemap are all listed within the default budget", async ({ wild }) => {
     const map = await wild.open(example('display-a-popup-on-click'), { routes: brightBasemap([-77.04, 38.907], { icons: ['art-gallery', 'rocket'] }) });
     const snap = await map.snapshot();
     expect(snap).toContain('[places] 9 symbol entities');
     expect(snap.match(/^  - Point @\(\d+,\d+\).* description=/gm)?.length ?? 0).toBe(9);
+  });
+
+  test('snapshot under an explicit tight budget: the app keeps every row; the basemap shrinks to one line per source that still says what it is and how to ask for more', async ({ wild }) => {
+    const map = await wild.open(example('display-a-popup-on-click'), { routes: brightBasemap([-77.04, 38.907], { icons: ['art-gallery', 'rocket'] }) });
+    for (const maxChars of [3000, 2200]) {
+      const snap = await map.snapshot({ maxChars });
+      expect(snap.length).toBeLessThanOrEqual(maxChars);
+      expect(snap).not.toContain('cut to fit');
+      // every one of the app's places keeps its row: a clickable pixel and its properties
+      expect(snap).toContain('[places] 9 symbol entities');
+      expect(snap.match(/^  - Point @\(\d+,\d+\).* description=/gm)?.length ?? 0).toBe(9);
+      // the basemap is still visibly there, counted where it sits in the stack and summarised by kind …
+      expect(snap).toMatch(/^layers with content, top to bottom: places\(symbol,geojson\) \(\d+ basemap layers on openmaptiles\)$/m);
+      expect(snap).toMatch(/^\[basemap source openmaptiles\] \d+ entities on \d+ layers, none listed — .*symbol.*line.*fill/m);
+      // … with no per-layer basemap sections left, and one note on how to list a layer
+      expect(snap).not.toMatch(/^\[highway-minor\]/m);
+      expect(snap).toContain("snapshot('<mapId>', { layers: ['<layer id>'] })");
+      // at 3000 characters there is room to name the basemap's layers, with their entity counts
+      if (maxChars === 3000) expect(snap).toMatch(/line: [^;]*\bhighway-minor \d+/);
+    }
+    // asking for a basemap layer by name, as the note says, lists its rows again under the same budget
+    const one = await map.snapshot({ layers: ['highway-minor'], maxChars: 2200 });
+    expect(one).toMatch(/^\[highway-minor\] \d+ line entities/m);
+    expect(one.match(/^  #\d+ LineString @\(\d+,\d+\)/gm)?.length ?? 0).toBeGreaterThanOrEqual(3);
   });
 });

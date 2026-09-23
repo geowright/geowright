@@ -531,7 +531,27 @@ list of entities. Design rules, in order of what mattered most in practice:
   explicit notice is the last resort if nothing else fits. What survives the cut is individual rows,
   never the summary counts or the value histogram of what did not make the cut — the histogram
   deliberately covers the *whole* layer, not only the truncated remainder, so nothing has to be added
-  together across two different lists to get an honest count.
+  together across two different lists to get an honest count. (That holds for the app's layers; a large
+  basemap's histograms go earlier, in the stages described next.)
+- A basemap — a tiled source with eight or more layers on it — is the least interesting part of a snapshot
+  of an app, so it gives up its budget first. Giving up its *rows* turned out not to be enough: on a
+  production-sized style (80–120 layers, 25+ of them with content in view) the row-less sections and the
+  layer ids in the header alone filled the default budget, and the app's own layer was left with no rows
+  (the real OpenFreeMap style: 0 of 1,025 buildings). So the basemap degrades in stages, each tried only if
+  the previous one does not fit: no rows; one shared note on how to list a basemap layer
+  (`snapshot({ layers: [...] })`) instead of a hint per layer; the header lists count its layers per source
+  instead of naming them (in the top-to-bottom list each run of them is counted in place, so an app layer
+  inserted under the basemap's labels is still seen to be under them); one count line per layer, without
+  colour or histogram; one line per source naming its layers with entity counts; that line counting layers
+  by type only. Only then does the app's own per-layer cap shrink, and if it had to, the basemap gets back
+  whatever room that freed. The snapshot always still says that there is a basemap, how big it is, what
+  kinds of layers it has, and how to ask for more. App layers keep their line shapes at every stage.
+  Telling the app's layers from the basemap's uses only what every adapter reports (source, source type,
+  layer type): a layer the app adds to the basemap's own source — MapLibre's 3D-buildings example extrudes
+  the basemap's building footprints — is recognised by being the only layer of its type there, since a
+  basemap draws each kind of thing with a family of layers. An app layer of a type the basemap already
+  uses on that source (a highlighted road, say) is still taken for basemap; naming it in `layers` fixes that,
+  since layers asked for by name never count as basemap.
 - A `filter` option narrows the listing to entities matching a query — the tool for finding one entity
   among thousands of look-alikes without reading the whole layer.
 - For layers backed by a GeoJSON source, the snapshot can additionally report what exists but is
