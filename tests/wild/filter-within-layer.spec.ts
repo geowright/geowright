@@ -5,8 +5,8 @@ import { DEMOTILES, example, expect, test, type Routes } from './harness';
 // on 'change'. As vendored (upstream, unmodified apart from the hook line) the whole interactive
 // feature is broken: the script is an ES module (`type="module"`, always strict mode) and every
 // branch of its 'change' handler assigns to an UNDECLARED variable (`operatorFelt = ...`,
-// `operatorMag = ...`, `tsunami = ...`, `mapLibreFilterSpread = ...`) — a ReferenceError in strict
-// mode. Every one of the page's controls throws before map.setFilter is ever called. This is a bug
+// `operatorMag = ...`, `mapLibreFilterSpread = ...`) — a ReferenceError in strict mode. (`tsunami`,
+// `felt` and `mag` are undeclared too but resolve to the elements with those ids, so they do not throw.) Every one of the page's controls throws before map.setFilter is ever called. This is a bug
 // in the example itself (not in geowright); the tests below document exactly what a QA pass finds.
 const routes: Routes = [
   ...DEMOTILES,
