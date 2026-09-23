@@ -1,7 +1,7 @@
 # 0002. The app hook contract
 
-- Status: Proposed
-- Date: 2026-09-22
+- Status: Accepted
+- Date: 2026-09-23
 - Decided by: Shai Sinai
 
 ## Decision
@@ -16,6 +16,9 @@ reshape after release is a breaking change in code this project does not own or 
 Auto-discovery was considered and rejected — a bundled app gives no reliable back-reference
 from a rendered map instance to find automatically. The hook also makes the map instance
 reachable by any script on the page, so it is documented as test/dev-only, never for production.
+An opt-in form (`if (window.__geowright_maps) …`, inert unless geowright planted the global first) was
+also considered and rejected: it would force the adapter in before any app script runs and stop
+attaching to an already-open page, to protect a map that any script on the page can already reach.
 
 ## Consequences
 - easy: works with any bundler or framework wrapper with one added line; no dependency to install in the app
