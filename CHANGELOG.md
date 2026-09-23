@@ -4,6 +4,8 @@ Not published; versions start when the package does. Until then this lists what 
 (details and reasoning: `docs/DESIGN.md`). Breaking changes are marked **BREAKING**.
 
 ## Unreleased — publishable and broad
+- **Peer dependency**: `@playwright/test` `>=1.63.0` (was `>=1.50.0`, never tested): the range now names the version
+  CI runs ([0014](docs/decisions/0014-claim-only-what-is-tested.md)).
 - **Version matrix**: Mapbox GL JS 1.13 (BSD) and MapLibre GL JS 2, 3, 4, 5, 6 — `npm run test:compat`, support table
   in the README. Adapter: `getLayersOrder` / `GeoJSONSource.getData` / `areTilesLoaded` / `getRenderWorldCopies` are
   feature-detected with public fallbacks; `mapboxgl-` marker/popup classes; the pixel probe works without `redraw()`
