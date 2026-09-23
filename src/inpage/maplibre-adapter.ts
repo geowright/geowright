@@ -1,6 +1,7 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
-import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, StyleCause, Visibility } from './types';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, layoutVisible, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
+import type { Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
+import type { InternalCanvasAdapter, StyleCause } from './types-internal';
 
 /** A source that is not loaded right now: its type, whether its GeoJSON is inline (nothing to download), and how long
  *  it has been pending as far as this adapter has seen (the retries of one waitForIdle() share that clock). */
@@ -42,7 +43,7 @@ export function deadWorkerDiagnosis(pending: PendingSource[], workerSourcesLoade
  * family) by tests/compat. Newer public methods are FEATURE-DETECTED, never version-sniffed, and what
  * an old version cannot do is said out loud in caveats() instead of being answered wrongly.
  */
-export class MapLibreAdapter implements CanvasAdapter<LngLat> {
+export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   readonly kind = 'maplibre';
   constructor(private readonly map: MlMap) {}
 
@@ -216,7 +217,8 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
         type: l.type,
         source: l.source || undefined,
         sourceType: l.source ? this.map.getSource(l.source)?.type : undefined,
-        visible: this.map.getLayoutProperty(id, 'visibility') !== 'none',
+        // not `!== 'none'`: since MapLibre 5.16 visibility may be an expression on global state
+        visible: layoutVisible(this.map, id),
       };
     });
   }

@@ -89,4 +89,19 @@ test.describe('failures explain invisibility', () => {
     await page.evaluate(() => (window as any).__geowright_maps.main.setGlobalStateProperty('showWhy', true));
     await expect(map).toHaveFeature({ layer: 'why', id: 1 });
   });
+
+  test('a layer hidden by a visibility expression is hidden in the layer list and the snapshot', async ({ map, page }) => {
+    // The layer list compared visibility with the constant "none", so a layer hidden through global state counted as visible.
+    await addLayer(page, { type: 'fill', layout: { visibility: ['case', ['global-state', 'showWhy'], 'visible', 'none'] }, paint: { 'fill-color': '#2e7d32' } }, { showWhy: false });
+    await expect(map).not.toHaveFeature({ layer: 'why', visible: 'any' });
+    expect((await map.layers()).find((l) => l.id === 'why')?.visible).toBe(false);
+    const hidden = await map.snapshot();
+    expect(hidden).toMatch(/^hidden layers: .*\bwhy\b/m);
+    expect(hidden).not.toMatch(/^visible but empty in this view: .*\bwhy\b/m);
+
+    await page.evaluate(() => (window as any).__geowright_maps.main.setGlobalStateProperty('showWhy', true));
+    await expect(map).toHaveFeature({ layer: 'why', id: 1 });
+    expect((await map.layers()).find((l) => l.id === 'why')?.visible).toBe(true);
+    expect(await map.snapshot()).toMatch(/^layers with content, top to bottom: .*\bwhy\(fill,geojson\)/m);
+  });
 });

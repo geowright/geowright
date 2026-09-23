@@ -8,7 +8,8 @@ import {
   type StylePropertyExpression,
 } from '@maplibre/maplibre-gl-style-spec';
 import type { Map as MlMap } from 'maplibre-gl';
-import type { RenderedFeature, StyleBranch, StyleCause, Visibility } from './types';
+import type { RenderedFeature, Visibility } from './types';
+import type { StyleBranch, StyleCause } from './types-internal';
 
 /**
  * "Rendered is not visible": queryRenderedFeatures returns features whose paint makes them
@@ -342,6 +343,34 @@ function explainValue(map: MlMap, f: RenderedFeature, ev: ReturnType<typeof eval
 }
 
 /**
+ * A layer's layout `visibility` as the style evaluates it NOW: a constant, or (MapLibre >= 5.16) an expression on
+ * global state, evaluated by the style-spec's own visibility evaluator. `value` is undefined when the expression
+ * cannot be evaluated (newer than the bundled evaluator): unknown, which every caller treats as visible.
+ */
+function layoutVisibility(map: MlMap, layerId: string): { raw: unknown; value: unknown; globalState: Record<string, unknown> } {
+  const raw = map.getLayoutProperty(layerId, 'visibility') as unknown;
+  let globalState: Record<string, unknown> = {};
+  if (!Array.isArray(raw)) return { raw, value: raw, globalState };
+  try {
+    globalState = map.getGlobalState?.() ?? {};
+  } catch {
+    /* older MapLibre: no global state */
+  }
+  let value: unknown;
+  try {
+    value = createVisibilityExpression(raw as any, `layers[${layerId}].layout.visibility`, globalState).evaluate();
+  } catch {
+    value = undefined; // an expression the bundled evaluator cannot parse: unknown, so not hidden
+  }
+  return { raw, value, globalState };
+}
+
+/** False when layout `visibility` hides the layer: "none" as a constant, or what its expression evaluates to now. */
+export function layoutVisible(map: MlMap, layerId: string): boolean {
+  return layoutVisibility(map, layerId).value !== 'none';
+}
+
+/**
  * Why the style draws NOTHING of a layer at the current camera: the zoom is outside minzoom–maxzoom (MapLibre hides
  * a layer when zoom < minzoom or zoom >= maxzoom), or layout `visibility` is "none" — a constant, or (MapLibre
  * >= 5.16) an expression on global state, evaluated by the style-spec's own visibility evaluator. Empty: drawn.
@@ -354,25 +383,12 @@ export function explainLayerHidden(map: MlMap, layerId: string): StyleCause[] {
   const base = { layer: layerId, zoom, origin: 'constant' as const, branches: [] };
   if (layer.minzoom && zoom < layer.minzoom) out.push({ ...base, group: 'layer', property: 'minzoom', value: layer.minzoom });
   if (layer.maxzoom && zoom >= layer.maxzoom) out.push({ ...base, group: 'layer', property: 'maxzoom', value: layer.maxzoom });
-  const raw = map.getLayoutProperty(layerId, 'visibility') as unknown;
-  if (raw === 'none') out.push({ ...base, group: 'layout', property: 'visibility', value: 'none' });
-  else if (Array.isArray(raw)) {
-    let globalState: Record<string, unknown> = {};
-    try {
-      globalState = map.getGlobalState?.() ?? {};
-    } catch {
-      /* older MapLibre: no global state */
-    }
-    let value: unknown;
-    try {
-      value = createVisibilityExpression(raw as any, `layers[${layerId}].layout.visibility`, globalState).evaluate();
-    } catch {
-      value = undefined; // an expression the bundled evaluator cannot parse: unknown, so not a cause
-    }
-    if (value === 'none') {
-      const ctx: Ctx = { propSpec: spec[`layout_${layer.type}`]?.visibility, globalState, globals: { zoom }, feature: { type: 1, properties: {} }, state: {} };
-      out.push({ ...base, group: 'layout', property: 'visibility', value, origin: 'expression', branches: attribute(raw, value, ctx) });
-    }
+  const { raw, value, globalState } = layoutVisibility(map, layerId);
+  if (value !== 'none') return out;
+  if (!Array.isArray(raw)) out.push({ ...base, group: 'layout', property: 'visibility', value: 'none' });
+  else {
+    const ctx: Ctx = { propSpec: spec[`layout_${layer.type}`]?.visibility, globalState, globals: { zoom }, feature: { type: 1, properties: {} }, state: {} };
+    out.push({ ...base, group: 'layout', property: 'visibility', value, origin: 'expression', branches: attribute(raw, value, ctx) });
   }
   return out;
 }
