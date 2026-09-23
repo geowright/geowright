@@ -620,17 +620,30 @@ geographic content is invented, which is the one thing licensing actually restri
 legally uncomplicated fixture at a real cost in realism: a synthetic basemap has on the order of twenty
 layers where a real basemap style commonly has well over a hundred, and label density is correspondingly
 much lower — occlusion caused by dense basemap labelling, expected going in to be a significant source
-of friction, was as a result barely exercised.
+of friction, was as a result barely exercised. That was the first synthetic basemap; the one the suite uses now is
+label-dense (next section).
 
 ### Label realism
 
-The synthetic basemap has an opt-in `dense` variant — 71 layers, 21 label layers, about 340 labels in view, all
+The synthetic basemap first got an opt-in `dense` variant — 71 layers, 21 label layers, about 340 labels in view, all
 generated — for one question: what happens to an application's features when basemap labels are drawn ON TOP of them,
 which is where an application that inserts its layers below the labels (the usual advice; MapLibre's 3D-buildings
 example does it) actually lives. Of 60 buildings, 40 were clickable at their best pixel and 19 only at another one,
 because a house number, a point-of-interest name, a street name or a neighbourhood label covered the best; every click
 landed on the building that was asked for — after the whole-pixel fix described under actionability, which this
 fixture is what found.
+
+The dense basemap is now the DEFAULT for every wild app that loads a synthetic OpenFreeMap, MapTiler or CARTO style,
+and it is dense at every zoom those apps use, not only up close: around the city core lies a generated region
+(suburbs, villages and towns every few kilometres, arterial roads with names and route numbers drawn as road shields,
+motorways, rivers, lakes, parks, stations, bus stops, airports; cities, states and countries further out), under a
+79-layer style with 24 symbol layers. Measured the same way on both — basemap symbols MapLibre actually placed in the
+same 880×720 px window — the synthetic basemap renders 75, 42, 50, 93, 240 and 171 labels at zoom 11 to 16, the real
+OpenFreeMap style 59, 26, 35, 78, 239 and 130, and the sparse city it replaced 5, 5, 6, 10, 33 and 25. A spec keeps
+it within 0.6–2× of the real numbers at each zoom. The density found a library limitation at once: on a basemap this
+size, `snapshot()` keeps a section for every basemap layer in view and runs out of budget before the application's own
+layer gets a single row (9 app symbols, 0 listed; on the real style, 0 of 1,025 buildings). It is pinned down by a
+spec marked as a known failure until the budget is fixed.
 
 A REAL basemap is available too, but only on a developer's own machine: a script caches a small OpenFreeMap extract
 (OpenStreetMap data, ODbL) outside the repository — never committed, never in CI — and an opt-in spec set runs the same
@@ -644,8 +657,8 @@ could not: the floating building parts mentioned under actionability.
 33 applications not written for this project — 23 official MapLibre examples, 3 React (react-map-gl)
 applications, 1 deck.gl MapLibre React application, 1 Protomaps PMTiles application,
 2 Svelte (svelte-maplibre-gl) applications, and 3 Vue (vue-maplibre-gl) applications —
-covering 135 specs in total (`tests/wild` holds 143: the other 8 are the dense-basemap and opt-in real-basemap
-realism specs, which are not apps):
+covering 135 specs in total (`tests/wild` holds 147: the other 12 are the dense-basemap, label-density and opt-in
+real-basemap realism specs, which are not apps):
 
 | app | specs | result |
 |---|---|---|
