@@ -12,6 +12,15 @@ Not published; versions start when the package does. Until then this lists what 
   layer the style does not draw says so: `layer "x" is not drawn at zoom 12: its minzoom is 13`, or its maxzoom, or
   `visibility` "none" — a constant or an expression on global state. Branches come from MapLibre's own evaluator; the
   verdict itself is unchanged. Adapter seam: optional `explainInvisible()` / `explainLayerHidden()`, plain `StyleCause` data.
+- **Fixed:** `snapshot()` on a production-sized basemap (80–120 layers) listed none of the app's own entities: every
+  basemap layer kept its section and every layer id stayed in the header, which alone filled the 8000-character budget
+  (the real OpenFreeMap style: 0 of 1,025 3D buildings listed; now 15). Within the budget the basemap is now condensed
+  first, in stages: no rows; one shared "how to list a layer" note instead of one per layer; header lists count its
+  layers per source (`(38 basemap layers on openmaptiles)`); a count line per layer; one line per source naming its
+  layers with counts (`[basemap source openmaptiles] 1425 entities on 27 layers, none listed — symbol: label_town 6,
+  …`); that line counting layers by type. Only then do the app's rows shrink. App layer lines are unchanged. A layer
+  the app adds to the basemap's source counts as the app's when it is the only one of its type there (the 3D-buildings
+  example); layers named in `layers` never count as basemap.
 - **Fixed:** the pixel probe (`toBeVisibleOnMap`, `toHaveLayerPixels`) wrote back `visibility: "visible"` after hiding
   the layer, replacing a `visibility` EXPRESSION (MapLibre >= 5.16) — and turning on a layer the app had hidden. It now
   restores what was there.

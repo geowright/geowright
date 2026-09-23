@@ -7,6 +7,7 @@ import type {
   EntityView,
   GeometryExpectation,
   GeometryVerdict,
+  LayerInfo,
   Overlay,
   SnapshotOptions,
   WhereOp,
@@ -938,6 +939,7 @@ export class Engine<W = unknown> {
     }
     const perLayer = o.perLayer ?? 15;
     const maxProps = o.maxProps ?? 6;
+    const maxChars = o.maxChars ?? 8000;
     const a = this.adapter;
     const view = a.getViewState() as any;
     const rect = a.surface().getBoundingClientRect();
@@ -970,41 +972,94 @@ export class Engine<W = unknown> {
     const visible = layers.filter((l) => l.visible);
     const hidden = layers.filter((l) => !l.visible);
     const drawn = new Set([...entities.values()].flatMap((e) => [...e.byLayer.keys()]));
-    const fmtLayer = (l: (typeof layers)[number]) => `${l.id}(${l.type}${l.sourceType ? ',' + l.sourceType : ''})`;
-    out.push(`layers with content, top to bottom: ${[...visible].reverse().filter((l) => drawn.has(l.id)).map(fmtLayer).join(' ')}`);
+    const fmtLayer = (l: LayerInfo) => `${l.id}(${l.type}${l.sourceType ? ',' + l.sourceType : ''})`;
+
+    // A basemap is a tiled source with many layers on it. Its rows are the least interesting thing on the page to
+    // whoever asked for a snapshot of an APP, and originally they ate the budget first (top-down order): "… 54
+    // more not listed" for every basemap layer and zero rows for the app's own. Then a production-sized basemap
+    // (80-120 layers) showed that giving up its ROWS is not enough (an earlier change): 25+ row-less sections, plus every
+    // layer id in the header, still filled the whole budget. So the basemap degrades in stages (see `STAGES` below)
+    // before the app's layers lose a single row.
+    // A layer the app adds to the basemap's own source (MapLibre's 3D-buildings example extrudes the basemap's
+    // building footprints) is told apart by being the only layer of its TYPE there: a basemap style draws each
+    // kind of thing with a family of layers (a dozen road lines, a dozen label symbols). Layers asked for by name
+    // (`layers`) are never treated as basemap.
+    const perSource = new Map<string, number>();
+    const perSourceType = new Map<string, number>();
+    for (const l of layers) {
+      if (!l.source) continue;
+      perSource.set(l.source, (perSource.get(l.source) ?? 0) + 1);
+      perSourceType.set(`${l.source}\0${l.type}`, (perSourceType.get(`${l.source}\0${l.type}`) ?? 0) + 1);
+    }
+    const isBasemap = (l: LayerInfo) =>
+      !only?.has(l.id) && !!l.source && l.sourceType !== 'geojson' && (perSource.get(l.source) ?? 0) >= 8 && (perSourceType.get(`${l.source}\0${l.type}`) ?? 0) >= 2;
+    const plural = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`;
+    // Condensed header lists: basemap layers become a count per source ("(38 basemap layers on openmaptiles)"). In
+    // the top-to-bottom list, each RUN of them is counted where it is, so the app's own layers keep their place in
+    // the stack (a layer inserted under the basemap's labels is still seen to be under them).
+    const runs = (ls: LayerInfo[], condense: boolean) => {
+      const tokens: string[] = [];
+      let run: LayerInfo[] = [];
+      const flush = () => (run.length && tokens.push(`(${plural(run.length, 'basemap layer')} on ${run[0].source})`), (run = []));
+      for (const l of ls) {
+        if (!condense || !isBasemap(l)) {
+          flush();
+          tokens.push(fmtLayer(l));
+          continue;
+        }
+        if (run.length && run[0].source !== l.source) flush();
+        run.push(l);
+      }
+      flush();
+      return tokens.join(' ');
+    };
+    const bySourceCount = (ls: LayerInfo[], condense: boolean) => {
+      const counts = new Map<string, number>();
+      for (const l of ls) if (condense && isBasemap(l)) counts.set(l.source!, (counts.get(l.source!) ?? 0) + 1);
+      return [...ls.filter((l) => !condense || !isBasemap(l)).map((l) => l.id), ...[...counts].map(([src, k]) => `(${plural(k, 'basemap layer')} on ${src})`)].join(' ');
+    };
     // Raster, hillshade, heatmap... draw pixels, not features: "empty" would be a lie about them.
     const pixelOnly = visible.filter((l) => PIXEL_ONLY.has(l.type));
     const empty = visible.filter((l) => !drawn.has(l.id) && l.source && !PIXEL_ONLY.has(l.type));
-    if (empty.length) out.push(`visible but empty in this view: ${empty.map((l) => l.id).join(' ')}`);
-    if (pixelOnly.length) out.push(`pixel-only layers (nothing to query): ${pixelOnly.map((l) => `${l.id}(${l.type})`).join(' ')}`);
-    if (hidden.length) out.push(`hidden layers: ${hidden.map((l) => l.id).join(' ')}`);
-    out.push(`entities rendered in viewport: ${entities.size}. Pixels are CLIENT coordinates: click them directly.`);
+    const top = out.splice(0);
+    const header = (condense: boolean): string[] => [
+      ...top,
+      `layers with content, top to bottom: ${runs([...visible].reverse().filter((l) => drawn.has(l.id)), condense)}`,
+      ...(empty.length ? [`visible but empty in this view: ${bySourceCount(empty, condense)}`] : []),
+      ...(pixelOnly.length ? [`pixel-only layers (nothing to query): ${pixelOnly.map((l) => `${l.id}(${l.type})`).join(' ')}`] : []),
+      ...(hidden.length ? [`hidden layers: ${bySourceCount(hidden, condense)}`] : []),
+      `entities rendered in viewport: ${entities.size}. Pixels are CLIENT coordinates: click them directly.`,
+      ...(o.filter ? [`filter: ${JSON.stringify(o.filter)} — only matching entities are listed below.`] : []),
+    ];
 
-    if (o.filter) out.push(`filter: ${JSON.stringify(o.filter)} — only matching entities are listed below.`);
-
-    // Entity sections are rendered by a function of the per-layer cap, so the character budget can
-    // shrink the cap and re-render. Hit tests are cached per entity: shrinking costs nothing.
+    // Entity sections are rendered by a function of the per-layer cap and the basemap's stage, so the character
+    // budget can shrink them and re-render. Hit tests, colours and histograms are cached per entity / layer:
+    // shrinking costs nothing.
     const located = new Map<string, ReturnType<Engine<W>['locate']>>();
-    const header = out.splice(0);
-    // A basemap is a tiled source with many layers on it. Its rows are the least interesting thing on the page to
-    // whoever asked for a snapshot of an APP, and originally they ate the budget first (top-down order): "… 54
-    // more not listed" for every basemap layer and zero rows for the app's own. Now basemap layers give up their
-    // rows first; the app's layers shrink only when that was not enough. Counts and histograms are never dropped.
-    const perSource = new Map<string, number>();
-    for (const l of layers) if (l.source) perSource.set(l.source, (perSource.get(l.source) ?? 0) + 1);
-    const isBasemap = (l: (typeof layers)[number]) => !!l.source && l.sourceType !== 'geojson' && (perSource.get(l.source) ?? 0) >= 8;
-    const sections = (appCap: number, baseCap: number): string[] => {
+    const coloursOf = new Map<string, ({ property: string; colour: string; dataDriven: boolean } | undefined)[]>();
+    const histogramOf = new Map<string, string>();
+    const sections = (appCap: number, baseCap: number, stage: Stage): string[] => {
       const sec: string[] = [];
+      const base: { l: LayerInfo; n: number }[] = [];
       for (const l of [...visible].reverse()) {
         const list = byLayer.get(l.id);
         if (!list) continue;
-        const also = [...new Set(list.flatMap((e) => [...e.byLayer.keys()].filter((x) => x !== e.owner)))];
-        const cap = isBasemap(l) ? baseCap : appCap;
+        const basemap = isBasemap(l);
+        if (basemap) base.push({ l, n: list.length });
+        if (basemap && (stage === 'grouped' || stage === 'counts')) continue;
+        const entitiesLine = `[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}`;
         sec.push('');
-        const colours = list.map((e) => this.adapter.colour?.(e.byLayer.get(e.owner)![0]));
+        if (basemap && stage === 'bare') {
+          sec.push(entitiesLine, `  … ${list.length} more not listed.`);
+          continue;
+        }
+        const also = [...new Set(list.flatMap((e) => [...e.byLayer.keys()].filter((x) => x !== e.owner)))];
+        const cap = basemap ? baseCap : appCap;
+        if (!coloursOf.has(l.id)) coloursOf.set(l.id, list.map((e) => this.adapter.colour?.(e.byLayer.get(e.owner)![0])));
+        const colours = coloursOf.get(l.id)!;
         const driven = colours.some((c) => c?.dataDriven);
         const constant = !driven && colours[0] ? `, all drawn ${nameColour(colours[0].colour)}` : '';
-        sec.push(`[${l.id}] ${list.length} ${l.type} entit${list.length === 1 ? 'y' : 'ies'}${constant}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
+        sec.push(`${entitiesLine}${constant}${also.length ? ` (also drawn by: ${also.join(', ')})` : ''}`);
         if (driven) {
           // An interpolated colour gives (almost) one hex per feature: then the colour WORD is the useful bucket.
           const manyShades = new Set(colours.map((c) => c?.colour)).size > 8;
@@ -1022,10 +1077,28 @@ export class Engine<W = unknown> {
         }
         const rest = list.slice(cap);
         if (rest.length) {
-          sec.push(`  … ${rest.length} more not listed${cap ? ' (nearest to the view centre are listed)' : ''}. ${histogram(list.map((e) => e.byLayer.get(e.owner)![0].properties), list.length)}`);
-          sec.push(`    to list specific ones: snapshot('<mapId>', { filter: { layer: '${l.id}', where: { <prop>: <value> } } })`);
+          if (!histogramOf.has(l.id)) histogramOf.set(l.id, histogram(list.map((e) => e.byLayer.get(e.owner)![0].properties), list.length));
+          sec.push(`  … ${rest.length} more not listed${cap ? ' (nearest to the view centre are listed)' : ''}. ${histogramOf.get(l.id)}`);
+          // past the 'rows' stage, the basemap's per-layer hints give way to ONE shared note (below)
+          if (!basemap || stage === 'rows') sec.push(`    to list specific ones: snapshot('<mapId>', { filter: { layer: '${l.id}', where: { <prop>: <value> } } })`);
         }
       }
+      if (!base.length || stage === 'rows') return sec;
+      if (stage === 'grouped' || stage === 'counts') {
+        // One line per basemap source: which layers have content (grouped by type, with entity counts), or at
+        // the last stage only how many layers of each type.
+        for (const src of new Set(base.map((b) => b.l.source!))) {
+          const mine = base.filter((b) => b.l.source === src);
+          const types = [...new Set(mine.map((b) => b.l.type))];
+          const detail =
+            stage === 'grouped'
+              ? types.map((t) => `${t}: ${mine.filter((b) => b.l.type === t).map((b) => `${b.l.id} ${b.n}`).join(', ')}`).join('; ')
+              : `${types.map((t) => `${mine.filter((b) => b.l.type === t).length} ${t}`).join(', ')} layer${mine.length === 1 ? '' : 's'}`;
+          const k = mine.reduce((sum, b) => sum + b.n, 0);
+          sec.push('', `[basemap source ${src}] ${k} entit${k === 1 ? 'y' : 'ies'} on ${plural(mine.length, 'layer')}, none listed — ${detail}`);
+        }
+      }
+      sec.push('', `note: basemap layers (a tiled source with many layers) are condensed to fit maxChars=${maxChars}. To list one layer's entities: snapshot('<mapId>', { layers: ['<layer id>'] }), or narrow with filter: { layer: '<layer id>', where: { <prop>: <value> } }`);
       return sec;
     };
 
@@ -1071,16 +1144,41 @@ export class Engine<W = unknown> {
       out.push(`\nnote: tiled source(s) ${[...bySource].map(([src, n]) => `${src} (${n} layer${n === 1 ? '' : 's'})`).join(', ')}: features outside the viewport are unknowable from here.`);
     }
 
-    // Budget: shrink the per-layer cap until the text fits; as a last resort cut it, and say so.
-    const maxChars = o.maxChars ?? 8000;
+    // Budget. The basemap degrades first, one stage at a time: its per-layer cap halves down to no rows; then its
+    // per-layer hints become one shared note; then the header lists count its layers instead of naming them; then
+    // each of its layers keeps only its count line (no colour, no histogram); then one line per source names its
+    // layers with counts; then that line only counts layers by type. Only then does the app's own per-layer cap
+    // shrink. As a last resort the text is cut, and says so.
     const footer = out;
-    let cap = perLayer, baseCap = perLayer;
+    const stages: { baseCap: number; stage: Stage }[] = [];
+    for (let c = Math.max(0, perLayer); ; c = Math.floor(c / 2)) {
+      stages.push({ baseCap: c, stage: 'rows' });
+      if (c === 0) break;
+    }
+    if (layers.some(isBasemap)) for (const stage of STAGES.slice(1)) stages.push({ baseCap: 0, stage });
+    const render = (cap: number, i: number) => {
+      const { baseCap, stage } = stages[i];
+      return [...header(STAGES.indexOf(stage) >= STAGES.indexOf('condensed')), ...sections(cap, baseCap, stage), ...footer].join('\n');
+    };
+    let cap = perLayer;
+    let i = 0;
     let text = '';
     for (;;) {
-      text = [...header, ...sections(cap, baseCap), ...footer].join('\n');
-      if (text.length <= maxChars || (cap === 0 && baseCap === 0)) break;
-      if (baseCap > 0) baseCap = Math.floor(baseCap / 2);
+      text = render(cap, i);
+      if (text.length <= maxChars || (cap === 0 && i === stages.length - 1)) break;
+      if (i < stages.length - 1) i++;
       else cap = Math.floor(cap / 2);
+    }
+    // If the app's rows had to shrink, the basemap may have been condensed more than that smaller app part needs:
+    // give the room back, least condensed stage first — but never its rows while the app's are capped.
+    if (cap < perLayer && text.length <= maxChars) {
+      for (let j = stages.findIndex((s) => s.baseCap === 0); j < i; j++) {
+        const t = render(cap, j);
+        if (t.length <= maxChars) {
+          text = t;
+          break;
+        }
+      }
     }
     if (text.length > maxChars) text = text.slice(0, Math.max(0, maxChars - 60)) + `\n… cut to fit maxChars=${maxChars}; use layers/filter to narrow.`;
     return text;
@@ -1104,6 +1202,10 @@ export class Engine<W = unknown> {
 }
 
 /* ---------------- helpers ---------------- */
+
+/** How far the basemap's part of a snapshot is condensed, least to most (see the budget loop in `snapshot()`). */
+const STAGES = ['rows', 'nohint', 'condensed', 'bare', 'grouped', 'counts'] as const;
+type Stage = (typeof STAGES)[number];
 
 /** Layer types that paint pixels without features one could query or click. */
 const PIXEL_ONLY = new Set(['raster', 'hillshade', 'heatmap', 'background', 'color-relief', 'custom']);
