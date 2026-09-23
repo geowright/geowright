@@ -11,7 +11,11 @@ Not published; versions start when the package does. Until then this lists what 
   anything else (`let`/`var`, arithmetic, an interpolation between two stops) is named by property and value only. A
   layer the style does not draw says so: `layer "x" is not drawn at zoom 12: its minzoom is 13`, or its maxzoom, or
   `visibility` "none" — a constant or an expression on global state. Branches come from MapLibre's own evaluator; the
-  verdict itself is unchanged. Adapter seam: optional `explainInvisible()` / `explainLayerHidden()`, plain `StyleCause` data.
+  verdict itself is unchanged. Adapter seam: optional `explainInvisible()` / `explainLayerHidden()`, plain `StyleCause`
+  data — internal until 1.0, so not in the published typings (`src/inpage/types-internal.ts`).
+- **Fixed:** a layer hidden by a `visibility` EXPRESSION (MapLibre >= 5.16, e.g. on global state) counted as visible in
+  `map.layers()` and the snapshot ("visible but empty in this view", not under "hidden layers"). The layer list now
+  evaluates the expression, as the failure messages above do.
 - **Fixed:** `snapshot()` on a production-sized basemap (80–120 layers) listed none of the app's own entities: every
   basemap layer kept its section and every layer id stayed in the header, which alone filled the 8000-character budget
   (the real OpenFreeMap style: 0 of 1,025 3D buildings listed; now 15). Within the budget the basemap is now condensed

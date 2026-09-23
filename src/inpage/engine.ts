@@ -1,7 +1,6 @@
 import type {
   ActionPointOptions,
   ActionPointResult,
-  CanvasAdapter,
   ClickVerdict,
   DebugMark,
   EntityView,
@@ -16,13 +15,12 @@ import type {
   Geometry,
   Pt,
   RenderedFeature,
-  StyleBranch,
-  StyleCause,
 } from './types';
+import type { InternalCanvasAdapter, StyleBranch, StyleCause } from './types-internal';
 
 /** Library-agnostic logic. Knows nothing about MapLibre; only the adapter seam. */
 export class Engine<W = unknown> {
-  constructor(readonly adapter: CanvasAdapter<W>) {}
+  constructor(readonly adapter: InternalCanvasAdapter<W>) {}
 
   /* ---------------- matching ---------------- */
 
