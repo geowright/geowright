@@ -4,6 +4,12 @@ Not published; versions start when the package does. Until then this lists what 
 (details and reasoning: `docs/DESIGN.md`). Breaking changes are marked **BREAKING**.
 
 ## Unreleased — publishable and broad
+- **`geowright/app`: the hook's type, for the app's TypeScript.** `/// <reference types="geowright/app" />` in a `.d.ts`
+  the app's tsconfig includes declares `window.__geowright_maps?: Record<string, unknown>`, so
+  `(window.__geowright_maps ??= {}).main = map` compiles without `(window as any)`. Types only: the export has no
+  JavaScript, nothing is imported at run time, the hook line is unchanged
+  ([0002](docs/decisions/0002-the-app-hook-contract.md)). `npx geowright init` prints the reference line in a
+  TypeScript project; it never edits the app's files or its tsconfig. The main `'geowright'` entry does not declare it.
 - **Failures explain invisibility.** When the style hides a matching feature, the failure message ("What is on the map")
   names the style property, its value, the expression branch that produced it and the zoom:
   `-> why#1 is not visible at zoom 12: fill-opacity is 0 because the match on ["get","kind"] took its fallback for kind="park"`.

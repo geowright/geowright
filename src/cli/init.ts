@@ -17,6 +17,8 @@ export interface Wrapper {
 }
 
 const PLAIN = `(window.__geowright_maps ??= {}).main = map;`;
+/** The type of the hook for an app's TypeScript (`geowright/app`: type-only, nothing ships). Printed, never written. */
+export const APP_TYPES_REFERENCE = '/// <reference types="geowright/app" />';
 
 export const WRAPPERS: Wrapper[] = [
   {
@@ -192,6 +194,11 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
     }
   } else {
     log(`     const map = new maplibregl.Map({ … });\n     ${PLAIN}`);
+  }
+  if (ext === 'ts') {
+    // printed, not written: the app's .d.ts files and its tsconfig are the user's (init writes only into the tests dir)
+    log(`   TypeScript: so the line compiles without \`(window as any)\`, add to a .d.ts your APP's tsconfig includes (e.g. src/vite-env.d.ts):`);
+    log(`     ${APP_TYPES_REFERENCE}`);
   }
   if (detection.mapLibrary && !detection.mapLibrary.supported) log(`\n   WARNING: ${detection.mapLibrary.pkg}@${detection.mapLibrary.range} — ${detection.mapLibrary.why}`);
   if (!detection.mapLibrary) log('\n   note: neither maplibre-gl nor mapbox-gl is a dependency of this package. geowright supports MapLibre GL JS 2–6 and Mapbox GL JS 1.13.');

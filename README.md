@@ -30,7 +30,8 @@ const map = new maplibregl.Map({ ... });
 (window.__geowright_maps ??= {}).main = map;   // that's it; nothing is imported, nothing ships
 ```
 
-In TypeScript the property is not declared on `Window`: write `(window as any).__geowright_maps`.
+In TypeScript, add `/// <reference types="geowright/app" />` to a `.d.ts` file your **app's** tsconfig includes (a Vite
+app has `src/vite-env.d.ts`) and the line compiles as written, without `(window as any)`. It is types only: nothing ships.
 
 With a wrapper the map instance arrives in a callback — still one line (all three verified in `wild/apps/`):
 
@@ -207,7 +208,7 @@ await map.draw.cancel();                                                  // ...
 
 ## API reference
 
-`import { geowright, expect, GeowrightError } from 'geowright'` · `import { routeVectorTiles } from 'geowright/tiles'`
+`import { geowright, expect, GeowrightError } from 'geowright'` · `import { routeVectorTiles } from 'geowright/tiles'` · app side, types only: `/// <reference types="geowright/app" />` declares `window.__geowright_maps` (`Record<string, unknown>`)
 
 **`geowright(page, options?) → MapHandle`** — `mapId` ('main') · `timeout` (10 000 ms, actions/waits; assertions use Playwright's expect timeout) · `ignoreLayers` · `mirror` (boolean | `{ max }`) · `failureScreenshots` (true)
 

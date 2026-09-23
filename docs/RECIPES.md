@@ -43,8 +43,18 @@ if (import.meta.env.MODE !== 'production') (window.__geowright_maps ??= {}).main
 <!-- in <script setup> the plain form works:  const onLoad = (e) => ((window.__geowright_maps ??= {}).main = e.map) -->
 ```
 
-In TypeScript the property is not declared on `Window`: write `(window as any).__geowright_maps`, as the
-[react-map-gl app](../wild/apps/react-map-gl/geojson/src/app.tsx) does.
+In TypeScript, add one reference line to a `.d.ts` file that your **app's** tsconfig includes (a Vite app already has
+`src/vite-env.d.ts`, with `/// <reference types="vite/client" />` in it):
+
+<!-- example: skip (app-side: a type reference for your app's tsconfig, not test code; compiled by tests/unit/app-type.unit.spec.ts) -->
+```ts
+/// <reference types="geowright/app" />
+```
+
+It declares `window.__geowright_maps` (the maps as `unknown`, so your app's types never depend on a map library's
+typings through geowright), and the hook line compiles as written, without `(window as any)`. It is types only:
+nothing is imported at run time and nothing ships. It belongs in the app's tsconfig: the tests' `import 'geowright'`
+does not declare it.
 
 Two maps on a page: register them under two names and pass `geowright(page, { mapId: 'left' })`.
 

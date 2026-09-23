@@ -1,8 +1,8 @@
 import { test, expect } from '@playwright/test';
-import { cpSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { detect, init } from '../../src/cli/init';
+import { APP_TYPES_REFERENCE, detect, init } from '../../src/cli/init';
 
 /** `geowright init` against scratch copies of the third-party wrapper apps in wild/apps (their real package.json). */
 const APPS = fileURLToPath(new URL('../../wild/apps/', import.meta.url));
@@ -26,6 +26,7 @@ for (const [app, wrapper, hook] of [
     expect(first.detection.wrappers.map((w) => w.name)).toEqual([wrapper]);
     expect(first.detection.mapLibrary).toMatchObject({ pkg: 'maplibre-gl', supported: true });
     expect(lines.join('\n')).toContain(hook);
+    expect(lines.join('\n'), 'a JavaScript app gets no TypeScript advice').not.toContain('geowright/app');
     expect(first.written).toHaveLength(4); // fixture, flags, first spec — and a whole Playwright config: the scratch app has none
     const config = readFileSync(join(cwd, first.config!), 'utf8');
     expect(config).toContain(`from './tests/geowright.webgl.js'`);
@@ -66,6 +67,29 @@ function grepDir(dir: string, token: string, depth = 0): boolean {
   }
   return false;
 }
+
+test('init in a TypeScript app: prints the geowright/app reference line under the hook, writes it nowhere, leaves tsconfig alone', () => {
+  const cwd = test.info().outputPath('ts-app');
+  mkdirSync(cwd, { recursive: true });
+  writeFileSync(join(cwd, 'package.json'), JSON.stringify({ dependencies: { 'maplibre-gl': '^6.10.0' }, devDependencies: { typescript: '^5.9.0', '@playwright/test': '^1.55.0' } }));
+  const tsconfig = JSON.stringify({ compilerOptions: { strict: true }, include: ['src'] }, null, 2);
+  writeFileSync(join(cwd, 'tsconfig.json'), tsconfig);
+  const lines: string[] = [];
+  const result = init({ cwd, log: (l) => lines.push(l) });
+  const out = lines.join('\n');
+  expect(APP_TYPES_REFERENCE).toBe('/// <reference types="geowright/app" />');
+  // right after the plain hook, in step 1 (the app side), before step 2
+  const hookAt = out.indexOf('(window.__geowright_maps ??= {}).main = map;');
+  const refAt = out.indexOf(APP_TYPES_REFERENCE);
+  expect(hookAt).toBeGreaterThan(0);
+  expect(refAt).toBeGreaterThan(hookAt);
+  expect(refAt).toBeLessThan(out.indexOf('\n2. '));
+  expect(out).toContain("add to a .d.ts your APP's tsconfig includes");
+  // printed only: every file init wrote is in the tests dir or the Playwright config; none carries the reference
+  expect(result.written.sort()).toEqual(['playwright.config.ts', 'tests/geowright.fixture.ts', 'tests/geowright.webgl.ts', 'tests/map.spec.ts']);
+  for (const f of result.written) expect(readFileSync(join(cwd, f), 'utf8')).not.toContain('geowright/app');
+  expect(readFileSync(join(cwd, 'tsconfig.json'), 'utf8')).toBe(tsconfig);
+});
 
 test('detect: plain MapLibre, Mapbox v1 (supported), Mapbox v3 (proprietary: warned, not claimed), nothing', () => {
   expect(detect({ dependencies: { 'maplibre-gl': '^4.7.1' } })).toMatchObject({ wrappers: [], mapLibrary: { pkg: 'maplibre-gl', supported: true } });
