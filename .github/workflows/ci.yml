@@ -1,8 +1,8 @@
 name: ci
 
-# Per push: typecheck + build + the full suite, and the version matrix as its own job. The flake check
-# (--repeat-each) lives in flake.yml so that it can never starve this job of its time limit. Use [skip ci] on
-# docs-only / batched commits.
+# Per push: typecheck + build + the full suite; the version matrix and the @playwright/test floor as their own jobs.
+# The flake check (--repeat-each) lives in flake.yml so that it can never starve this job of its time limit. Use
+# [skip ci] on docs-only / batched commits.
 #
 # WHERE it runs is a repository setting, not something this file knows: by default a GitHub-hosted Linux runner;
 # a repository variable CI_RUNS_ON (a JSON list of runner labels) routes the jobs to another runner, and CI_PORT
@@ -105,5 +105,63 @@ jobs:
         if: failure()
         with:
           name: compat-test-results
+          path: test-results/
+          retention-days: 5
+
+  # The @playwright/test peer floor: typecheck + the full suite on EXACTLY the version package.json's
+  # peerDependencies names (">=X.Y.Z" -> X.Y.Z), so the range claims only what CI runs (decision 0014). Lowering the
+  # floor in package.json moves this job with it.
+  playwright-floor:
+    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
+    timeout-minutes: 45
+    env:
+      CI: 'true'
+      CI_PORT: ${{ vars.CI_PORT || '4173' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      # Own ports (+3 preview, +4 wild; compat uses +2), so this job never meets the other jobs' servers when two
+      # runners share a machine. Own browser directory: an old Playwright's install garbage-collects the browsers
+      # of the version the other jobs use when both share one cache.
+      - name: Ports, browser directory and the floor version (from package.json)
+        run: |
+          echo "GEOWRIGHT_PORT=$(( CI_PORT + 3 ))" >> "$GITHUB_ENV"
+          echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TOOL_CACHE/ms-playwright-floor" >> "$GITHUB_ENV"
+          floor=$(node -p "(/^>=(\d+\.\d+\.\d+)$/.exec(require('./package.json').peerDependencies['@playwright/test']) || [])[1] || ''")
+          [ -n "$floor" ] || { echo "peerDependencies['@playwright/test'] is not of the form >=X.Y.Z"; exit 1; }
+          echo "PLAYWRIGHT_FLOOR=$floor" >> "$GITHUB_ENV"
+      - name: Install @playwright/test at the floor (package.json and the lock file stay as they are)
+        run: |
+          npm i --no-save "@playwright/test@$PLAYWRIGHT_FLOOR" "playwright@$PLAYWRIGHT_FLOOR" "playwright-core@$PLAYWRIGHT_FLOOR"
+          installed=$(node -p "require('@playwright/test/package.json').version")
+          [ "$installed" = "$PLAYWRIGHT_FLOOR" ] || { echo "installed $installed, expected $PLAYWRIGHT_FLOOR"; exit 1; }
+          npx playwright --version
+      - uses: actions/cache@v4
+        if: runner.environment == 'github-hosted' # a persistent runner keeps its browsers on disk
+        with:
+          path: ${{ runner.tool_cache }}/ms-playwright-floor
+          key: pw-floor-${{ runner.os }}-${{ env.PLAYWRIGHT_FLOOR }}
+      - run: npx playwright install --with-deps chromium
+      - run: npm run typecheck
+      - name: Machine load before (a timeout on a busy shared machine is not a verdict)
+        run: uptime
+      # Playwright before 1.52 hands .ts files to Node's own type stripping (on by default since Node 22.18), which
+      # rejects this repository's parameter properties; 1.52 stopped doing that (microsoft/playwright#35300). The flag
+      # changes only how OUR test files load: geowright ships JavaScript.
+      - name: Full suite
+        env:
+          NODE_OPTIONS: --no-experimental-strip-types
+        run: npx playwright test
+      - name: Machine load after
+        if: always()
+        run: uptime
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-floor-test-results
           path: test-results/
           retention-days: 5
