@@ -22,6 +22,14 @@ discovering the global on its own and mining it — useful in tests, not somethi
   sessions only.
 - `routeVectorTiles` / fixtures run in the test process; they never open a port.
 
+## Old MapLibre versions in this repository are test fixtures
+The repository installs old `maplibre-gl` majors (v2–v5, under aliases such as `maplibre-gl-5`) and
+keeps the example apps under `wild/` at their upstream versions, on purpose: the suite tests the
+versions people actually run. Some of those versions have known advisories (for example
+GHSA-jrc7-96c5-q579, fixed only in 6.4.1). They run only inside the test suite, against local
+fixture pages; the published package neither ships nor depends on `maplibre-gl` (see
+`package.json` `dependencies` and `files`), and `wild/` is not part of it.
+
 ## Reporting a vulnerability
 Please do not open a public issue for a security problem. Use GitHub's private vulnerability reporting
 on this repository (**Security → Report a vulnerability**). You will get an answer within a week.
