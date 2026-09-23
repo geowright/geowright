@@ -22,11 +22,13 @@ three lines to add.
 
 Test / development builds only — the line exposes the map instance to every script on the page ([SECURITY.md](../SECURITY.md)).
 
+<!-- example: skip (app-side code: it runs in your app, not in a test; `{ … }` stands for your map options) -->
 ```ts
 // plain MapLibre GL JS / Mapbox GL JS v1
 const map = new maplibregl.Map({ … });
 if (import.meta.env.MODE !== 'production') (window.__geowright_maps ??= {}).main = map;
 ```
+<!-- example: skip (app-side component markup with elided props; verified in wild/apps/react-map-gl) -->
 ```jsx
 // react-map-gl, @vis.gl/react-maplibre
 <Map onLoad={(e) => ((window.__geowright_maps ??= {}).main = e.target)} … />
@@ -40,6 +42,9 @@ if (import.meta.env.MODE !== 'production') (window.__geowright_maps ??= {}).main
 <mgl-map @map:load="e => ((e.map.getContainer().ownerDocument.defaultView.__geowright_maps ??= {}).main = e.map)" … />
 <!-- in <script setup> the plain form works:  const onLoad = (e) => ((window.__geowright_maps ??= {}).main = e.map) -->
 ```
+
+In TypeScript the property is not declared on `Window`: write `(window as any).__geowright_maps`, as the
+[react-map-gl app](../wild/apps/react-map-gl/geojson/src/app.tsx) does.
 
 Two maps on a page: register them under two names and pass `geowright(page, { mapId: 'left' })`.
 
