@@ -39,10 +39,11 @@ test.describe('wild: add-a-canvas-source', () => {
   // toBeVisibleOnMap: do the canvas pixels at a location change when the layer is not drawn?
   test('the canvas layer paints pixels inside its quad and nothing outside it', async ({ wild }) => {
     const map = await wild.open(example('add-a-canvas-source'), { routes: DEMOTILES, waitForIdle: false });
-    // The example draws five thin circle OUTLINES at random positions and speeds: any small window is empty most of
-    // the time (my first version probed 48px at the centre and failed 3 of ~6 repeats in the 20x). Probe the whole quad
-    // (~200px wide at zoom 5): there are always five circles somewhere in it.
-    await expect(map).toHaveLayerPixels('canvas-layer', { at: { lng: 95.9, lat: 17.7 }, radiusPx: 100 });
+    // The example draws five thin 20px circle OUTLINES bouncing inside its 400x400 canvas: any window smaller than the
+    // quad can be empty (48px failed 3 of ~6 repeats in a 20x; 100px — a 201px square, a quarter of the quad — still
+    // failed 1 in 40 on a quiet machine). The quad is ~400px wide at zoom 5, so probe all of it (a 401px square around
+    // its centre): the circles never leave the canvas, so there are always five in it.
+    await expect(map).toHaveLayerPixels('canvas-layer', { at: { lng: 95.9, lat: 17.8 }, radiusPx: 200 });
     await expect(map).not.toHaveLayerPixels('canvas-layer', { at: { lng: 104, lat: 17.7 } }); // east of the quad
   });
 });
