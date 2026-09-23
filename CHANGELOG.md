@@ -19,8 +19,10 @@ Not published; versions start when the package does. Until then this lists what 
   against the API and run against the demo app by the normal suite (`tests/docs/`); a block that cannot run says why
   in the Markdown (`<!-- example: skip (reason) -->`). The README examples that did not run as written (undefined
   variables, steps in an order the map could not be in, query objects that were not code) now do.
-- **Peer dependency**: `@playwright/test` `>=1.63.0` (was `>=1.50.0`, never tested): the range now names the version
-  CI runs ([0014](docs/decisions/0014-claim-only-what-is-tested.md)).
+- **Peer dependency**: `@playwright/test` `>=1.49.0` (was `>=1.50.0`, never tested): a CI job (`playwright-floor`)
+  runs typecheck and the full suite on exactly the version the range names
+  ([0014](docs/decisions/0014-claim-only-what-is-tested.md)). Below 1.49 the suite's `toMatchAriaSnapshot` is missing,
+  and below 1.45 so is `this.timeout` in custom matchers, which geowright's matchers use.
 - **Version matrix**: Mapbox GL JS 1.13 (BSD) and MapLibre GL JS 2, 3, 4, 5, 6 — `npm run test:compat`, support table
   in the README. Adapter: `getLayersOrder` / `GeoJSONSource.getData` / `areTilesLoaded` / `getRenderWorldCopies` are
   feature-detected with public fallbacks; `mapboxgl-` marker/popup classes; the pixel probe works without `redraw()`

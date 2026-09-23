@@ -80,7 +80,7 @@ since its LICENSE is bundled by some SBOM tools regardless).
 | `@maplibre/vt-pbf` | 4.3.2 | MIT | `Copyright (c) 2025 MapLibre contributors` + `Copyright (c) 2015 Anand Thakker` (for inherited `geojson_wrapper.js`, additionally BSD-3-Clause `Copyright (c) 2014, Mapbox`) | Yes |
 | `@types/geojson` | 7946.0.16 | MIT | `Copyright (c) Microsoft Corporation.` | Yes (types-only; no runtime code shipped) |
 
-**`peerDependencies`**: `@playwright/test` `>=1.63.0` — Apache-2.0, Microsoft Corporation. Not
+**`peerDependencies`**: `@playwright/test` `>=1.49.0` — Apache-2.0, Microsoft Corporation. Not
 bundled; the consumer supplies their own copy. See §3 for the installed dev copy's details.
 
 ---

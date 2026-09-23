@@ -301,8 +301,8 @@ Developed against MapLibre GL JS 6. The same small page and the same core specs 
 Newer public methods are feature-detected, never version-sniffed; what an old version cannot do is said in failure
 diagnostics and in the snapshot (`note: …`) instead of being answered wrongly.
 
-**Playwright:** `@playwright/test` 1.63 or later, the version CI runs. Older versions are not claimed until a CI job
-tests them ([0014](docs/decisions/0014-claim-only-what-is-tested.md)).
+**Playwright:** `@playwright/test` 1.49 or later: CI runs the full suite on 1.49.0 (the floor) and on the current
+version ([0014](docs/decisions/0014-claim-only-what-is-tested.md)).
 
 | | Mapbox GL JS 1.13 (BSD) | MapLibre 2 | MapLibre 3 | MapLibre 4 | MapLibre 5 | MapLibre 6 |
 |---|---|---|---|---|---|---|

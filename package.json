@@ -81,6 +81,6 @@
     "agent/MAP_SKILL.md"
   ],
   "peerDependencies": {
-    "@playwright/test": ">=1.63.0"
+    "@playwright/test": ">=1.49.0"
   }
 }
