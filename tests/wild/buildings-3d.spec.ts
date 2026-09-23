@@ -9,7 +9,7 @@ test.describe('wild: display-buildings-in-3d', () => {
   test('the extrusion layer sits beneath the labels and shows buildings with heights', async ({ wild }) => {
     const map = await wild.open(example('display-buildings-in-3d'), { routes });
     const order = (await map.layers()).map((l) => l.id);
-    const firstLabel = (await map.layers()).find((l) => l.type === 'symbol' && l.id !== 'road_oneway')!.id;
+    const firstLabel = (await map.layers()).find((l) => l.type === 'symbol' && !/^road_oneway/.test(l.id))!.id; // the one-way arrow layers are icons, not labels
     expect(order.indexOf('3d-buildings')).toBe(order.indexOf(firstLabel) - 1);
     await expect(map).toHaveFeature({ layer: '3d-buildings', where: { render_height: { gte: 80 } } });
   });
@@ -38,7 +38,7 @@ test.describe('wild: display-buildings-in-3d', () => {
     await expect(map).toHaveFeature({ layer: 'building' }); // the flat footprints remain
   });
 
-  test('the text snapshot stays readable on a 20-layer basemap', async ({ wild }) => {
+  test('the text snapshot stays readable on a production-sized basemap', async ({ wild }) => {
     const map = await wild.open(example('display-buildings-in-3d'), { routes });
     const snap = await map.snapshot({ layers: ['3d-buildings', 'poi_r1'], perLayer: 3 });
     expect(snap).toMatch(/\[3d-buildings\] \d+ fill-extrusion entities/);

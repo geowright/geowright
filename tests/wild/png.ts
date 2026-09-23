@@ -32,8 +32,12 @@ function crc32(buf: Buffer): number {
   return ~c >>> 0;
 }
 
-/** A sprite sheet of plain discs, one per icon name, each in its own colour. Returns what a style's `sprite` URL serves. */
-export function makeSprite(names: string[], size = 21): { json: Record<string, { x: number; y: number; width: number; height: number; pixelRatio: number }>; png: Buffer } {
+/**
+ * A sprite sheet of plain discs, one per icon name, each in its own colour — plus, optionally, road SHIELDS: white
+ * rounded plates with a dark rim, `shield-1` … `shield-N`, wide enough for a ref of that many characters (a style picks
+ * one with `['concat', 'shield-', ['get', 'ref_length']]`). Returns what a style's `sprite` URL serves.
+ */
+export function makeSprite(names: string[], size = 21, o: { shields?: number } = {}): { json: Record<string, { x: number; y: number; width: number; height: number; pixelRatio: number }>; png: Buffer } {
   const cols = Math.ceil(Math.sqrt(names.length));
   const rows = Math.ceil(names.length / cols);
   const colour = (i: number): [number, number, number] => {
@@ -42,7 +46,20 @@ export function makeSprite(names: string[], size = 21): { json: Record<string, {
   };
   const json: Record<string, { x: number; y: number; width: number; height: number; pixelRatio: number }> = {};
   names.forEach((n, i) => (json[n] = { x: (i % cols) * size, y: Math.floor(i / cols) * size, width: size, height: size, pixelRatio: 1 }));
-  const png = encodePng(cols * size, rows * size, (x, y) => {
+  // shields: one row each, under the discs; plate width grows 7 px per character
+  const SH = 18, shieldW = (n: number) => 10 + 7 * n;
+  const shields = Array.from({ length: o.shields ?? 0 }, (_, i) => i + 1);
+  shields.forEach((n, i) => (json[`shield-${n}`] = { x: 0, y: rows * size + i * SH, width: shieldW(n), height: SH, pixelRatio: 1 }));
+  const width = Math.max(cols * size, ...shields.map(shieldW));
+  const png = encodePng(width, rows * size + shields.length * SH, (x, y) => {
+    if (y >= rows * size) {
+      const n = Math.floor((y - rows * size) / SH) + 1, sy = (y - rows * size) % SH, w = shieldW(n);
+      if (x >= w) return [0, 0, 0, 0];
+      const corner = Math.hypot(Math.max(0, 3 - x, x - (w - 4)), Math.max(0, 3 - sy, sy - (SH - 4)));
+      if (corner > 3) return [0, 0, 0, 0];
+      return x < 2 || x >= w - 2 || sy < 2 || sy >= SH - 2 || corner > 1.5 ? [70, 70, 90, 255] : [255, 255, 255, 255];
+    }
+    if (x >= cols * size) return [0, 0, 0, 0];
     const i = Math.floor(y / size) * cols + Math.floor(x / size);
     if (i >= names.length) return [0, 0, 0, 0];
     const d = Math.hypot((x % size) - (size - 1) / 2, (y % size) - (size - 1) / 2);

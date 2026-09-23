@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import type { Route } from '@playwright/test';
+import { DENSITY_ZOOMS, formatDensity, measureLabelDensity } from './density';
 import { example, expect, test, type Routes } from './harness';
 
 /**
@@ -54,6 +55,13 @@ test.describe('wild: REAL basemap (opt-in, cached outside the repo)', () => {
     const labels = await map.features({ layerType: 'symbol' }).count();
     console.log(`REAL BASEMAP: ${layers.length} layers, ${layers.filter((l) => l.type === 'symbol').length} symbol layers, ${labels} labels in view, ${await map.features({ layer: '3d-buildings' }).count()} buildings`);
     expect(labels).toBeGreaterThan(20);
+  });
+
+  test('label density per zoom, measured exactly as basemap-density.spec.ts measures the synthetic one (printed)', async ({ wild, page }) => {
+    await wild.open(example('display-buildings-in-3d'), { routes: realRoutes(), options: { timeout: 30_000 } });
+    const d = await measureLabelDensity(page, { center: [-74.0066, 40.7135], zooms: DENSITY_ZOOMS });
+    console.log(formatDensity('REAL BASEMAP', d));
+    expect(d.every((r) => r.symbols > 0)).toBe(true);
   });
 
   test('real buildings under real labels: every click lands on the asked building, or is refused with the reason', async ({ wild, page }) => {

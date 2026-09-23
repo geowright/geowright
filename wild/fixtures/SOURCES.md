@@ -26,8 +26,8 @@ More fixtures, one record per app that needed them (`sources/*.md`, same columns
 Served from `node_modules` rather than copied: `@mapbox/mapbox-gl-draw` 1.5.2 JS + CSS (ISC) for the example
 that asks unpkg for 1.5.0; `maplibre-gl.css` 6.10.0 (BSD-3) for svelte-maplibre-gl, which links it from unpkg.
 
-Generated at test time, not files: raster tiles (`tests/tile-png.ts`), sprites (`tests/wild/png.ts`), the
-synthetic "bright" / CARTO / MapTiler-streets basemaps and their city (`tests/wild/basemap.ts`), the synthetic Terrarium DEM (`tests/wild/terrain.ts`). Glyphs: Noto Sans Regular 0–255
+Generated at test time, not files: raster tiles (`tests/tile-png.ts`), sprites and road shields (`tests/wild/png.ts`), the
+synthetic "bright" / CARTO / MapTiler-streets basemaps with their city and surrounding region (`tests/wild/basemap.ts`), the synthetic Terrarium DEM (`tests/wild/terrain.ts`). Glyphs: Noto Sans Regular 0–255
 (OFL) from `demo/public/glyphs`.
 
 NOT committable, and therefore substituted or skipped (checked 2026-09-20): OpenFreeMap / any

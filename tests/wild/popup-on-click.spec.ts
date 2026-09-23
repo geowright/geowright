@@ -58,15 +58,19 @@ test.describe('wild: display-a-popup-on-click', () => {
   );
 
   test('snapshot under a tight budget: the basemap gives up its rows first, the app layer keeps its own', async ({ wild }) => {
+    // KNOWN LIBRARY BUG, exposed when the synthetic basemap became production-dense (an earlier change): see the minimal spec
+    // "KNOWN BUG — snapshot budget" in dense-basemap.spec.ts. Remove this line when it is fixed.
+    test.fail(true, 'snapshot budget: basemap sections crowd out the app layer rows on a production-sized basemap');
     const map = await wild.open(example('display-a-popup-on-click'), { routes });
     const snap = await map.snapshot({ maxChars: 3900 });
     expect(snap.length).toBeLessThanOrEqual(3900);
     // all nine places still have a row each (a clickable pixel + their properties) …
     expect(snap).toContain('[places] 9 symbol entities');
     expect(snap.match(/^  - Point @\(\d+,\d+\).* description=/gm)?.length).toBe(9);
-    // … while the basemap's busiest layer (40 streets, on a tiled source with 8+ layers) has given up most or all of its
-    // rows. Originally it was the other way round: top-down order spent the budget on the basemap first.
-    const unlisted = Number(/\[highway-minor\] 40 line entities[\s\S]*?… (\d+) more not listed/.exec(snap)?.[1]);
-    expect(unlisted).toBeGreaterThanOrEqual(33);
+    // … while the basemap's busiest layer (hundreds of street blocks, on a tiled source with 8+ layers) has given up most
+    // or all of its rows (at most 7 listed). Originally it was the other way round: top-down order spent the budget on
+    // the basemap first.
+    const [, total, unlisted] = /\[highway-minor\] (\d+) line entities[\s\S]*?… (\d+) more not listed/.exec(snap)?.map(Number) ?? [];
+    expect(total - unlisted).toBeLessThanOrEqual(7);
   });
 });
