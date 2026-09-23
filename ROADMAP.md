@@ -22,6 +22,7 @@ outside the project run in the wild suite.
 ## Next — 1.0: the contract
 What other people's code depends on is frozen, most expensive first:
 1. The app hook — `(window.__geowright_maps ??= {}).<name> = map` — which lives in users' application code.
+   Already frozen from 0.1.0 ([0002](docs/decisions/0002-the-app-hook-contract.md)); 1.0 documents it as stable.
 2. The in-page API (`window.__geowright`), which the agent layer and any future language binding call.
 3. The TypeScript API, under semver: deprecate in a minor release, remove only in the next major.
 
