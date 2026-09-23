@@ -63,6 +63,26 @@ test.describe('visibility', () => {
     await expect(page.getByTestId('popup')).toContainText('Gas leak');
   });
 
+  test('the pixel probe restores a visibility EXPRESSION, not the constant "visible"', async ({ map, page }) => {
+    // MapLibre >= 5.16: layout visibility may be an expression on global state. The probe hides the layer and shows
+    // it again; it used to write back "visible", which replaced the app's expression (and turned ON a layer the
+    // app had hidden, for toHaveLayerPixels).
+    const visibility = ['case', ['global-state', 'showCover'], 'visible', 'none'];
+    await page.evaluate((visibility) => {
+      const m = (window as any).__geowright_maps.main;
+      m.setGlobalStateProperty('showCover', true);
+      m.addSource('cover', { type: 'geojson', data: { type: 'Feature', id: 9, properties: {}, geometry: { type: 'Polygon', coordinates: [[[34.76, 32.07], [34.775, 32.07], [34.775, 32.085], [34.76, 32.085], [34.76, 32.07]]] } } });
+      m.addLayer({ id: 'cover', type: 'fill', source: 'cover', layout: { visibility }, paint: { 'fill-color': '#000' } });
+    }, visibility);
+    await expect(map.feature({ layer: 'cover', id: 9 })).toBeVisibleOnMap();
+    expect(await page.evaluate(() => (window as any).__geowright_maps.main.getLayoutProperty('cover', 'visibility'))).toEqual(visibility);
+
+    await page.evaluate(() => (window as any).__geowright_maps.main.setGlobalStateProperty('showCover', false));
+    await expect(map).not.toHaveLayerPixels('cover', { at: { lng: 34.7675, lat: 32.0775 }, timeout: 1000 });
+    expect(await page.evaluate(() => (window as any).__geowright_maps.main.getLayoutProperty('cover', 'visibility'))).toEqual(visibility);
+    await expect(map).not.toHaveFeature({ layer: 'cover', id: 9 }); // still hidden, as the app wants
+  });
+
   test('actions refuse an invisible feature and say why; force overrides', async ({ map, page }) => {
     const err = await map
       .feature({ layer: 'sensors', id: 502 })
@@ -79,6 +99,8 @@ test.describe('visibility', () => {
       .toHaveFeature({ layer: 'sensors', where: { name: 'Sensor Birch' } }, { timeout: 600 })
       .then(() => null, (e: Error) => e);
     expect(err?.message).toContain('1 feature(s) match but are NOT VISIBLE: sensors#502 (circle-opacity evaluates to 0');
+    // …and WHY: the property, its value, the expression branch, the zoom (tests/why-invisible.spec.ts has one per kind)
+    expect(err?.message).toContain('-> sensors#502 is not visible at zoom 12: circle-opacity is 0 because the case took its branch 1 (the first true condition: ["any",["==",["get","status"],"archived"]');
   });
 
   test('an INVISIBLE feature on top is not an occluder; a visible one is', async ({ map, page }) => {

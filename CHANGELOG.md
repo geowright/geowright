@@ -4,6 +4,17 @@ Not published; versions start when the package does. Until then this lists what 
 (details and reasoning: `docs/DESIGN.md`). Breaking changes are marked **BREAKING**.
 
 ## Unreleased — publishable and broad
+- **Failures explain invisibility.** When the style hides a matching feature, the failure message ("What is on the map")
+  names the style property, its value, the expression branch that produced it and the zoom:
+  `-> why#1 is not visible at zoom 12: fill-opacity is 0 because the match on ["get","kind"] took its fallback for kind="park"`.
+  Traced: `match`, `case`, `step`, `interpolate` (-hcl, -lab), `coalesce`, nested, and legacy `{ stops }` functions;
+  anything else (`let`/`var`, arithmetic, an interpolation between two stops) is named by property and value only. A
+  layer the style does not draw says so: `layer "x" is not drawn at zoom 12: its minzoom is 13`, or its maxzoom, or
+  `visibility` "none" — a constant or an expression on global state. Branches come from MapLibre's own evaluator; the
+  verdict itself is unchanged. Adapter seam: optional `explainInvisible()` / `explainLayerHidden()`, plain `StyleCause` data.
+- **Fixed:** the pixel probe (`toBeVisibleOnMap`, `toHaveLayerPixels`) wrote back `visibility: "visible"` after hiding
+  the layer, replacing a `visibility` EXPRESSION (MapLibre >= 5.16) — and turning on a layer the app had hidden. It now
+  restores what was there.
 - **Peer dependency**: `@playwright/test` `>=1.63.0` (was `>=1.50.0`, never tested): the range now names the version
   CI runs ([0014](docs/decisions/0014-claim-only-what-is-tested.md)).
 - **Version matrix**: Mapbox GL JS 1.13 (BSD) and MapLibre GL JS 2, 3, 4, 5, 6 — `npm run test:compat`, support table

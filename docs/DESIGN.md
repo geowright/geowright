@@ -358,6 +358,25 @@ an application's data but is not drawn for a library-specific reason distinct fr
 reported as exactly that in diagnostics, rather than left indistinguishable from an ordinary
 symbol-collision hide.
 
+**A failure explains the invisibility: property, value, expression branch, zoom.** "`fill-opacity` evaluates to 0"
+tells a user *what* hid a feature, not *why* — in a real style the answer is buried in a `match` on a property or a
+`step` on zoom. So a failure message traces it: `fill-opacity is 0 because the match on ["get","kind"] took its fallback
+for kind="park"`, at the zoom it was evaluated at. The adapter hands the engine plain data across the seam
+(`StyleCause`: layer, property, value, zoom, and the branches taken, outermost first), and the engine words it. The
+attribution does not re-implement the evaluator: it walks the property's style JSON and asks MapLibre's evaluator for
+every value it needs (the input of a `match` / `step` / `interpolate`, each condition of a `case`, each argument of a
+`coalesce`); choosing the branch from those values is the operator's one documented rule, and the choice is *checked* —
+MapLibre also evaluates the chosen branch's output, which must equal the value of the whole, or the attribution stops and
+only property and value are reported. Covered: `match`, `case`, `step`, `interpolate` (and `-hcl`, `-lab`), `coalesce`,
+nested, and legacy `{ stops }` functions through the style-spec's own `convertFunction`. Not traced (property + value
+only): `let` / `var`, arithmetic and every other operator, and an interpolation strictly between two stops (both stops are
+named; no single branch produced the value). A layer the style does not draw at all is explained the same way: zoom
+below `minzoom` or at / above `maxzoom` (MapLibre's own rule), or layout `visibility` "none" — which since MapLibre 5.16
+may be an expression on global state, evaluated with the style-spec's visibility evaluator. The explanation is computed
+only when something has failed; the visibility verdict never pays for it. Writing this found a real bug: the pixel probe
+restored a layer with the constant `"visible"`, replacing a `visibility` expression and turning on a layer the app had
+hidden; it now puts back what was there.
+
 ## Globe and terrain
 
 **MapLibre's own viewport queries are measurably wrong on a globe projection**, in both directions, as
