@@ -1,6 +1,14 @@
-import { expression as styleExpression, latest, normalizePropertyExpression, type StylePropertyExpression } from '@maplibre/maplibre-gl-style-spec';
+import {
+  createVisibilityExpression,
+  expression as styleExpression,
+  function as styleFunction,
+  latest,
+  normalizePropertyExpression,
+  type StyleExpression,
+  type StylePropertyExpression,
+} from '@maplibre/maplibre-gl-style-spec';
 import type { Map as MlMap } from 'maplibre-gl';
-import type { RenderedFeature, Visibility } from './types';
+import type { RenderedFeature, StyleBranch, StyleCause, Visibility } from './types';
 
 /**
  * "Rendered is not visible": queryRenderedFeatures returns features whose paint makes them
@@ -68,7 +76,7 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
       return undefined;
     }
   };
-  return { type, value, expression };
+  return { type, value, expression, globalState, feature };
 }
 
 /**
@@ -79,17 +87,36 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
 const unparseable = new Set<string>();
 export const unparseableProperties = (): string[] => [...unparseable];
 
-export function paintVisibility(map: MlMap, f: RenderedFeature): Visibility {
-  if (!map.getLayer(f.layer)) return { visible: true };
-  const { type, value } = evaluatorFor(map, f);
+/** A style property a verdict rests on. */
+type Prop = { group: 'paint' | 'layout'; name: string };
+
+/**
+ * The verdict, and the style properties behind it. Every hiding reason is a short string (the wording of
+ * `reason`); `props` maps each one to the properties it was read from, so that an explanation traces exactly the
+ * properties the verdict used — never a second, possibly different, opinion.
+ */
+function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visibility; parts: string[]; props: Map<string, Prop[]>; ev?: ReturnType<typeof evaluatorFor> } {
+  const props = new Map<string, Prop[]>();
+  if (!map.getLayer(f.layer)) return { visibility: { visible: true }, parts: [], props };
+  const ev = evaluatorFor(map, f);
+  const { type, value } = ev;
 
   const zero = (group: 'paint' | 'layout', name: string): string | undefined => {
     const v = value(group, name);
-    return typeof v === 'number' && v <= 0 ? `${name} evaluates to ${v}` : undefined;
+    const r = typeof v === 'number' && v <= 0 ? `${name} evaluates to ${v}` : undefined;
+    if (r) props.set(r, [{ group, name }]);
+    return r;
   };
   const transparent = (name: string): string | undefined => {
     const v = value('paint', name);
-    return v && typeof v === 'object' && typeof v.a === 'number' && v.a <= 0 ? `${name} is fully transparent` : undefined;
+    const r = v && typeof v === 'object' && typeof v.a === 'number' && v.a <= 0 ? `${name} is fully transparent` : undefined;
+    if (r) props.set(r, [{ group: 'paint', name }]);
+    return r;
+  };
+  /** A reason worded apart from the property it was read from ("no stroke" <- circle-stroke-width). */
+  const alias = (reason: string, from: (string | undefined)[], extra: Prop[] = []): string => {
+    props.set(reason, [...from.flatMap((r) => (r ? props.get(r) ?? [] : [])), ...extra]);
+    return reason;
   };
   const isSet = (group: 'paint' | 'layout', name: string): boolean => {
     const v = value(group, name);
@@ -98,38 +125,256 @@ export function paintVisibility(map: MlMap, f: RenderedFeature): Visibility {
     return typeof v.isEmpty === 'function' ? !v.isEmpty() : String(v?.name ?? v) !== '';
   };
   const first = (...reasons: (string | undefined)[]) => reasons.find((r) => r !== undefined);
-  const verdict = (...partsInvisible: (string | undefined)[]): Visibility =>
-    partsInvisible.every((r) => r !== undefined) ? { visible: false, reason: partsInvisible.join(' and ') } : { visible: true };
+  let parts: string[] = [];
+  const verdict = (...partsInvisible: (string | undefined)[]): Visibility => {
+    if (!partsInvisible.every((r) => r !== undefined)) return { visible: true };
+    parts = partsInvisible as string[];
+    return { visible: false, reason: parts.join(' and ') };
+  };
 
-  switch (type) {
-    case 'circle':
-      return verdict(
-        first(zero('paint', 'circle-opacity'), zero('paint', 'circle-radius'), transparent('circle-color')),
-        first(zero('paint', 'circle-stroke-width') && 'no stroke', zero('paint', 'circle-stroke-opacity'), transparent('circle-stroke-color')),
-      );
-    case 'fill': {
-      const opacity = zero('paint', 'fill-opacity');
-      if (opacity) return { visible: false, reason: opacity };
-      if (isSet('paint', 'fill-pattern')) return { visible: true };
-      const outlineSet = map.getPaintProperty(f.layer, 'fill-outline-color') != null;
-      return verdict(transparent('fill-color'), outlineSet ? transparent('fill-outline-color') : 'no separate outline colour');
+  const decide = (): Visibility => {
+    switch (type) {
+      case 'circle': {
+        const stroke = zero('paint', 'circle-stroke-width');
+        return verdict(
+          first(zero('paint', 'circle-opacity'), zero('paint', 'circle-radius'), transparent('circle-color')),
+          first(stroke && alias('no stroke', [stroke]), zero('paint', 'circle-stroke-opacity'), transparent('circle-stroke-color')),
+        );
+      }
+      case 'fill': {
+        const opacity = zero('paint', 'fill-opacity');
+        if (opacity) return verdict(opacity);
+        if (isSet('paint', 'fill-pattern')) return { visible: true };
+        const outlineSet = map.getPaintProperty(f.layer, 'fill-outline-color') != null;
+        // "no separate outline colour" is context, not a cause of its own: the outline is drawn in fill-color.
+        return verdict(transparent('fill-color'), outlineSet ? transparent('fill-outline-color') : alias('no separate outline colour', []));
+      }
+      case 'line': {
+        const painted = isSet('paint', 'line-pattern') || isSet('paint', 'line-gradient');
+        return verdict(first(zero('paint', 'line-opacity'), zero('paint', 'line-width'), painted ? undefined : transparent('line-color')));
+      }
+      case 'fill-extrusion':
+        return verdict(first(zero('paint', 'fill-extrusion-opacity'), isSet('paint', 'fill-extrusion-pattern') ? undefined : transparent('fill-extrusion-color')));
+      case 'symbol': {
+        let text: string;
+        if (isSet('layout', 'text-field')) {
+          const colour = transparent('text-color');
+          const halo = colour && (zero('paint', 'text-halo-width') || transparent('text-halo-color'));
+          text = first(zero('paint', 'text-opacity'), zero('layout', 'text-size'), halo ? alias('text-color and halo are fully transparent', [colour, halo]) : undefined)!;
+        } else text = alias('no text', [], [{ group: 'layout', name: 'text-field' }]);
+        const icon = isSet('layout', 'icon-image') ? first(zero('paint', 'icon-opacity'), zero('layout', 'icon-size')) : alias('no icon', [], [{ group: 'layout', name: 'icon-image' }]);
+        return verdict(text, icon);
+      }
+      default:
+        return { visible: true };
     }
-    case 'line': {
-      const painted = isSet('paint', 'line-pattern') || isSet('paint', 'line-gradient');
-      return verdict(first(zero('paint', 'line-opacity'), zero('paint', 'line-width'), painted ? undefined : transparent('line-color')));
+  };
+  const visibility = decide();
+  return { visibility, parts, props, ev };
+}
+
+export function paintVisibility(map: MlMap, f: RenderedFeature): Visibility {
+  return evaluateVisibility(map, f).visibility;
+}
+
+/**
+ * For failure messages: the style properties behind an "invisible" verdict of paintVisibility(), each with its
+ * evaluated value and the expression branch that produced it. Empty when the feature is visible. Only called when
+ * something has already failed: it compiles a few sub-expressions, which the verdict itself never needs.
+ */
+export function explainPaint(map: MlMap, f: RenderedFeature): StyleCause[] {
+  const { visibility, parts, props, ev } = evaluateVisibility(map, f);
+  if (visibility.visible || !ev) return [];
+  const seen = new Set<string>();
+  const out: StyleCause[] = [];
+  for (const part of parts) {
+    for (const p of props.get(part) ?? []) {
+      if (seen.has(`${p.group}|${p.name}`)) continue;
+      seen.add(`${p.group}|${p.name}`);
+      out.push(explainValue(map, f, ev, p.group, p.name));
     }
-    case 'fill-extrusion':
-      return verdict(first(zero('paint', 'fill-extrusion-opacity'), isSet('paint', 'fill-extrusion-pattern') ? undefined : transparent('fill-extrusion-color')));
-    case 'symbol': {
-      const text = isSet('layout', 'text-field')
-        ? first(zero('paint', 'text-opacity'), zero('layout', 'text-size'), transparent('text-color') && (zero('paint', 'text-halo-width') || transparent('text-halo-color')) && 'text-color and halo are fully transparent')
-        : 'no text';
-      const icon = isSet('layout', 'icon-image') ? first(zero('paint', 'icon-opacity'), zero('layout', 'icon-size')) : 'no icon';
-      return verdict(text, icon);
+  }
+  return out;
+}
+
+/* ---------------- which expression branch produced a value ----------------
+ *
+ * Attribution walks the style JSON of the property (what map.getPaintProperty returns) and asks MapLibre's own
+ * evaluator for every value it needs: the INPUT of a match / step / interpolate, each CONDITION of a case, each
+ * argument of a coalesce. Choosing the branch from those values is the one documented rule of each operator (the
+ * first label equal to the input, else the fallback; the last stop <= the input; …) — and it is CHECKED: MapLibre
+ * also evaluates the chosen branch's output, which must equal the value of the whole property. If it does not (a
+ * semantic this code does not know), attribution stops there and only property + value are reported. So it never
+ * names a branch the evaluator did not take. (Writing our own expression evaluator is "Not planned": ROADMAP.md.)
+ *
+ * Traced: match, case, step, interpolate / interpolate-hcl / interpolate-lab, coalesce, nested in one another, and
+ * legacy `{ stops }` functions (turned into expressions by the style-spec's own convertFunction). NOT traced —
+ * property + value only: let / var, arithmetic and every other operator, and an interpolation strictly BETWEEN two
+ * stops (both stops are named; no single branch produced the value).
+ */
+
+const compiled = new Map<string, StyleExpression | null>();
+
+/** A PART of a style expression, evaluated by MapLibre's evaluator. `ok: false` when it cannot stand alone (a `var`) or throws. */
+function evalPart(json: unknown, propSpec: any, c: Ctx): { ok: true; value: any } | { ok: false } {
+  const key = `${JSON.stringify(propSpec ?? null)}|${JSON.stringify(json)}|${JSON.stringify(c.globalState)}`;
+  let e = compiled.get(key);
+  if (e === undefined) {
+    try {
+      const r = styleExpression.createExpression(json, 'geowright', propSpec ?? null, c.globalState);
+      e = r.result === 'success' ? r.value : null;
+    } catch {
+      e = null;
+    }
+    compiled.set(key, e);
+  }
+  if (!e) return { ok: false };
+  try {
+    return { ok: true, value: e.evaluateWithoutErrorHandling(c.globals as any, c.feature, c.state) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** A style value as plain, JSON-safe data: colours as "rgba(…)", images by name. */
+function plain(v: any): unknown {
+  if (v === null || v === undefined) return null;
+  if (typeof v !== 'object') return v;
+  if (Array.isArray(v)) return v.map(plain);
+  if (typeof v.name === 'string' && 'available' in v) return v.name; // ResolvedImage
+  return typeof v.toString === 'function' && v.toString !== Object.prototype.toString ? String(v) : JSON.stringify(v);
+}
+const same = (a: any, b: any): boolean =>
+  typeof a === 'number' && typeof b === 'number' ? Math.abs(a - b) < 1e-9 : JSON.stringify(plain(a)) === JSON.stringify(plain(b));
+
+type Ctx = { propSpec: any; globalState: Record<string, unknown>; globals: { zoom: number }; feature: any; state: any };
+
+/** The branches that produced `value` from `json`, outermost first. Stops (keeping what it has) at anything it cannot verify. */
+function attribute(json: unknown, value: any, c: Ctx, depth = 0): StyleBranch[] {
+  if (!Array.isArray(json) || depth > 10) return [];
+  const sub = (j: unknown, spec: any = null) => evalPart(j, spec, c);
+  /** A branch counts only if MapLibre's value for its output IS the value of the whole; then look inside it. */
+  const via = (branch: StyleBranch, output: unknown): StyleBranch[] => {
+    const out = sub(output, c.propSpec);
+    return out.ok && same(out.value, value) ? [branch, ...attribute(output, value, c, depth + 1)] : [];
+  };
+  const op = json[0];
+  switch (op) {
+    case 'match': {
+      if (json.length < 5) return [];
+      const input = sub(json[1]);
+      if (!input.ok) return [];
+      const base = { op, input: json[1], inputValue: plain(input.value) };
+      for (let i = 2; i < json.length - 1; i += 2) {
+        const labels = Array.isArray(json[i]) ? (json[i] as unknown[]) : [json[i]];
+        if (labels.some((l) => l === input.value)) return via({ ...base, taken: 'label', at: input.value }, json[i + 1]);
+      }
+      return via({ ...base, taken: 'fallback' }, json[json.length - 1]);
+    }
+    case 'case': {
+      for (let i = 1; i < json.length - 1; i += 2) {
+        const test = sub(json[i], { type: 'boolean' });
+        if (!test.ok) return [];
+        if (test.value === true) return via({ op, taken: 'condition', at: (i + 1) / 2, condition: json[i] }, json[i + 1]);
+      }
+      return via({ op, taken: 'fallback' }, json[json.length - 1]);
+    }
+    case 'step': {
+      const input = sub(json[1]);
+      if (!input.ok || typeof input.value !== 'number') return [];
+      const base = { op, input: json[1], inputValue: input.value };
+      let chosen = 2; // the base output, for an input below the first stop
+      for (let i = 3; i < json.length - 1; i += 2) if ((json[i] as number) <= input.value) chosen = i + 1;
+      return chosen === 2 ? via({ ...base, taken: 'base', at: json[3] }, json[2]) : via({ ...base, taken: 'stop', at: json[chosen - 1] }, json[chosen]);
+    }
+    case 'interpolate':
+    case 'interpolate-hcl':
+    case 'interpolate-lab': {
+      const input = sub(json[2]);
+      if (!input.ok || typeof input.value !== 'number') return [];
+      const x = input.value;
+      const base = { op, input: json[2], inputValue: x };
+      const stops: number[] = [];
+      for (let i = 3; i < json.length - 1; i += 2) stops.push(json[i] as number);
+      if (!stops.length) return [];
+      const output = (k: number) => json[4 + 2 * k];
+      if (x <= stops[0]) return via({ ...base, taken: 'stop', at: stops[0] }, output(0));
+      const last = stops.length - 1;
+      if (x >= stops[last]) return via({ ...base, taken: 'stop', at: stops[last] }, output(last));
+      const exact = stops.indexOf(x);
+      if (exact >= 0) return via({ ...base, taken: 'stop', at: x }, output(exact));
+      const k = stops.findIndex((s, i) => s <= x && x < stops[i + 1]);
+      return k >= 0 ? [{ ...base, taken: 'between', at: [stops[k], stops[k + 1]] }] : [];
+    }
+    case 'coalesce': {
+      for (let i = 1; i < json.length; i++) {
+        const arg = sub(json[i]);
+        if (!arg.ok) return [];
+        if (arg.value !== null) return via({ op, taken: 'argument', at: i }, json[i]);
+      }
+      return [];
     }
     default:
-      return { visible: true };
+      return [];
   }
+}
+
+/** One property of one feature's layer: its value, and how the style arrived at it. */
+function explainValue(map: MlMap, f: RenderedFeature, ev: ReturnType<typeof evaluatorFor>, group: 'paint' | 'layout', name: string): StyleCause {
+  const zoom = map.getZoom();
+  const value = ev.value(group, name);
+  const raw: unknown = group === 'paint' ? map.getPaintProperty(f.layer, name as any) : map.getLayoutProperty(f.layer, name as any);
+  const cause: StyleCause = { layer: f.layer, group, property: name, value: plain(value), zoom, origin: 'default', branches: [] };
+  if (raw === undefined || raw === null) return cause;
+  const isFn = !Array.isArray(raw) && typeof raw === 'object' && styleFunction.isFunction(raw);
+  if (!isFn && !(Array.isArray(raw) && styleExpression.isExpression(raw))) return { ...cause, origin: 'constant' };
+  const propSpec = spec[`${group}_${ev.type}`]?.[name];
+  let json = raw;
+  if (isFn) {
+    try {
+      json = styleFunction.convertFunction(raw, propSpec);
+    } catch {
+      return { ...cause, origin: 'function' };
+    }
+  }
+  const ctx: Ctx = { propSpec, globalState: ev.globalState, globals: { zoom }, feature: ev.feature, state: f.state ?? {} };
+  return { ...cause, origin: isFn ? 'function' : 'expression', branches: value === undefined ? [] : attribute(json, value, ctx) };
+}
+
+/**
+ * Why the style draws NOTHING of a layer at the current camera: the zoom is outside minzoom–maxzoom (MapLibre hides
+ * a layer when zoom < minzoom or zoom >= maxzoom), or layout `visibility` is "none" — a constant, or (MapLibre
+ * >= 5.16) an expression on global state, evaluated by the style-spec's own visibility evaluator. Empty: drawn.
+ */
+export function explainLayerHidden(map: MlMap, layerId: string): StyleCause[] {
+  const layer = map.getLayer(layerId);
+  if (!layer) return [];
+  const zoom = map.getZoom();
+  const out: StyleCause[] = [];
+  const base = { layer: layerId, zoom, origin: 'constant' as const, branches: [] };
+  if (layer.minzoom && zoom < layer.minzoom) out.push({ ...base, group: 'layer', property: 'minzoom', value: layer.minzoom });
+  if (layer.maxzoom && zoom >= layer.maxzoom) out.push({ ...base, group: 'layer', property: 'maxzoom', value: layer.maxzoom });
+  const raw = map.getLayoutProperty(layerId, 'visibility') as unknown;
+  if (raw === 'none') out.push({ ...base, group: 'layout', property: 'visibility', value: 'none' });
+  else if (Array.isArray(raw)) {
+    let globalState: Record<string, unknown> = {};
+    try {
+      globalState = map.getGlobalState?.() ?? {};
+    } catch {
+      /* older MapLibre: no global state */
+    }
+    let value: unknown;
+    try {
+      value = createVisibilityExpression(raw as any, `layers[${layerId}].layout.visibility`, globalState).evaluate();
+    } catch {
+      value = undefined; // an expression the bundled evaluator cannot parse: unknown, so not a cause
+    }
+    if (value === 'none') {
+      const ctx: Ctx = { propSpec: spec[`layout_${layer.type}`]?.visibility, globalState, globals: { zoom }, feature: { type: 1, properties: {} }, state: {} };
+      out.push({ ...base, group: 'layout', property: 'visibility', value, origin: 'expression', branches: attribute(raw, value, ctx) });
+    }
+  }
+  return out;
 }
 
 const COLOUR_PROPERTY: Record<string, string> = { circle: 'circle-color', fill: 'fill-color', line: 'line-color', 'fill-extrusion': 'fill-extrusion-color' };

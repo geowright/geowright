@@ -94,7 +94,9 @@ Handles are lazy: nothing is resolved until an action or assertion runs.
 MapLibre's `queryRenderedFeatures` also returns features painted with opacity 0, a transparent colour or zero size — so a
 naive "the feature exists" check passes on something no user can see. Here queries match **only what a user can see**: the
 layer's paint properties are evaluated for that feature (data-driven expressions, zoom, feature-state), and a failure says
-which property hid it (`[NOT VISIBLE: circle-opacity evaluates to 0]`). `visible: 'any'` opts out; `visible: false` matches
+which property hid it (`[NOT VISIBLE: circle-opacity evaluates to 0]`) and why: its value, the expression branch that
+produced it, and the zoom (`-> parks#7 is not visible at zoom 11.2: fill-opacity is 0 because the match on ["get","kind"]
+took its fallback for kind="park"`). `visible: 'any'` opts out; `visible: false` matches
 only the invisible ones. `expect(map.feature(q)).toBeVisibleOnMap()` adds a pixel probe (catches a transparent icon image).
 Actions refuse an invisible feature unless `{ force: true }`. How it works: [DESIGN — Visibility](docs/DESIGN.md#visibility-rendered-is-not-visible).
 
@@ -136,7 +138,7 @@ What is on the map:
 
 A failure also attaches `map screenshot — <call>`: the map with every candidate pixel drawn on it (green clickable, red under another feature, orange under DOM, grey not on the feature, blue the asked location). Every successful action attaches `pixel — <call>`: which pixel it used and what it skipped first. `{ failureScreenshots: false }` turns the screenshot off.
 
-It also distinguishes: layer does not exist · layer hidden · feature exists in the source but is off-screen · occluded (names the occluder) · ambiguous (lists the matches). The same text is attached to the HTML report / trace as `map state — …`.
+It also distinguishes: layer does not exist · layer hidden (`visibility` "none", or the zoom outside its `minzoom`–`maxzoom`) · feature exists in the source but is off-screen · occluded (names the occluder) · ambiguous (lists the matches). The same text is attached to the HTML report / trace as `map state — …`.
 
 ### Touch and keyboard
 
