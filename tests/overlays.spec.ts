@@ -89,4 +89,57 @@ test.describe('DOM markers and popups', () => {
     expect(err?.message).toMatch(/dom-covered: every candidate point is covered by DOM element .*<div\.maplibregl-marker.* data-testid="marker-pin-106">/);
     await expect(page.getByTestId('popup')).toHaveCount(0);
   });
+
+  // B9: a web component (Lit, Stencil) hosts the map inside its shadow root. A document-wide query does not see
+  // into it: no marker or popup was ever found, and `.not.toHavePopup()` always passed.
+  test('markers and popups inside a shadow root are found', async ({ map, page }) => {
+    await page.getByTestId('toggle-markers').check();
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const container = m.getContainer() as HTMLElement;
+      const r = container.getBoundingClientRect();
+      const host = document.createElement('div');
+      host.style.cssText = `position:absolute; left:${r.left}px; top:${r.top}px; width:${r.width}px; height:${r.height}px;`;
+      container.replaceWith(host);
+      const root = host.attachShadow({ mode: 'open' });
+      for (const s of document.querySelectorAll('link[rel="stylesheet"], style')) root.appendChild(s.cloneNode(true));
+      container.style.cssText = 'position:absolute; inset:0;';
+      root.appendChild(container);
+      m.resize();
+    });
+    await map.waitForIdle();
+    const hq = await map.marker({ at: { lng: 34.84, lat: 32.12 } });
+    await expect(hq).toHaveText('HQ');
+    await hq.click();
+    await expect(map).toHavePopup({ at: { lng: 34.84, lat: 32.12 }, text: 'Depot HQ', tolerancePx: 20 });
+  });
+
+  // C15: the match and the pin were two round trips. A marker inserted in between (markers still loading, another
+  // script) shifted the document index, and the Locator was pinned to a different marker. Simulated: every look at the
+  // markers schedules another script's marker insertion at the front, for the next task.
+  test('the Locator is pinned to the marker that matched, even when markers are inserted during the lookup', async ({ map, page }) => {
+    await page.getByTestId('toggle-markers').check();
+    await page.evaluate(() => {
+      const insertLater = () =>
+        setTimeout(() => {
+          const holder = document.querySelector('.hq-marker')?.parentElement;
+          const intruder = document.createElement('div');
+          intruder.className = 'maplibregl-marker';
+          intruder.dataset.testid = 'intruder';
+          holder?.insertBefore(intruder, holder.firstChild);
+        }, 0);
+      for (const proto of [Document.prototype, Element.prototype, DocumentFragment.prototype] as any[]) {
+        const qsa = proto.querySelectorAll;
+        proto.querySelectorAll = function (this: ParentNode, sel: string) {
+          if (sel === '.maplibregl-marker') insertLater();
+          return qsa.call(this, sel);
+        };
+      }
+    });
+    for (let i = 0; i < 5; i++) {
+      const hq = await map.marker({ at: { lng: 34.84, lat: 32.12 } });
+      await expect(hq).toHaveAttribute('data-testid', 'marker-hq');
+    }
+  });
 });
+

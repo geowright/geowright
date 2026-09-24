@@ -21,8 +21,8 @@ as written (it adds types only).
   and `all()`, never an empty map.
 - **Query** by `layer`, `layerType`, `source` (for layer ids a wrapper generates), `id`, `where` (equality, RegExp,
   `eq ne gt gte lt lte in matches exists`), `at` a location. By default, queries match only what a user can SEE. The
-  style's paint properties are evaluated for each feature: opacity 0, a transparent colour and zero size do not count
-  as visible. A layer's `visibility` (including a `visibility` expression, MapLibre 5.16+), `minzoom` and `maxzoom`
+  style's paint properties are evaluated for each feature, as the renderer draws them (a zoom-and-data expression at
+  the tile zoom): opacity 0, a transparent colour and zero size do not count as visible. A layer's `visibility` (including a `visibility` expression, MapLibre 5.16+), `minzoom` and `maxzoom`
   are respected. `visible: 'any'` opts out. Features need no ids: identity is id + properties, and look-alikes are
   told apart by where they are drawn.
 - **Act** with real input only (`page.mouse` / keyboard / touchscreen, CDP for multi-touch, never `map.fire()`):
@@ -49,9 +49,12 @@ as written (it adds types only).
 - `waitForIdle()`, and when the map never becomes idle, why: an animated source, a source re-set in a loop, continuous
   repainting, tiles still loading, a moving camera, or a dead MapLibre web worker. Timeouts follow the test's own
   timeout.
-- DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element.
+- DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element. They are found
+  inside the map's container, also when a web component hosts the map in its shadow root.
 - **Vector tiles without a tile server**: `routeVectorTiles()` / `vectorTileHandler()` (`geowright/tiles`) cut real MVT
-  tiles from GeoJSON inside `page.route`.
+  tiles from GeoJSON inside `page.route`, at any zoom: above `maxZoom` (default 14) a tile is cut at that detail, so a
+  source without `maxzoom` keeps its features (setting `maxzoom` on the source is still cheaper). Tile URLs may end in
+  `@2x` and any extension (`.pbf`, `.mvt`, `.vector.pbf`).
 - **Browser agents** (Playwright MCP): a text snapshot of the map with clickable pixels and evaluated colours, and an
   accessibility mirror that makes features clickable buttons (`dist/inpage.js`, `dist/inpage-agent.js`, `--init-script`).
   On a basemap with 100 layers, the snapshot shrinks the basemap first so that the app's own features stay listed.

@@ -290,6 +290,7 @@ await expect(map).toHaveFeature({ layer: 'buildings' });
 ```
 
 Real MVT tiles are cut from a GeoJSON fixture inside `page.route`; the app keeps its production `{z}/{x}/{y}.pbf` URL and code path.
+Detail is kept up to `maxZoom` (default 14, an option); a source without `maxzoom` makes MapLibre ask for tiles up to z22, and those are cut from the same data at that detail. Set `maxzoom` on the source where you can: MapLibre then overzooms the tiles itself instead of requesting one set per zoom level.
 `vectorTileHandler(layers)` is the same thing as a plain route handler (for `context.route` or a routing table). `tests/wild/basemap.ts` builds a whole offline basemap this way (style + synthetic city + sprite + glyphs).
 For tiled sources the browser cannot know what is off-screen, and the failure messages say so.
 

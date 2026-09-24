@@ -88,6 +88,69 @@ for (const lib of LIBS) {
       else expect(await map.snapshot()).toContain(note);
     });
 
+    // B6: the probe compares the pixels with and without the layer. Pixels that change by themselves (an animation
+    // under the feature; on Mapbox GL v1 the reads are two REAL frames apart) are no evidence: a control read decides.
+    test('pixel probe: pixels that change by themselves are no evidence (control read)', async ({ map, page }) => {
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.addSource('b6', { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 60, properties: {}, geometry: { type: 'Point', coordinates: [34.77, 32.03] } }] } });
+        // no paint transition: the pixels change only when the app changes them (MapLibre 2–4 advance a transition only
+        // on a style change, which the probe's own hide is — a residual, docs/DESIGN.md)
+        m.addLayer({ id: 'b6-under', type: 'circle', source: 'b6', paint: { 'circle-radius': 24, 'circle-color': '#000', 'circle-color-transition': { duration: 0 } } });
+        // paints (alpha > 0) but changes no pixel a user could see
+        m.addLayer({ id: 'b6', type: 'circle', source: 'b6', paint: { 'circle-radius': 12, 'circle-color': 'rgba(255, 0, 0, 0.0001)' } });
+        let i = 0;
+        const tick = () => {
+          m.setPaintProperty('b6-under', 'circle-color', i++ % 2 ? '#000' : '#fff');
+          requestAnimationFrame(tick);
+        };
+        tick();
+      });
+      const e = await expect(map.feature({ layer: 'b6', id: 60 })).toBeVisibleOnMap({ timeout: 3000 }).then(() => null, (e: Error) => e);
+      expect(e, 'toBeVisibleOnMap passed for a feature that changes no pixel, because the pixels under it change by themselves').not.toBeNull();
+    });
+
+    // B16: style evaluation on every version — zoom- and feature-state-driven paint, a legacy { stops } function, promoteId.
+    test('style evaluation: zoom and feature-state paint, legacy stops, promoteId', async ({ map, page }) => {
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        const pt = (code: number, lng: number, lat: number) => ({ type: 'Feature', properties: { code }, geometry: { type: 'Point', coordinates: [lng, lat] } });
+        m.addSource('b16', { type: 'geojson', promoteId: 'code', data: { type: 'FeatureCollection', features: [pt(71, 34.81, 32.07), pt(72, 34.79, 32.07)] } });
+        m.addLayer({ id: 'b16-state', type: 'circle', source: 'b16', paint: { 'circle-radius': 8, 'circle-opacity': ['case', ['boolean', ['feature-state', 'gone'], false], 0, 1] } });
+        m.addLayer({ id: 'b16-zoom', type: 'circle', source: 'b16', paint: { 'circle-radius': 5, 'circle-opacity': ['step', ['zoom'], 0, 12, 1] } });
+        m.addLayer({ id: 'b16-stops', type: 'circle', source: 'b16', paint: { 'circle-radius': { stops: [[10, 0], [11.5, 0], [12, 4]] } } });
+      });
+      await expect(map).toHaveFeature({ layer: 'b16-state', id: 71 }); // promoteId: the id is the "code" property
+      await page.evaluate(() => (window as any).__geowright_maps.main.setFeatureState({ source: 'b16', id: 71 }, { gone: true }));
+      await expect(map).not.toHaveFeature({ layer: 'b16-state', id: 71 });
+      await expect(map).toHaveFeature({ layer: 'b16-state', id: 71 }, { visible: 'any' });
+      await expect(map).toHaveFeature({ layer: 'b16-state', id: 72 });
+      await expect(map).not.toHaveFeature({ layer: 'b16-zoom' });
+      await expect(map).not.toHaveFeature({ layer: 'b16-stops' });
+      await page.evaluate(() => (window as any).__geowright_maps.main.jumpTo({ zoom: 12.5 }));
+      await expect(map.features({ layer: 'b16-zoom' })).toHaveFeatureCount(2);
+      await expect(map.features({ layer: 'b16-stops' })).toHaveFeatureCount(2);
+    });
+
+    test('idle diagnosis: an app that re-sets a source in a loop is told so when it is not idle', async ({ map, page }) => {
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        const data = (t: number) => ({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [34.8 + 0.01 * Math.sin(t / 300), 32.05] } }] });
+        m.addSource('loop', { type: 'geojson', data: data(0) });
+        m.addLayer({ id: 'loop', type: 'circle', source: 'loop', paint: { 'circle-radius': 6 } });
+        const tick = (t: number) => {
+          m.getSource('loop').setData(data(t));
+          requestAnimationFrame(tick);
+        };
+        requestAnimationFrame(tick);
+      });
+      // Measured on this matrix: every version can fire 'idle' between two setData calls of such a loop now and then
+      // (Mapbox GL 1.13 and MapLibre 2–5 were each seen idle within 2.5 s in some runs; 6 was not). So: if the map was not idle, the reason
+      // given must be the loop — never "loading" or "slow".
+      const e = await map.waitForIdle({ timeout: 2500 }).then(() => null, (e: Error) => e);
+      if (e) expect(e.message).toMatch(/the app keeps replacing the data of source\(s\) loop \(\d+ times in \d+ms\)/);
+    });
+
     test('snapshot: layers, entities, colours, clickable pixels', async ({ map }) => {
       const text = await map.snapshot();
       expect(text).toContain('[places] 5 circle entities');

@@ -4,7 +4,7 @@
  * published typings (tsconfig.build.json) and this file is not: nothing under `src/playwright` and nothing in
  * `types.ts` may import it (tests/unit/published-types.unit.spec.ts checks that).
  */
-import type { CanvasAdapter, RenderedFeature } from './types';
+import type { CanvasAdapter, Overlay, Pt, RenderedFeature } from './types';
 
 /**
  * One step of how a style expression arrived at its value: which branch it took. Plain, JSON-safe data — the
@@ -54,6 +54,14 @@ export interface StyleCause {
   branches: StyleBranch[];
 }
 
+/**
+ * What a pixel probe found: how much the pixels changed without the layer (`diff`, 0 = it contributes nothing there),
+ * or why there is no verdict YET (`inconclusive`: the pixels changed by themselves between two reads, no frame came
+ * within the time budget — ask again later), or why there never will be one here (`unavailable`: no WebGL context,
+ * no such layer).
+ */
+export type ProbeResult = { diff: number } | { inconclusive: string } | { unavailable: string };
+
 /** `CanvasAdapter` plus the internal optional methods. Every `CanvasAdapter` is one (the additions are optional). */
 export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
   /**
@@ -73,4 +81,11 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    * Must never answer true for a surface that is merely slow.
    */
   neverIdle?(): boolean;
+  /**
+   * Optional, the pixel probe with its full answer (see `ProbeResult`) and a time budget for renderers that must wait
+   * for real frames. When present it is used instead of `pixelContribution`.
+   */
+  probePixels?(layer: string, at: Pt, radiusPx: number, budgetMs: number): ProbeResult | Promise<ProbeResult>;
+  /** Optional, with `overlays`: the element an overlay stands for, looked up the way `overlays()` found it. */
+  overlayElement?(o: Overlay): Element | undefined;
 }

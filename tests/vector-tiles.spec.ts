@@ -1,4 +1,6 @@
 import { test, expect } from './fixtures';
+import { BUILDINGS } from './buildings';
+import { vectorTileHandler } from '../src/playwright/tiles';
 
 /**
  * Vector-tile sources: the browser only ever holds the tiles in view, so the library cannot know
@@ -50,5 +52,49 @@ test.describe('vector tile layer', () => {
     expect(snap).toMatch(/\[buildings\] 25 fill entities/);
     expect(snap).toMatch(/… 22 more not listed \(nearest to the view centre are listed\)\. Summary of all \d+ — .*kind: house×\d+, office×\d+/);
     expect(snap).toContain('note: tiled source(s) buildings (1 layer): features outside the viewport are unknowable from here.');
+  });
+
+  // a source without maxzoom asks for tiles up to z22. The fixture index keeps detail to z14 (like a real tile
+  // server's max zoom); above it the helper used to answer an empty tile, and every feature vanished from zoom 15.
+  test('a source WITHOUT maxzoom still has its features at zoom 16', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('buildings-nomax', { type: 'vector', tiles: [location.origin + '/vt/buildings/{z}/{x}/{y}.pbf'] });
+      m.addLayer({ id: 'buildings-nomax', type: 'fill', source: 'buildings-nomax', 'source-layer': 'buildings', paint: { 'fill-color': '#e91e63' } });
+      m.jumpTo({ center: [34.716, 32.1035], zoom: 16 });
+    });
+    await expect(map).toHaveFeature({ layer: 'buildings-nomax', id: 1013 });
+  });
+});
+
+/** The route handler itself, without a browser: what it answers for a tile URL. */
+test.describe('vectorTileHandler', () => {
+  const tileOf = (lng: number, lat: number, z: number) => {
+    const n = 2 ** z;
+    const r = (lat * Math.PI) / 180;
+    return { x: Math.floor(((lng + 180) / 360) * n), y: Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n) };
+  };
+  const serve = async (url: string) => {
+    let res: { status?: number; body?: Buffer | string } = {};
+    await vectorTileHandler({ buildings: BUILDINGS })({ request: () => ({ url: () => url }), fulfill: async (r: typeof res) => void (res = r) } as any);
+    return { status: res.status, bytes: typeof res.body === 'string' ? res.body.length : res.body?.length ?? 0 };
+  };
+
+  test('above the index max zoom (14) a tile is cut from its ancestor, not served empty', async () => {
+    for (const z of [14, 15, 16, 20, 22]) {
+      const { x, y } = tileOf(34.716, 32.1035, z); // building 1013
+      const r = await serve(`http://localhost/vt/buildings/${z}/${x}/${y}.pbf`);
+      expect({ z, ...r, empty: r.bytes === 0 }).toEqual({ z, status: 200, bytes: r.bytes, empty: false });
+    }
+    const { x, y } = tileOf(0, 0, 16); // nothing there: still a valid, empty tile
+    expect(await serve(`http://localhost/vt/buildings/16/${x}/${y}.pbf`)).toEqual({ status: 200, bytes: 0 });
+  });
+
+  test('retina and double-extension tile URLs are understood (C26)', async () => {
+    const { x, y } = tileOf(34.716, 32.1035, 12);
+    for (const tail of ['.pbf', '@2x.pbf', '.vector.pbf', '.mvt?key=abc', '']) {
+      const r = await serve(`http://localhost/vt/buildings/12/${x}/${y}${tail}`);
+      expect({ tail, status: r.status, empty: r.bytes === 0 }).toEqual({ tail, status: 200, empty: false });
+    }
   });
 });

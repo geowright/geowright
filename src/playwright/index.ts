@@ -504,11 +504,14 @@ export class MapHandle {
 
   private async _overlay(kind: Overlay['kind'], where: OverlayWhere, opts: { timeout?: number }): Promise<Locator> {
     const what = `map.${kind}(${JSON.stringify(where)})`;
+    // Matched and pinned in ONE in-page call ( C15): in two round trips, an overlay inserted in between could re-point
+    // the pin at a different element.
     const found = await step(what, () =>
-      this._retry<Overlay>(what, opts.timeout ?? this.timeout, async () => {
+      this._retry<{ overlay: Overlay; token?: string; docIndex?: number }>(what, opts.timeout ?? this.timeout, async () => {
         if (await this._call<boolean>('isMoving')) return { retry: 'map is moving' };
-        const list = await this._overlays(kind, where);
-        if (list.length === 1) return { value: list[0] };
+        const r = await this._call<{ list: (Overlay & { distance?: number })[]; token?: string; docIndex?: number }>('pinOverlay', kind, { ...where, feature: where.feature && toWire(where.feature) });
+        const list = r.list;
+        if (list.length === 1) return { value: { overlay: list[0], token: r.token, docIndex: r.docIndex } };
         if (list.length === 0) {
           const all = await this._overlays(kind, {});
           return { retry: `no ${kind} there; ${all.length} ${kind}(s) on the map${all.length ? ': ' + all.slice(0, 5).map((o) => `"${o.text.slice(0, 40)}" @(${Math.round(o.rect.x)},${Math.round(o.rect.y)})`).join(', ') : ''}` };
@@ -516,18 +519,9 @@ export class MapHandle {
         return { retry: `strict mode violation: ${list.length} ${kind}s match` };
       }),
     );
-    if (!(await pinEngine)) return this.page.locator(found.selector).nth(found.index); // engine unavailable: order-bound fallback
-    const token = await this.page.evaluate(
-      ([selector, index]) => {
-        const w = window as any;
-        const pins: Map<string, Element> = (w.__geowright_pins ??= new Map());
-        const token = `${pins.size + 1}-${Math.random().toString(36).slice(2, 8)}`;
-        pins.set(token, document.querySelectorAll(selector as string)[index as number]);
-        return token;
-      },
-      [found.selector, found.index] as const,
-    );
-    return this.page.locator(`${PIN_ENGINE}=${token}`);
+    // engine unavailable: order-bound fallback (by document order; an element in a shadow root has none)
+    if (!(await pinEngine) || !found.token) return this.page.locator(found.overlay.selector).nth(Math.max(0, found.docIndex ?? 0));
+    return this.page.locator(`${PIN_ENGINE}=${found.token}`);
   }
 
   /** lng/lat under a client (viewport) pixel. */
@@ -1146,9 +1140,9 @@ export const expect = baseExpect.extend({
    *  2. pixels (default on; `{ pixels: false }` to skip): the canvas pixels at the feature's action
    *     point change when its layer is not drawn. Catches transparent icons and same-colour-as-
    *     background; needs an unoccluded point, so an occluded feature is not visible either.
-   * The pixel probe re-renders the map three times and briefly toggles the layer's visibility
-   * within one task (nothing is composited, but 'styledata' fires) — it runs once, after the cheap
-   * paint check has passed, not on every poll.
+   * The pixel probe re-renders the map four times (with the layer, again as a control, without, restored) and
+   * briefly toggles the layer's visibility within one task (nothing is composited, but 'styledata' fires) — it runs
+   * after the cheap paint check has passed, and its result is reused while the feature does not change.
    */
   /**
    * For layers that have no features to ask about — raster, image, canvas, video, heatmap, hillshade:
@@ -1166,7 +1160,7 @@ export const expect = baseExpect.extend({
         // Absence needs a settled map: a raster whose tiles are still loading contributes nothing YET. A positive
         // assertion waits for pixels to appear and needs no settling — nor the cost of it on an animated source.
         const s: { settled: boolean; why?: string } = this.isNot ? await settle.wait(received, i, deadline, true) : { settled: true };
-        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number }; hidden?: boolean } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24);
+        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number }; hidden?: boolean } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24, Math.max(100, deadline - Date.now()));
         if (!r.ok) return { verdict: undefined, why: (why = r.message) };
         why = r.hidden ? `layer "${layer}" is hidden (its visibility is "none")` : r.diff > 0 ? `pixels differ by ${r.diff} with and without the layer` : `hiding the layer changes nothing within ${options.radiusPx ?? 24}px of (${Math.round(r.surface.x)},${Math.round(r.surface.y)})`;
         if (r.diff > 0) return { verdict: true };
@@ -1192,6 +1186,11 @@ export const expect = baseExpect.extend({
     const query: FeatureQuery = { ...received.query, visible: 'any' }; // look at it even if invisible: that is the question
     let why = 'never checked';
     const settle = new Settle();
+    // B10: a probe hides and re-shows the layer, and MapLibre then reloads its source — once per verdict, not per
+    // poll. A conclusive result is reused while the feature looks the same (position, properties, state, paint verdict);
+    // a changed feature is probed again at once, an unchanged one again only after 1, 2, 4… s (pixels can change with
+    // nothing else changing: an icon image replaced).
+    let last: { key: string; at: number; every: number; probe: { ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } } | undefined;
     const { pass, inconclusive } = await pollVerdict(
       timeout,
       this.isNot,
@@ -1207,11 +1206,18 @@ export const expect = baseExpect.extend({
         if (found.length === 0) return invisible('no rendered feature matches');
         if (!found[0].visible) return invisible(`paint: ${found[0].invisibleBecause}`);
         if (options?.pixels !== false) {
-          const probe = await map._call<{ ok: true; diff?: number; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query));
+          const key = JSON.stringify(found[0]);
+          const reuse = last && last.key === key && Date.now() - last.at < last.every;
+          const probe = reuse
+            ? last!.probe
+            : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), Math.max(100, deadline - Date.now()));
           if (!probe.ok) return invisible(`pixels: no clean point to probe — ${probe.message}`);
+          if (!reuse) last = probe.inconclusive === undefined ? { key, at: Date.now(), every: last?.key === key ? Math.min(last.every * 2, 8000) : 1000, probe } : undefined;
+          // No verdict YET — the pixels changed by themselves, or no frame came in time ( B6, B7): never "passed on paint alone".
+          if (probe.inconclusive !== undefined) return { verdict: undefined, why: (why = `pixels: ${probe.inconclusive}`) };
           if (probe.diff === 0) return invisible(`pixels: hiding layer "${probe.layer}" changes nothing at (${probe.surface.x},${probe.surface.y}) — it paints nothing a user could see there`);
           if (probe.diff === undefined && options?.pixels === true) {
-            return { verdict: undefined, why: (why = 'pixels: this map cannot be probed (no WebGL context to read from, or no frame was rendered — a hidden tab?); { pixels: true } asked for ground truth') };
+            return { verdict: undefined, why: (why = 'pixels: this map cannot be probed (no WebGL context to read from); { pixels: true } asked for ground truth') };
           }
         }
         why = '';

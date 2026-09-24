@@ -149,6 +149,26 @@ test.describe('visibility', () => {
     expect(snap).toMatch(/#601 Polygon .*NOT-VISIBLE\(fill-opacity evaluates to 0\)/);
   });
 
+  // B10: every probe hides and re-shows the layer (MapLibre then re-prepares it). A `.not` waiting on a visible feature
+  // used to probe on every poll (about twice a second); the result is now reused while nothing observable changed.
+  test('a waiting .not.toBeVisibleOnMap does not re-probe on every poll', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const set = m.setLayoutProperty;
+      (window as any).__probes = 0;
+      // counted, not changed: the probe hides the layer with exactly this call
+      m.setLayoutProperty = function (layer: string, name: string, value: unknown, ...rest: unknown[]) {
+        if (layer === 'alerts' && name === 'visibility' && value === 'none') (window as any).__probes++;
+        return set.call(this, layer, name, value, ...rest);
+      };
+    });
+    const e = await expect(map.feature({ layer: 'alerts', id: 1 })).not.toBeVisibleOnMap({ timeout: 4000 }).then(() => null, (e: Error) => e);
+    expect(e, '.not.toBeVisibleOnMap passed for a visible alert').not.toBeNull();
+    const probes = await page.evaluate(() => (window as any).__probes);
+    expect(probes).toBeGreaterThan(0);
+    expect(probes).toBeLessThanOrEqual(3);
+  });
+
   // "could not decide" is not "not visible"
   test('.not.toBeVisibleOnMap on a query matching several VISIBLE features fails (strict mode)', async ({ map }) => {
     await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3);
@@ -163,3 +183,51 @@ test.describe('visibility', () => {
     expect(e?.message).toContain('layer "no-such-layer" does not exist');
   });
 });
+
+/**
+ * the evaluator must agree with what MapLibre DRAWS. Ground truth is the pixel probe (toHaveLayerPixels).
+ * A zoom-and-data ("composite") paint expression is evaluated by MapLibre at the TILE zoom and z+1 and blended by
+ * the camera zoom; `within` / `distance` need the tile geometry, which the evaluator does not have.
+ */
+test.describe('the paint evaluator agrees with the renderer', () => {
+  const agree = async (map: import('../src/playwright').MapHandle, layer: string, at: { lng: number; lat: number }) => {
+    await map.waitForIdle();
+    // counted BEFORE the probe: a probe hides and re-shows the layer, and MapLibre then reloads its source
+    const found = await map.features({ layer }).count();
+    const pixels = await expect(map).toHaveLayerPixels(layer, { at, radiusPx: 6, timeout: 1500 }).then(() => true, () => false);
+    expect({ canvasShowsIt: pixels, geowrightSaysVisible: found > 0 }).toEqual({ canvasShowsIt: pixels, geowrightSaysVisible: pixels });
+    return pixels;
+  };
+
+  test('B2: a zoom-and-data step expression is judged at the tile zoom, as MapLibre draws it', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('b2', { type: 'geojson', data: { type: 'Feature', properties: { o: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.09] } } });
+      m.addLayer({ id: 'b2', type: 'circle', source: 'b2', paint: { 'circle-radius': 12, 'circle-color': '#f00', 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] } });
+      m.jumpTo({ zoom: 11.7 });
+    });
+    expect(await agree(map, 'b2', { lng: 34.8, lat: 32.09 })).toBe(false); // tile zoom 11: the step's base output, 0
+  });
+
+  test('B2: a zoom-and-data interpolate is blended between tile zooms, not read at the camera zoom', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('b2i', { type: 'geojson', data: { type: 'Feature', properties: { o: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.09] } } });
+      m.addLayer({ id: 'b2i', type: 'circle', source: 'b2i', paint: { 'circle-radius': 12, 'circle-color': '#f00', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11.5, 0, 11.6, ['get', 'o']] } });
+      m.jumpTo({ zoom: 11.2 });
+    });
+    expect(await agree(map, 'b2i', { lng: 34.8, lat: 32.09 })).toBe(true); // 0 at z11, 1 at z12, blended at 0.2
+  });
+
+  test('B5: `within` in paint is evaluated like MapLibre (points inside the area are drawn)', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const area = { type: 'Polygon', coordinates: [[[34.7, 32.0], [34.9, 32.0], [34.9, 32.2], [34.7, 32.2], [34.7, 32.0]]] };
+      m.addSource('b5', { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [34.8, 32.1] } } });
+      m.addLayer({ id: 'b5', type: 'circle', source: 'b5', paint: { 'circle-radius': 12, 'circle-color': '#00f', 'circle-opacity': ['case', ['within', area], 1, 0] } });
+    });
+    expect(await agree(map, 'b5', { lng: 34.8, lat: 32.1 })).toBe(true);
+    expect(await map.snapshot()).toContain('visibility unknown for layer b5: circle-opacity');
+  });
+});
+

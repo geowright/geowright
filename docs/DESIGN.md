@@ -313,6 +313,17 @@ example, "`circle-opacity` evaluates to 0"). What it cannot see: a genuinely tra
 (nothing about the icon's *pixels* is visible to a paint-property read), or a color that happens to
 exactly match whatever is drawn underneath it.
 
+"Exactly as the renderer" needed two corrections, both found by comparing the verdict with the pixel probe. A
+**zoom-and-data** ("composite") paint expression is not evaluated at the camera zoom: MapLibre evaluates it per tile, at
+the tile's zoom z = floor(zoom + log2(512 / tileSize)) and at z+1, and the shader blends the two by the expression's own
+interpolation factor at the camera zoom (`CompositeExpressionBinder`). A `step` on zoom therefore switches at the next
+whole tile zoom, not at its stop: `["step", ["zoom"], 0, 11.5, ["get", "o"]]` draws nothing at zoom 11.7. The evaluator
+now does the same. Since MapLibre 5 tiles of one view can have different zooms (terrain, a pitch past about 60°, a globe
+past tile zoom 4); there a composite value that hides the feature at the centre's tile zoom but not at every other one
+is *uncertain*, reported as "visible" with a caveat, never as a confident "invisible". And `within` / `distance` need the
+feature's tile geometry, which the evaluator does not have (they evaluate to false / NaN without it): an expression that
+uses them counts as "cannot evaluate" — visible, with the same caveat as an expression newer than the evaluator.
+
 Because of that gap, an **opt-in pixel probe is the ground-truth check**, run once a passing paint
 evaluation has already said "visible." A WebGL canvas without `preserveDrawingBuffer` reads back all
 zeros shortly after a frame is drawn — except within the same JavaScript task as the draw itself. The
@@ -327,6 +338,19 @@ early, informal measurement taken while the machine was under heavy unrelated lo
 MapLibre's `styledata` event and causes the layer's source to reload afterward, so an application with
 its own `styledata` listeners will see that; and the differential it measures is per *layer* at a
 pixel, not per feature, so a second feature from the same layer under the same pixel confounds it.
+
+Three corrections to the probe. It reads the layer-on pixels **twice**: if they differ, something else is
+changing the pixels there (a fade, an animation under the feature, a camera that never stops), and hiding the layer
+counts only if it changes them clearly more (more than twice the control difference); otherwise there is no verdict
+yet. (A first version refused any control difference and turned "the trace is visible" on MapLibre's forever-panning
+realtime example into "no verdict"; a camera drifting a few pixels between reads is noise, a yellow line is signal.) (A control after the restore does not work: the layer is not drawn again until its source has reloaded.
+MapLibre 2–4 advance a paint transition only on a style change — the probe's own hide is one — so there a transition in
+progress under the feature can still pass for a contribution.) Without `redraw()` (Mapbox GL JS v1) the reads are real frames: their wait is budgeted from the matcher's
+remaining time, and a frame that does not come is "not yet", never a silent pass on paint alone. And
+`toBeVisibleOnMap` runs it once per verdict, as intended: a conclusive result is reused while the feature looks the same
+(re-probed after 1, 2, 4… s), instead of reloading the source on every poll of a waiting `.not`. The restore puts back
+what the app had only if the layer is still hidden by the probe; an app that hides the same layer in the frames between
+(Mapbox GL v1) cannot be told apart from the probe and is still undone.
 
 Query semantics default to what a person can actually see: `visible: true` (implicit default) matches
 only paint-evaluated-visible features; `'any'` opts back into MapLibre's own broader notion of
@@ -392,7 +416,10 @@ returned nothing at all, while point queries against the same view found real hi
 built entirely from public API: query a 4×4 grid of smaller boxes across the viewport instead of one
 large box, and keep only the pieces that have at least one vertex on the *near* side of the globe
 (using the round-trip check described next); extrusions specifically are found by a point sweep
-combined with their source footprints, since box queries cannot see them on a globe at all. Both the
+combined with their source footprints, since box queries cannot see them on a globe at all. "A globe" is every
+projection MapLibre renders through its globe transform: `globe`, `vertical-perspective`, and a projection
+*expression* of zoom (MapLibre 5+); only a type of exactly `globe` was recognised at first, so the other two got the
+wrong viewport query. The view state names an expression by what it is at the current zoom. Both the
 globe specs assert the underlying MapLibre behavior first, so they will fail loudly and visibly the
 day the library's own query fixes the underlying bug, rather than silently continuing to run a
 workaround that is no longer needed. A known, accepted gap remains: a small extrusion positioned
@@ -857,6 +884,9 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
 - Two id-less, property-identical shapes that visually touch on screen are still treated as a single feature.
 - The globe query workaround is a grid-based heuristic: an extrusion narrower than 16 px whose footprint centre is
   off-screen or on the far side can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
+- A zoom-and-data paint expression on a view whose tile zooms vary (terrain, high pitch, globe) is judged "visible"
+  where some tile zoom draws it: an uncertain verdict, said in the caveats, not a confident one. `within` / `distance`
+  in paint cannot be evaluated at all (visible, with a caveat).
 - The version matrix covers the core on six versions; globe, terrain, extrusions, touch, drawing tools and the
   third-party applications run on MapLibre 6 only.
 - Real-basemap realism exists only as an opt-in, local cache: no real basemap data can be committed under the
