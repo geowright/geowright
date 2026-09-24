@@ -68,8 +68,9 @@ as written (it adds types only).
   accessibility mirror that makes features clickable buttons (`dist/inpage.js`, `dist/inpage-agent.js`, `--init-script`).
   On a basemap with 100 layers, the snapshot shrinks the basemap first so that the app's own features stay listed.
 - `npx geowright init` writes a fixture, the software-WebGL flags and a first spec that prints the snapshot. It also
-  prints the hook for your wrapper (react-map-gl, svelte-maplibre-gl, vue-maplibre-gl). A whole `playwright.config` is
-  written only where there is none.
+  prints the hook for your wrapper (react-map-gl, `@vis.gl/react-maplibre`, svelte-maplibre-gl, vue-maplibre-gl). A whole
+  `playwright.config` is written only where there is none; where there is one, `init` prints the two lines to add to it.
+  `--dir` and `--url` take `--dir e2e` or `--dir=e2e`; a flag without its value is an error, not a guess.
 - Every example in the README and `docs/RECIPES.md` is type-checked and runs in the test suite.
 - Tested against 33 apps its authors did not write: 23 MapLibre examples, plus 10 apps built on react-map-gl,
   svelte-maplibre-gl, vue-maplibre-gl, deck.gl's `MapboxOverlay` and PMTiles (`wild/`). If geowright does not work on

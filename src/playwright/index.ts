@@ -537,7 +537,7 @@ export class MapHandle {
 
   private async _overlay(kind: Overlay['kind'], where: OverlayWhere, opts: { timeout?: number }): Promise<Locator> {
     const what = `map.${kind}(${JSON.stringify(where)})`;
-    // Matched and pinned in ONE in-page call ( C15): in two round trips, an overlay inserted in between could re-point
+    // Matched and pinned in ONE in-page call: in two round trips, an overlay inserted in between could re-point
     // the pin at a different element.
     const found = await step(what, () =>
       this._retry<{ overlay: Overlay; token?: string; docIndex?: number }>(what, opts.timeout ?? this.timeout, async () => {
@@ -851,7 +851,7 @@ export class FeatureHandle {
     act: (p: { x: number; y: number }, aim: Aim, token?: string) => Promise<{ retry: string } | void>,
     /** Moving targets: arm the click-time check BEFORE the pixel is computed — every round trip after it is lateness. */
     armFirst?: () => Promise<string>,
-    /** The deadline of the whole action, when it has more steps than this one (dragTo: its destination first, ). */
+    /** The deadline of the whole action, when it has more steps than this one (dragTo: its destination first). */
     sharedDeadline?: number,
   ): Promise<void> {
     const timeout = opts.timeout ?? this.map.timeout;
@@ -1068,7 +1068,7 @@ export class FeatureSetHandle {
 /**
  * One poll of a retrying matcher: the condition holds (true), does not (false) — or no verdict could be reached
  * (undefined, with why): the map could not be queried, a named layer does not exist, the query is ambiguous where one
- * feature is required, the map had not settled (, ). "Could not look" is never "absent".
+ * feature is required, the map had not settled. "Could not look" is never "absent".
  */
 interface Poll {
   verdict: boolean | undefined;
@@ -1268,7 +1268,7 @@ const matchers = {
     const query: FeatureQuery = { ...received.query, visible: 'any' }; // look at it even if invisible: that is the question
     let why = 'never checked';
     const settle = new Settle();
-    // B10: a probe hides and re-shows the layer, and MapLibre then reloads its source — once per verdict, not per
+    // a probe hides and re-shows the layer, and MapLibre then reloads its source — once per verdict, not per
     // poll. A conclusive result is reused while the feature looks the same (position, properties, state, paint verdict);
     // a changed feature is probed again at once, an unchanged one again only after 1, 2, 4… s (pixels can change with
     // nothing else changing: an icon image replaced).
@@ -1295,7 +1295,7 @@ const matchers = {
             : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), { ignoreLayers: map.ignoreLayers, budgetMs: Math.max(100, deadline - Date.now()) });
           if (!probe.ok) return invisible(`pixels: no clean point to probe — ${probe.message}`);
           if (!reuse) last = probe.inconclusive === undefined ? { key, at: Date.now(), every: last?.key === key ? Math.min(last.every * 2, 8000) : 1000, probe } : undefined;
-          // No verdict YET — the pixels changed by themselves, or no frame came in time ( B6, B7): never "passed on paint alone".
+          // No verdict YET — the pixels changed by themselves, or no frame came in time: never "passed on paint alone".
           if (probe.inconclusive !== undefined) return { verdict: undefined, why: (why = `pixels: ${probe.inconclusive}`) };
           if (probe.diff === 0) return invisible(`pixels: hiding layer "${probe.layer}" changes nothing at (${probe.surface.x},${probe.surface.y}) — it paints nothing a user could see there`);
           if (probe.diff === undefined && options?.pixels === true) {

@@ -3,7 +3,7 @@ import { example, expect, test } from './harness';
 
 /**
  * Basemap LABELS competing with an app's features. The sparse synthetic basemap (~25 layers, a few labels) never
- * exercised this; the dense one — the default since an earlier change — is 79 layers with 24 symbol layers and hundreds of labels
+ * exercised this; the dense one — the default — is 79 layers with 24 symbol layers and hundreds of labels
  * in view (label density per zoom: basemap-density.spec.ts). MapLibre's 3D-buildings
  * example inserts its layer BELOW the first label layer — recommended practice — so house numbers, POI names, street
  * names and neighbourhood labels are drawn ON TOP of the buildings a test wants to click.
@@ -74,7 +74,7 @@ test.describe('wild: dense, label-heavy basemap', () => {
   });
 
   test('snapshot of an app on a production-sized basemap: the app layer keeps its rows within the default budget', async ({ wild }) => {
-    // Was a known library bug (an earlier change): on this basemap the app layer kept 1 row of 374. 3d-buildings is on the
+    // Was a known library bug: on this basemap the app layer kept 1 row of 374. 3d-buildings is on the
     // basemap's own source; it counts as the app's because it is the only fill-extrusion layer there.
     const map = await wild.open(example('display-buildings-in-3d'), { routes: NYC });
     const snap = await map.snapshot();
@@ -83,7 +83,7 @@ test.describe('wild: dense, label-heavy basemap', () => {
     expect(snap.match(/^  #\d+ Polygon @\(\d+,\d+\).* render_height=/gm)?.length ?? 0).toBeGreaterThanOrEqual(7);
   });
 
-  // Was a KNOWN LIBRARY BUG (an earlier change), found by the dense default basemap (an earlier change): snapshot() kept every basemap
+  // Was a KNOWN LIBRARY BUG, found by the dense default basemap: snapshot() kept every basemap
   // layer's section (count, histogram, "to list specific ones" hint) and every basemap layer id in the header, and to
   // fit the budget shrank the APP's own rows to zero and then cut the text: with 25+ basemap layers in view, their
   // row-less sections alone exceeded the budget. The REAL OpenFreeMap style did the same (display-buildings-in-3d: 0 of

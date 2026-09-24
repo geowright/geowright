@@ -41,7 +41,7 @@ export function vectorTileHandler(layers: Record<string, FeatureCollection>, opt
     const tiles: Record<string, NonNullable<ReturnType<GeoJSONVT['getTile']>>> = {};
     for (const [name, data, index] of indexes) {
       // Above maxZoom the index has no tiles (getTile answers null): cut this one tile from the data directly, simplified
-      // to maxZoom detail as the index is. (: it used to be an empty tile, so every feature vanished past z14.)
+      // to maxZoom detail as the index is. (it used to be an empty tile, so every feature vanished past z14.)
       const t = z <= maxZoom ? index.getTile(z, x, y) : geoJSONToTile(data, z, x, y, { maxZoom, buffer: 64, clip: true, wrap: true });
       if (t && t.features.length) tiles[name] = t;
     }

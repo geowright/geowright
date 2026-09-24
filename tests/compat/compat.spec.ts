@@ -88,7 +88,7 @@ for (const lib of LIBS) {
       else expect(await map.snapshot()).toContain(note);
     });
 
-    // B6: the probe compares the pixels with and without the layer. Pixels that change by themselves (an animation
+    // the probe compares the pixels with and without the layer. Pixels that change by themselves (an animation
     // under the feature; on Mapbox GL v1 the reads are two REAL frames apart) are no evidence: a control read decides.
     test('pixel probe: pixels that change by themselves are no evidence (control read)', async ({ map, page }) => {
       await page.evaluate(() => {
@@ -110,7 +110,7 @@ for (const lib of LIBS) {
       expect(e, 'toBeVisibleOnMap passed for a feature that changes no pixel, because the pixels under it change by themselves').not.toBeNull();
     });
 
-    // B16: style evaluation on every version — zoom- and feature-state-driven paint, a legacy { stops } function, promoteId.
+    // style evaluation on every version — zoom- and feature-state-driven paint, a legacy { stops } function, promoteId.
     test('style evaluation: zoom and feature-state paint, legacy stops, promoteId', async ({ map, page }) => {
       await page.evaluate(() => {
         const m = (window as any).__geowright_maps.main;
@@ -177,6 +177,35 @@ for (const lib of LIBS) {
       expect(await map.snapshot()).toMatch(/1 feature\(s\) OUTSIDE the viewport .*#7 to the north-east/);
       await golf.click({ autoPan: true });
       await baseExpect(page.getByTestId('clicked')).toHaveText('places:Golf');
+    });
+
+    test('source data given as a URL: off-screen features known where getData() exists, "unknowable" said where not', async ({ map, page }) => {
+      const at = (name: string, lng: number, lat: number) => ({ type: 'Feature', id: name.length, properties: { name }, geometry: { type: 'Point', coordinates: [lng, lat] } });
+      await page.route('**/url-places.geojson', (route) =>
+        route.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'FeatureCollection', features: [at('Hotel', 34.82, 32.07), at('India', 35.6, 32.45)] }) }));
+      const getData = await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.addSource('url-places', { type: 'geojson', data: `${location.origin}/url-places.geojson` });
+        m.addLayer({ id: 'url-places', type: 'circle', source: 'url-places', paint: { 'circle-radius': 7, 'circle-color': '#6a1b9a' } });
+        return typeof m.getSource('url-places').getData === 'function';
+      });
+      expect(getData, 'GeoJSONSource.getData() is MapLibre >= 4').toBe(!/^(mapbox-gl-1|maplibre-gl-[23])$/.test(lib.alias));
+      await expect(map).toHaveFeature({ layer: 'url-places', where: { name: 'Hotel' } });
+      await map.waitForIdle();
+      const india = map.feature({ layer: 'url-places', where: { name: 'India' } });
+      const err = await india.click({ timeout: 1000 }).then(() => null, (e: Error) => e);
+      const snap = await map.snapshot();
+      const note = 'source(s) url-places: this map library version has no GeoJSONSource.getData() and the source was given a URL — features outside the viewport and full geometries are unknowable';
+      if (getData) {
+        expect(err?.message).toContain('exist in the source but are not rendered');
+        expect(snap).not.toContain(note);
+        expect(snap).toMatch(/\[source url-places\] 1 feature\(s\) OUTSIDE the viewport .*#5 to the north-east/);
+        await india.click({ autoPan: true });
+      } else {
+        expect(err?.message).not.toContain('exist in the source but are not rendered');
+        expect(err?.message).toContain(note);
+        expect(snap).toContain(note);
+      }
     });
 
     test('vector tiles: assert and act on features that come from tiles', async ({ map, page }) => {

@@ -266,13 +266,26 @@ Failures throw `GeowrightError` (actions) or a normal expect failure; both carry
 ## Agents (Playwright MCP)
 
 A browser agent gets an empty `region "Map"` from the accessibility snapshot. Two fixes, both through Playwright MCP's
-`--init-script` (no custom MCP server):
+`--init-script` (no custom MCP server). The app needs the same one-line hook as for tests; both scripts ship in the package:
 
 ```sh
-npm run build:inpage      # dist/inpage.js        -> adapter + window.__geowright.snapshot()
-npx esbuild src/inpage/agent-entry.ts --bundle --format=iife --outfile=dist/inpage-agent.js   # + accessibility mirror
-npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/init-page.ts \
-    --init-script dist/inpage.js --caps=vision        # or dist/inpage-agent.js, no caps needed
+npm i -D geowright
+npx @playwright/mcp --config geowright-mcp.json --caps=vision --init-script node_modules/geowright/dist/inpage.js
+# or --init-script node_modules/geowright/dist/inpage-agent.js: + the accessibility mirror, no --caps needed
+```
+
+`geowright-mcp.json` gives headless Chromium a WebGL it can draw with (the software-WebGL flags `npx geowright init` writes for tests):
+
+```json
+{
+  "browser": {
+    "browserName": "chromium",
+    "launchOptions": {
+      "headless": true,
+      "args": ["--disable-gpu", "--enable-unsafe-swiftshader", "--enable-features=AllowSwiftShaderFallback,AllowSoftwareGLFallbackDueToCrashes"]
+    }
+  }
+}
 ```
 
 - **Text snapshot** — `window.__geowright.snapshot('main')` lists, per entity, its properties, a verified clickable pixel and
@@ -280,8 +293,9 @@ npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/
 - **Accessibility mirror** — features appear in the normal `browser_snapshot` as buttons, and a normal `browser_click` works
   (a real click that reaches the map). Zero instructions. Also usable from tests: `page.getByRole('button', { name: /Gas leak/ }).click()`.
 
-The skill text is [`agent/MAP_SKILL.md`](agent/MAP_SKILL.md); `agent/mcp-probe.mjs` exercises the whole path without an LLM; results of
-real agent runs: [DESIGN — The agent layer](docs/DESIGN.md#the-agent-layer-text-snapshot-and-accessibility-mirror).
+The skill text for the text snapshot ships as `node_modules/geowright/agent/MAP_SKILL.md` ([`agent/MAP_SKILL.md`](agent/MAP_SKILL.md)):
+give it to the agent as instructions. Results of real agent runs:
+[DESIGN — The agent layer](docs/DESIGN.md#the-agent-layer-text-snapshot-and-accessibility-mirror).
 
 ## Vector tiles without a tile server
 
@@ -319,7 +333,7 @@ The full list, with costs measured on a dense map: [DESIGN — Costs and known l
 ## Supported map library versions
 
 Developed against MapLibre GL JS 6. The same small page and the same core specs run against every major below
-(`npm run test:compat`, `tests/compat/`, its own CI job; 60 tests). "✓" means asserted by that matrix, not assumed.
+(`npm run test:compat`, `tests/compat/`, its own CI job; 84 tests). "✓" means asserted by that matrix, not assumed.
 Newer public methods are feature-detected, never version-sniffed; what an old version cannot do is said in failure
 diagnostics and in the snapshot (`note: …`) instead of being answered wrongly.
 
@@ -356,6 +370,15 @@ npx playwright test                    # builds the demo, serves it on :4173, ru
 The suite needs no network: everything a page fetches is answered from fixtures (`page.route`), and a non-local request
 fails the test. `demo/` is the app under test, `src/inpage/` is injected into the page (adapter seam, engine, MapLibre adapter),
 `src/playwright/` is the test-side API, `wild/` holds apps we did not write, `agent/` the Playwright MCP pieces.
+
+The agent path against the demo, from a checkout (`npm run build:inpage` writes both injected scripts, with their
+license banner; `agent/mcp-probe.mjs` drives the whole path without an LLM):
+
+```sh
+npm run build:inpage
+npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/init-page.ts \
+    --init-script dist/inpage.js --caps=vision        # or dist/inpage-agent.js, no caps needed
+```
 Ground rules, the flake bar and the sign-off: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Open source, and staying that way

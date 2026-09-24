@@ -371,7 +371,7 @@ export class Engine<W = unknown> {
     if (r.top < 0 || r.left < 0 || r.bottom > window.innerHeight || r.right > window.innerWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   }
 
-  /** `scroll: false` inside an input event handler: the page must not scroll under an event being delivered (A21). */
+  /** `scroll: false` inside an input event handler: the page must not scroll under an event being delivered. */
   private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions, scroll = true): ActionPointResult {
     if (scroll && this.adapter.surface().isConnected !== false) this.scrollIntoView();
     const problem = this.surfaceProblem();
@@ -520,7 +520,7 @@ export class Engine<W = unknown> {
   /**
    * The layers to look through when hit-testing THIS target: the ones asked to be ignored, except its own. A map-level
    * `ignoreLayers` that lists the target's own layer used to make it impossible to act on, with "no candidate pixel
-   * hit-tests back to it" as the only explanation (A15): nobody means "click it, but look through it".
+   * hit-tests back to it" as the only explanation: nobody means "click it, but look through it".
    */
   private ignoring(opts: ActionPointOptions, pieces: RenderedFeature[]): Set<string> {
     const ignore = new Set(opts.ignoreLayers ?? []);
@@ -1077,7 +1077,7 @@ export class Engine<W = unknown> {
     // A basemap is a tiled source with many layers on it. Its rows are the least interesting thing on the page to
     // whoever asked for a snapshot of an APP, and originally they ate the budget first (top-down order): "… 54
     // more not listed" for every basemap layer and zero rows for the app's own. Then a production-sized basemap
-    // (80-120 layers) showed that giving up its ROWS is not enough (an earlier change): 25+ row-less sections, plus every
+    // (80-120 layers) showed that giving up its ROWS is not enough: 25+ row-less sections, plus every
     // layer id in the header, still filled the whole budget. So the basemap degrades in stages (see `STAGES` below)
     // before the app's layers lose a single row.
     // A layer the app adds to the basemap's own source (MapLibre's 3D-buildings example extrudes the basemap's

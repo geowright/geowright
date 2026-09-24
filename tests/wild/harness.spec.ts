@@ -1,6 +1,6 @@
 import { expect, test, WILD_ORIGIN } from './harness';
 
-// The wild harness lets only the wild server through: its exact origin, not every URL that starts with it (G7 of an earlier issue).
+// The wild harness lets only the wild server through: its exact origin, not every URL that starts with it.
 test('wild harness: a look-alike origin (:41740 for :4174) is aborted and reported, the wild server is not', async ({ wild }) => {
   await wild.page.goto(`${WILD_ORIGIN}/`);
   const lookAlike = `${WILD_ORIGIN}0/x`;

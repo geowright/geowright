@@ -31,7 +31,7 @@ test('internal adapter-seam additions are not in the published typings program',
 
 /**
  * Members tagged `@internal` in the published sources (the MapHandle / FeatureHandle plumbing, `ActionPointOptions.leadMs`)
- * are not public API (decision on an earlier issue): `stripInternal` keeps them out of the emitted typings. Emits the typings for real
+ * are not public API: `stripInternal` keeps them out of the emitted typings. Emits the typings for real
  * (into a temp dir) and reads what a user's editor would see.
  */
 test('@internal members are stripped from the emitted typings; the public API is still there', () => {
@@ -56,10 +56,10 @@ test('@internal members are stripped from the emitted typings; the public API is
 });
 
 /**
- * 53. (E1) `expect` is typed from '@playwright/test', the one package a user is told to install: an inferred type
+ * `expect` is typed from '@playwright/test', the one package a user is told to install: an inferred type
  * named `import("playwright/test")`, which is not resolvable from node_modules/geowright under pnpm (hoist=false) or
- * Yarn PnP — and then, under skipLibCheck, `expect` from 'geowright' silently became `any`. (E10) Every type a public
- * signature names can be imported from 'geowright'. (E2) Resolvers that do not read `exports` (TypeScript's node10)
+ * Yarn PnP — and then, under skipLibCheck, `expect` from 'geowright' silently became `any`. Every type a public
+ * signature names can be imported from 'geowright'. Resolvers that do not read `exports` (TypeScript's node10)
  * still find the typings of 'geowright', 'geowright/tiles' and 'geowright/app'.
  */
 test('published typings: `expect` typed from @playwright/test, the signature types exported, a node10 fallback', () => {
@@ -96,7 +96,7 @@ test('published typings: `expect` typed from @playwright/test, the signature typ
 });
 
 /**
- * (E1), as a user meets it: geowright installed the way pnpm (hoist=false) or Yarn PnP lay it out — only
+ * As a user meets it: geowright installed the way pnpm (hoist=false) or Yarn PnP lay it out — only
  * '@playwright/test' resolvable from it, not the `playwright` package behind it. `expect` from 'geowright' must still be
  * typed (it used to be `any` under skipLibCheck: no matcher types, no floating-promise lint).
  */

@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { GeowrightError } from '../src/playwright';
 
 /** When something fails, the report gets a picture of the map with the expectation drawn on it. */
 test.describe('failure artefacts', () => {
@@ -21,6 +22,20 @@ test.describe('failure artefacts', () => {
     const names = testInfo.attachments.filter((a) => a.contentType === 'image/png').map((a) => a.name);
     expect(names).toEqual(['map screenshot — toHaveFeature', 'map screenshot — map.clickAt']);
     await expect(page.locator('[id^="geowright-marks-"]')).toHaveCount(0);
+  });
+
+  test('a failed action throws GeowrightError; failures attach what was on the map as text (`map state — …`)', async ({ map }, testInfo) => {
+    const feature = await map.feature({ layer: 'alerts', id: 99 }).click({ timeout: 400 }).then(() => null, (e: Error) => e);
+    expect(feature).toBeInstanceOf(GeowrightError);
+    const location = await map.clickAt({ lng: 34.0, lat: 32.08 }, { timeout: 400 }).then(() => null, (e: Error) => e);
+    expect(location).toBeInstanceOf(GeowrightError);
+    await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'critical' } }, { timeout: 400 }).catch(() => {});
+    const texts = testInfo.attachments.filter((a) => a.name.startsWith('map state — '));
+    expect(texts.map((a) => a.name)).toEqual(['map state — map.feature({"layer":"alerts","id":99}).click()', 'map state — toHaveFeature']);
+    for (const t of texts) {
+      expect(t.contentType).toBe('text/plain');
+      expect(t.body!.toString()).toMatch(/layer "alerts": 3 feature\(s\) rendered in viewport[\s\S]*"Gas leak"/);
+    }
   });
 
   test('every action records which pixel it chose and why', async ({ map, page }, testInfo) => {

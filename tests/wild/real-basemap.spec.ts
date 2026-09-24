@@ -92,7 +92,7 @@ test.describe('wild: REAL basemap (opt-in, cached outside the repo)', () => {
     const snap = await map.snapshot();
     expect(snap.length).toBeLessThanOrEqual(8000);
     expect(snap).toMatch(/\[3d-buildings\] \d+ fill-extrusion entities/);
-    // … and its ROWS (an earlier change: 0 of 1,025 were listed while every basemap layer kept its section)
+    // … and its ROWS (0 of 1,025 were listed while every basemap layer kept its section)
     expect(snap.match(/^  (#\S+|-) (Multi)?Polygon @\(\d+,\d+\).* render_height=/gm)?.length ?? 0).toBeGreaterThanOrEqual(7);
     expect(snap).not.toContain('cut to fit');
   });

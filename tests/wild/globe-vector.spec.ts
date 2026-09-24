@@ -62,7 +62,7 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     await map.feature({ layer: 'countries-fill', where: { NAME: 'Nigeria' } }).click();
   });
 
-  // B3: 'vertical-perspective' and a projection EXPRESSION render a globe too (MapLibre's createProjectionFromName):
+  // 'vertical-perspective' and a projection EXPRESSION render a globe too (MapLibre's createProjectionFromName):
   // the viewport-query workaround must apply to them, and the view must say so.
   for (const [name, type] of [
     ['vertical-perspective', 'vertical-perspective'],
@@ -79,7 +79,7 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     });
   }
 
-  // B4: zoomed in so far that the viewport lies inside one big piece of a country: no vertex of it is on screen,
+  // zoomed in so far that the viewport lies inside one big piece of a country: no vertex of it is on screen,
   // yet it is drawn over the whole view.
   test('a country that fills the whole view is found, though none of its vertices is on screen', async ({ wild, page }) => {
     const map = await open(wild);

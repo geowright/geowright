@@ -294,7 +294,7 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
         const opacity = first(zero('paint', 'fill-layer-opacity'), zero('paint', 'fill-opacity'));
         if (opacity) return verdict(opacity);
         if (isSet('paint', 'fill-pattern')) return { visible: true };
-        // The outline is drawn only with fill-antialias (draw_fill.ts): without it there is no outline to see (B12).
+        // The outline is drawn only with fill-antialias (draw_fill.ts): without it there is no outline to see.
         if (value('paint', 'fill-antialias') === false) return verdict(transparent('fill-color'), alias('no outline (fill-antialias is false)', [], [{ group: 'paint', name: 'fill-antialias' }]));
         const outlineSet = map.getPaintProperty(f.layer, 'fill-outline-color') != null;
         // "no separate outline colour" is context, not a cause of its own: the outline is drawn in fill-color.
@@ -313,7 +313,7 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
           const halo = colour && (zero('paint', 'text-halo-width') || transparent('text-halo-color'));
           text = first(zero('paint', 'text-opacity'), zero('layout', 'text-size'), halo ? alias('text-color and halo are fully transparent', [colour, halo]) : undefined)!;
         } else text = alias('no text', [], [{ group: 'layout', name: 'text-field' }]);
-        // An SDF icon is a shape drawn IN icon-color (plus its halo); an ordinary image ignores icon-color (B13).
+        // An SDF icon is a shape drawn IN icon-color (plus its halo); an ordinary image ignores icon-color.
         const sdfClear = (): string | undefined => {
           if (!sdfIcon(map, value('layout', 'icon-image'))) return undefined;
           const colour = transparent('icon-color');

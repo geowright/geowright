@@ -2,7 +2,7 @@ import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 
 /**
- * Failures that EXPLAIN invisibility (an earlier change): when the style hides a feature or a whole layer, the failure
+ * Failures that EXPLAIN invisibility: when the style hides a feature or a whole layer, the failure
  * message names the layer, the style property, its value, the expression branch that produced it, and the zoom.
  * The demo is at zoom 12. Each test adds one layer over two polygons near the centre: #1 kind "park", #2 kind "forest".
  */

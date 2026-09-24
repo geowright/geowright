@@ -23,7 +23,8 @@ They are not repeated here, so there is one copy to keep true.
 1. A behaviour change comes with a test that failed before it and passes after it.
 2. `npx playwright test` and `npm run typecheck` pass. A change to waiting, input or timing also passes
    `npx playwright test <spec> --repeat-each=20` with zero flakes and zero retries.
-3. A public API change updates the README API table and `CHANGELOG.md` (Unreleased) in the same change.
+3. A public API change updates the README API table and `CHANGELOG.md` in the same change, in its topmost unreleased
+   section (`## Unreleased`, or the version being prepared).
 4. The report — PR description or issue comment — says: what changed; the evidence (commands run and their
    results); **mistakes and dead ends first**, in plain words; what is left; decisions needed.
 5. A new rule you had to learn the hard way becomes a check (a test, a lint, a CI step) if it can be one,

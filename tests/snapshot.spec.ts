@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test, expect } from './fixtures';
 
 test.describe('map snapshot (agent layer)', () => {
@@ -21,6 +22,29 @@ test.describe('map snapshot (agent layer)', () => {
     const [, x, y] = snap.match(/#1 Point @\((\d+),(\d+)\)/)!;
     await page.mouse.click(+x, +y);
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
+  });
+
+  test('skipLayers leaves those layers out of the snapshot', async ({ map }) => {
+    expect(await map.snapshot()).toMatch(/\[parcels\] 6 fill entities \(also drawn by: parcels-outline\)/);
+    const skipped = await map.snapshot({ skipLayers: ['parcels', 'parcels-outline'] });
+    expect(skipped).not.toMatch(/\[parcels(-outline)?\]/);
+    expect(skipped).not.toMatch(/#105 Polygon/);
+    expect(skipped).toMatch(/\[alerts\] 3 circle entities/);
+  });
+
+  test('the calls agent/MAP_SKILL.md tells an agent to make work as written', async ({ map, page }) => {
+    const skill = readFileSync(new URL('../agent/MAP_SKILL.md', import.meta.url), 'utf8');
+    const calls = skill.split('\n').filter((l) => /^ {2}async \(\) =>/.test(l)).map((l) => l.trim());
+    expect(calls, 'the two browser_evaluate functions in MAP_SKILL.md').toHaveLength(2);
+    await map.waitForIdle();
+    const snap = await page.evaluate<string>(`(${calls[0]})()`);
+    expect(snap).toContain('view: center 34.78,32.08 zoom 12');
+    expect(snap).toMatch(/#1 Point @\(\d+,\d+\) drawn red\(#d32f2f\) id=1 name="Gas leak"/);
+    // the filter call, with the skill's example layer and property swapped for the demo's
+    expect(calls[1]).toContain("filter: { layer: 'assets', where: { serial: 'SN-12345' } }");
+    const filtered = await page.evaluate<string>(`(${calls[1].replace("layer: 'assets'", "layer: 'alerts'").replace("serial: 'SN-12345'", "severity: 'high'")})()`);
+    expect(filtered).toContain('name="Gas leak"');
+    expect(filtered).not.toContain('name="Road closure"');
   });
 
   test('string-id features that are drawn are not also counted as "not drawn individually"', async ({ map, page }) => {

@@ -69,7 +69,7 @@ test.describe('timeouts', () => {
     await expect(page.getByTestId('popup')).toHaveCount(0); // and nothing was clicked afterwards
   });
 
-  // (C12): a last attempt that started with a few ms left was abandoned for want of them, and the timeout then blamed
+  // a last attempt that started with a few ms left was abandoned for want of them, and the timeout then blamed
   // "a busy main thread" on an idle page, burying the real reason (here: occluded). timeout: 1 makes it certain.
   test('a timeout on an idle page gives the real reason, not "a busy main thread"', async ({ map, page }) => {
     await page.getByTestId('alert-name').fill('Covering 106');
@@ -84,7 +84,7 @@ test.describe('timeouts', () => {
     }
   });
 
-  // (C17): every point of a multi-point action had its own full timeout: a drag waited for its start, then as long
+  // every point of a multi-point action had its own full timeout: a drag waited for its start, then as long
   // again for its end.
   test('a multi-point action has ONE timeout, shared by its points', async ({ map, page }) => {
     const timeout = 2000;
@@ -101,7 +101,7 @@ test.describe('timeouts', () => {
     expect(took, `dragAt({ timeout: ${timeout} }) took ${took}ms`).toBeLessThan(timeout * 1.5);
   });
 
-  // (C13): a failing toHaveLayerPixels projected its failure mark with clientPoint(), a full action timeout (≥ 10 s)
+  // a failing toHaveLayerPixels projected its failure mark with clientPoint(), a full action timeout (≥ 10 s)
   // of waiting for a location that is off-screen — after the assertion's own timeout.
   test('a failing toHaveLayerPixels fails at its timeout', async ({ map }) => {
     const started = Date.now();
@@ -111,7 +111,7 @@ test.describe('timeouts', () => {
     expect(took, `took ${took}ms`).toBeLessThan(3 * TIMEOUT);
   });
 
-  // C19: as in Playwright, `timeout: 0` means no timeout — it used to mean ONE attempt.
+  // as in Playwright, `timeout: 0` means no timeout — it used to mean ONE attempt.
   test('timeout: 0 means no timeout, as in Playwright', async ({ map, page }) => {
     // The app adds a layer a little later (its own timer: the test does not sleep).
     const addLater = (id: string) =>
