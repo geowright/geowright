@@ -1,6 +1,6 @@
 # 0010. Real-world apps are not bent to fit the library
 
-- Status: Accepted
+- Status: Superseded by 0016
 - Date: 2026-09-20
 - Decided by: Shai Sinai
 
