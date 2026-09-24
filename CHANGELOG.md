@@ -4,6 +4,9 @@ Not published; versions start when the package does. Until then this lists what 
 (details and reasoning: `docs/DESIGN.md`). Breaking changes are marked **BREAKING**.
 
 ## Unreleased — publishable and broad
+- **Published typings: internal plumbing hidden.** The `@internal` members of `MapHandle` / `FeatureHandle` (`_call`,
+  `_retry`, `_drag`, …) and `ActionPointOptions.leadMs` are no longer in the published `.d.ts` files (`stripInternal`);
+  nothing changes at run time. They were never documented API.
 - **`geowright/app`: the hook's type, for the app's TypeScript.** `/// <reference types="geowright/app" />` in a `.d.ts`
   the app's tsconfig includes declares `window.__geowright_maps?: Record<string, unknown>`, so
   `(window.__geowright_maps ??= {}).main = map` compiles without `(window as any)`. Types only: the export has no
