@@ -100,6 +100,13 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     return { lng: coord[0], lat: coord[1] };
   }
 
+  /** The copy of the world nearest the view centre (the camera's lng may be outside [-180, 180] after panning). */
+  nearestCopy(anchor: number[]): ((coord: number[]) => LngLat) | undefined {
+    if (this.map.getProjection?.()?.type === 'globe' || !(this.map.getRenderWorldCopies?.() ?? true)) return undefined;
+    const shift = 360 * Math.round((this.map.getCenter().lng - anchor[0]) / 360);
+    return shift ? (c) => ({ lng: c[0] + shift, lat: c[1] }) : undefined;
+  }
+
   queryFeatures(q: { layers?: string[]; at?: Pt }): RenderedFeature[] {
     // queryRenderedFeatures throws for layer ids that do not exist; an unknown layer is a
     // legitimate "nothing there (yet)" for a retrying assertion, so filter them out.

@@ -125,7 +125,8 @@ Actions refuse an invisible feature unless `{ force: true }`. How it works: [DES
 6. at the instant the real `pointerdown` arrives, the hit test is re-run; if the target is no longer there the click is swallowed and the action retries
 
 Works unchanged on rotated, pitched, globe and terrain maps. A location on the far side of the globe, behind the camera or
-hidden behind a mountain is an error, never a click on whatever is drawn at that pixel. Features need **no ids**: identity
+hidden behind a mountain is an error, never a click on whatever is drawn at that pixel, and a feature query `at` such a
+location matches nothing. Features need **no ids**: identity
 is id + properties, and id-less look-alikes are told apart by where they are drawn.
 
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map), `{ autoPan: true }`, `{ timeout }`, and
@@ -306,6 +307,8 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   (a starved renderer draws a perpetually moving feature at the same pixel two frames running), the default refusal of a
   moving target can let a `hover` through, onto where the feature is drawn at that instant. A `click` is still verified
   when the press arrives.
+- **Pixel-only layers never occlude.** Occlusion comes from the map's hit test, which returns features only: an opaque
+  raster, image, video, canvas, heatmap or hillshade layer drawn above a feature does not stop an action on it.
 - The injected script is ~135 KB (it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
 
 The full list, with costs measured on a dense map: [DESIGN — Costs and known limitations](docs/DESIGN.md#costs-and-known-limitations).

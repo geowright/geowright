@@ -1207,7 +1207,7 @@ export const expect = baseExpect.extend({
         if (found.length === 0) return invisible('no rendered feature matches');
         if (!found[0].visible) return invisible(`paint: ${found[0].invisibleBecause}`);
         if (options?.pixels !== false) {
-          const probe = await map._call<{ ok: true; diff?: number; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query));
+          const probe = await map._call<{ ok: true; diff?: number; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), { ignoreLayers: map.ignoreLayers });
           if (!probe.ok) return invisible(`pixels: no clean point to probe — ${probe.message}`);
           if (probe.diff === 0) return invisible(`pixels: hiding layer "${probe.layer}" changes nothing at (${probe.surface.x},${probe.surface.y}) — it paints nothing a user could see there`);
           if (probe.diff === undefined && options?.pixels === true) {

@@ -160,6 +160,43 @@ test.describe('act gap', () => {
     });
   }
 
+  test('a visible feature just across the antimeridian can be clicked', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const w = window as any;
+      const m = w.__geowright_maps.main;
+      m.addSource('am', { type: 'geojson', data: { type: 'Feature', id: 1, properties: { name: 'east of 180' }, geometry: { type: 'Point', coordinates: [-179.8, 0] } } });
+      m.addLayer({ id: 'am', type: 'circle', source: 'am', paint: { 'circle-radius': 10, 'circle-color': '#f60' } });
+      w.__amClicks = 0;
+      m.on('click', 'am', () => w.__amClicks++);
+      m.jumpTo({ center: [179.5, 0], zoom: 6 });
+    });
+    await map.waitForIdle();
+    await expect(map).toHaveLayerPixels('am', { at: { lng: 180.2, lat: 0 }, radiusPx: 6 }); // it is drawn, 0.7° east of centre
+    const e = await map.feature({ layer: 'am' }).click({ timeout: 3000 }).then(() => null, (e: Error) => e);
+    expect({ error: e?.message.split('\n')[0] ?? null, clicks: await page.evaluate(() => (window as any).__amClicks) }).toEqual({ error: null, clicks: 1 });
+    // the snapshot lists it with a pixel, not as "OUTSIDE the viewport"
+    const snap = await map.snapshot({ layers: ['am'] });
+    expect(snap).toMatch(/#1 Point @\(\d+,\d+\) /);
+    expect(snap).not.toContain('OUTSIDE the viewport');
+  });
+
+  // 66, a known limit: occlusion is decided from the map's hit test, which never returns pixel-only layers (raster, image,
+  // video, canvas, heatmap, hillshade). An opaque one drawn above a feature does not stop click(). Documented in DESIGN
+  // "Costs and known limitations" and README Limits; this test turns green when the limit is lifted.
+  test.fail('an opaque image layer drawn above a feature occludes it (, known limit)', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const c = document.createElement('canvas'); c.width = c.height = 4;
+      const g = c.getContext('2d')!; g.fillStyle = '#888'; g.fillRect(0, 0, 4, 4);
+      const b = m.getBounds();
+      m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[b.getWest(), b.getNorth()], [b.getEast(), b.getNorth()], [b.getEast(), b.getSouth()], [b.getWest(), b.getSouth()]] });
+      m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 } }); // on top of everything
+    });
+    await expect(map).toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 1500 }).then(() => null, (e: Error) => e);
+    expect(e, 'geowright clicked alert 1 although an opaque image layer covers the whole map').not.toBeNull();
+  });
+
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {
     const err = await map.clickAt({ lng: 36, lat: 32 }, { timeout: 500 }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('outside the viewport');

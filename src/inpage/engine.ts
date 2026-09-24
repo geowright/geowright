@@ -122,7 +122,7 @@ export class Engine<W = unknown> {
     // A registered map may have been removed (or hidden to 0×0) while Playwright was waiting: nothing to learn from it.
     // Not an error HERE — the query that follows reports it (group() refuses such a surface, actionPoint explains it).
     if (this.surfaceProblem()) return;
-    if (!this.adapter.queryData) return;
+    if (!this.adapter.queryData || this.hiddenAt(q.at)) return;
     const at = q.at ? this.adapter.project(q.at as W) : undefined;
     const byKey = new Map<string, RenderedFeature[]>();
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
@@ -154,12 +154,25 @@ export class Engine<W = unknown> {
     }
   }
 
+  /**
+   * Surface pixel of the coordinates of one geometry part, in the copy of the world nearest the view: rendered
+   * geometry is canonical, and a feature just across the antimeridian would otherwise project a whole world away from
+   * where it is drawn. One copy per PART (anchored at its first coordinate), never per coordinate: a part that crosses
+   * the meridian opposite the view centre must not be torn in two.
+   */
+  private projector(part: Part): (c: number[]) => Pt {
+    const anchor = part.kind === 'point' ? part.coord : part.kind === 'line' ? part.coords[0] : part.rings[0][0];
+    const toWorld = (anchor && this.adapter.nearestCopy?.(anchor)) || ((c: number[]) => this.adapter.worldFromCoord(c));
+    return (c) => this.adapter.project(toWorld(c));
+  }
+
   /** On-screen bounding box of a piece's geometry. */
   private box(f: RenderedFeature) {
     const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
     for (const part of explode(f.geometry)) {
+      const proj = this.projector(part);
       for (const c of part.kind === 'point' ? [part.coord] : part.kind === 'line' ? part.coords : part.rings[0]) {
-        const p = this.adapter.project(this.adapter.worldFromCoord(c));
+        const p = proj(c);
         b.x0 = Math.min(b.x0, p.x); b.y0 = Math.min(b.y0, p.y); b.x1 = Math.max(b.x1, p.x); b.y1 = Math.max(b.y1, p.y);
       }
     }
@@ -195,12 +208,23 @@ export class Engine<W = unknown> {
     return undefined;
   }
 
+  /**
+   * A location that has a pixel but is NOT what is drawn there: the far side of a globe, behind a ridge, beyond the horizon.
+   * The pixel shows something on the near side, so a query `at` such a location matches nothing — as a click there is
+   * refused.
+   */
+  private hiddenAt(at: unknown): boolean {
+    return at !== undefined && this.adapter.isOnSurface?.(at as W) === false;
+  }
+
   /** Rendered features matching the query, grouped into logical features (pieces merged). Throws when the surface cannot be looked at. */
   private group(q: FeatureQuery): Map<string, RenderedFeature[]> {
     const problem = this.surfaceProblem();
     if (problem) throw new Error(`geowright: ${problem}`);
-    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    for (const v of Object.values(q.where ?? {})) checkWhere(v); // a malformed `where` is an error even where nothing is rendered
     const groups = new Map<string, RenderedFeature[]>();
+    if (this.hiddenAt(q.at)) return groups; // what is drawn at that pixel is something else (explain() says so)
+    const at = q.at ? this.adapter.project(q.at as W) : undefined;
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
       if (!this.matches(f, q)) continue;
       const k = this.key(f);
@@ -450,7 +474,6 @@ export class Engine<W = unknown> {
    */
   private candidates(pieces: RenderedFeature[], size: { w: number; h: number }, stats?: { outside: number }): Pt[] {
     const inView = (p: Pt) => p.x >= 2 && p.y >= 2 && p.x <= size.w - 2 && p.y <= size.h - 2;
-    const proj = (c: number[]) => this.adapter.project(this.adapter.worldFromCoord(c));
     const out: Pt[] = [];
     // Polygon candidates of ALL parts and pieces are ranked together (deepest interior first): a country
     // is a hundred islands and tile pieces, and the good pixel is in the mainland, not in whichever
@@ -459,6 +482,7 @@ export class Engine<W = unknown> {
     for (const piece of pieces) {
       const g = piece.geometry;
       for (const part of explode(g)) {
+        const proj = this.projector(part);
         if (part.kind === 'point') out.push(...pointCandidates(proj(part.coord)));
         else if (part.kind === 'line') out.push(...lineCandidates(part.coords.map(proj)));
         else {
@@ -492,8 +516,8 @@ export class Engine<W = unknown> {
    * not drawn? Catches what paint evaluation cannot (transparent icon image, colour identical to
    * what is underneath). Layer-level differential at a pixel that hit-tests to the feature.
    */
-  async pixelProbe(q: FeatureQuery): Promise<{ ok: true; diff: number | undefined; surface: Pt; layer: string } | { ok: false; message: string }> {
-    const r = this.actionPointOnce(q, {});
+  async pixelProbe(q: FeatureQuery, opts: Pick<ActionPointOptions, 'ignoreLayers'> = {}): Promise<{ ok: true; diff: number | undefined; surface: Pt; layer: string } | { ok: false; message: string }> {
+    const r = this.actionPointOnce(q, { ignoreLayers: opts.ignoreLayers }); // layers the caller says never occlude do not here either
     if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
     return { ok: true, diff: await this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
   }
@@ -511,7 +535,7 @@ export class Engine<W = unknown> {
     const marks: DebugMark[] = [];
     if (q.at) {
       const p = this.adapter.project(q.at as W);
-      marks.push({ x: rect.left + p.x, y: rect.top + p.y, kind: 'target', label: 'at' });
+      marks.push({ x: rect.left + p.x, y: rect.top + p.y, kind: 'target', label: this.hiddenAt(q.at) ? 'at (not on the visible surface)' : 'at' });
     }
     for (const pieces of [...this.group(q).values()].slice(0, 8)) {
       let labelled = false;
@@ -543,6 +567,7 @@ export class Engine<W = unknown> {
     const tol = o.tolerancePx ?? 8;
     let list: (Overlay & { distance?: number })[] = (this.adapter.overlays?.() ?? []).filter((v) => v.kind === kind);
     const toBox = (p: Pt, r: Overlay['rect']) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.width)), Math.max(r.y - p.y, 0, p.y - (r.y + r.height)));
+    if (o.at && this.hiddenAt(o.at)) return [];
     if (o.at) {
       const p = this.adapter.project(o.at as W);
       list = list.map((v) => ({ ...v, distance: v.anchor ? Math.hypot(v.anchor.x - p.x, v.anchor.y - p.y) : toBox(p, v.rect) })).filter((v) => v.distance! <= tol);
@@ -802,9 +827,12 @@ export class Engine<W = unknown> {
     if (q.at) {
       const at = this.adapter.project(q.at as W);
       const under = this.adapter.queryFeatures({ at });
+      const shown = (n: number) => under.slice(0, n).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; ');
       lines.push(
-        `at ${JSON.stringify(q.at)} = pixel (${Math.round(at.x)},${Math.round(at.y)}): ` +
-          (under.length ? under.slice(0, 5).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; ') : 'nothing rendered there'),
+        this.hiddenAt(q.at)
+          ? `at ${JSON.stringify(q.at)}: not on the visible map surface (the far side of the globe, or hidden behind terrain or beyond the horizon), so a query "at" it matches nothing. ` +
+              `Its pixel (${Math.round(at.x)},${Math.round(at.y)}) shows ${under.length ? `something else: ${shown(3)}` : 'nothing rendered'}.`
+          : `at ${JSON.stringify(q.at)} = pixel (${Math.round(at.x)},${Math.round(at.y)}): ` + (under.length ? shown(5) : 'nothing rendered there'),
       );
       const { at: _at, ...rest } = q;
       const nearest = this.find(rest)
@@ -832,6 +860,9 @@ export class Engine<W = unknown> {
     const skip = new Set(o.skipLayers ?? []);
     const only = o.layers && new Set(o.layers);
     const filterLayers = o.filter && this.layersOf(o.filter);
+    for (const v of Object.values(o.filter?.where ?? {})) checkWhere(v);
+    // filter.at: only entities drawn AT that location (the hit test there), and none at a location that is not on the visible surface
+    const filterAt = o.filter?.at === undefined ? undefined : this.hiddenAt(o.filter.at) ? [] : a.queryFeatures({ layers: filterLayers, at: a.project(o.filter.at as W) });
     const size = this.surfaceSize();
     const centre = { x: size.w / 2, y: size.h / 2 };
     const found = new Map<string, Collected>();
@@ -839,7 +870,7 @@ export class Engine<W = unknown> {
     for (const f of a.queryFeatures({})) {
       if (skip.has(f.layer) || (only && !only.has(f.layer))) continue;
       const k = this.entityKey(f);
-      if (o.filter && (!filterLayers || filterLayers.includes(f.layer)) && this.matches(f, o.filter)) matched.add(k);
+      if (o.filter && (!filterLayers || filterLayers.includes(f.layer)) && this.matches(f, o.filter) && (!filterAt || filterAt.some((h) => this.entityKey(h) === k))) matched.add(k);
       let e = found.get(k);
       if (!e) found.set(k, (e = { key: k, owner: f.layer, byLayer: new Map(), d: Infinity }));
       if (!e.byLayer.has(f.layer)) e.byLayer.set(f.layer, []);
@@ -1111,8 +1142,14 @@ export class Engine<W = unknown> {
       const data = await a.queryData?.(l.id);
       if (!data) continue;
       seenSources.add(l.source);
-      const renderedIds = new Set(a.queryFeatures({}).filter((f) => f.source === l.source).map((f) => this.entityKey(f)));
-      const off = data.filter((f) => !renderedIds.has(this.entityKey({ ...f, source: l.source })) && (!o.filter || this.matches(f, { ...o.filter, at: undefined }, false)));
+      const rendered = a.queryFeatures({}).filter((f) => f.source === l.source);
+      const renderedIds = new Set(rendered.map((f) => this.entityKey(f)));
+      // The renderer's id is not the data's when the data id is not a number: MapLibre renders a string id (terra-draw's
+      // UUIDs) as a coerced number, and gives id-less features generated ones. Those are matched by their properties.
+      const renderedProps = new Set(rendered.map((f) => stableProperties(f.properties)));
+      const isDrawn = (f: RenderedFeature) => renderedIds.has(this.entityKey({ ...f, source: l.source })) || (typeof f.id !== 'number' && renderedProps.has(stableProperties(f.properties)));
+      // a filter `at` a location asks what is drawn there: nothing elsewhere matches it
+      const off = data.filter((f) => !isDrawn(f) && (!o.filter || (o.filter.at === undefined && this.matches(f, o.filter, false))));
       if (!off.length || view.center === undefined) continue;
       const firstCoord = (f: RenderedFeature) => {
         const first = explode(f.geometry)[0];
@@ -1121,7 +1158,7 @@ export class Engine<W = unknown> {
       // "In view" is decided in PIXELS, not by lng/lat bounds: on a rotated or pitched map the bounds
       // are the bounding box of a trapezoid and contain plenty that is not on screen.
       const inView = (c: number[]) => {
-        const w = a.worldFromCoord(c);
+        const w = a.nearestCopy?.(c)?.(c) ?? a.worldFromCoord(c); // the copy of the world nearest the view
         const p = a.project(w);
         return p.x >= 0 && p.y >= 0 && p.x <= size.w && p.y <= size.h && (a.isOnSurface?.(w) ?? true);
       };
@@ -1421,7 +1458,21 @@ function showWant(v: unknown): string {
   return JSON.stringify(v);
 }
 
+const WHERE_OPS = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'matches', 'flags', 'exists'];
+
+/**
+ * A `where` value is a scalar or an operator object. Anything else — an array (meant as "in"), a nested object (meant as a
+ * match on a nested value), a misspelt operator — used to test no operator at all and so match EVERY feature: an error.
+ */
+export function checkWhere(want: unknown): void {
+  if (want === null || typeof want !== 'object') return;
+  if (Array.isArray(want)) throw new Error(`geowright: unknown where operator: an array (to match one of several values use { in: [${want.map((v) => JSON.stringify(v)).join(', ')}] }); valid operators: ${WHERE_OPS.join(', ')}`);
+  const unknown = Object.keys(want).filter((k) => !WHERE_OPS.includes(k));
+  if (unknown.length) throw new Error(`geowright: unknown where operator ${unknown.map((k) => `"${k}"`).join(', ')}; valid: ${WHERE_OPS.join(', ')} (a scalar value means eq)`);
+}
+
 export function testWhere(actual: unknown, want: unknown): boolean {
+  checkWhere(want);
   if (want === null || typeof want !== 'object') return (actual ?? null) === want;
   const op = want as WhereOp;
   const present = actual !== undefined && actual !== null;

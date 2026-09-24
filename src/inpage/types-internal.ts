@@ -73,4 +73,12 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    * Must never answer true for a surface that is merely slow.
    */
   neverIdle?(): boolean;
+  /**
+   * Optional: for a flat map that repeats the world horizontally. Rendered geometry comes back in one canonical copy of
+   * the world (lng in [-180, 180]), but what is drawn in view is the copy NEAREST the view: seen from lng 179.5, a point
+   * at lng -179.8 is drawn 0.7° east, not 359° west. Returns the world position of a coordinate in the copy nearest
+   * the view centre that `anchor` (a coordinate of the same geometry part) is drawn in — or undefined when that is the
+   * canonical copy, or the surface does not repeat (a globe, world copies off): then `worldFromCoord` applies.
+   */
+  nearestCopy?(anchor: number[]): ((coord: number[]) => W) | undefined;
 }

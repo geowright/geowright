@@ -1,4 +1,12 @@
 import type { Engine } from './engine';
+import type { EntityView } from './types';
+
+/** The accessible name of an entity's button. Avoids ": " and " #": both are YAML syntax and break toMatchAriaSnapshot templates. */
+export function buttonLabel(e: Pick<EntityView, 'layer' | 'id' | 'geometryType' | 'properties'>): string {
+  // nested values (objects, arrays) as JSON: String() prints "[object Object]"
+  const props = Object.entries(e.properties).slice(0, 5).map(([k, v]) => `${k}=${typeof v === 'object' && v !== null ? JSON.stringify(v) : v}`).join(', ');
+  return `${e.layer}${e.id !== undefined ? ' ' + e.id : ''} (${e.geometryType}) ${props}`;
+}
 
 /**
  * Accessibility mirror: the Flutter-web "semantics tree" idea applied to a map.
@@ -52,9 +60,7 @@ export function startMirror(engine: Engine<any>, mapId: string, opts: { max?: nu
         nodes.set(e.key, b);
         root.appendChild(b);
       }
-      const props = Object.entries(e.properties).slice(0, 5).map(([k, v]) => `${k}=${v}`).join(', ');
-      // Labels avoid ": " and " #": both are YAML syntax and break toMatchAriaSnapshot templates.
-      const label = `${e.layer}${e.id !== undefined ? ' ' + e.id : ''} (${e.geometryType}) ${props}`;
+      const label = buttonLabel(e);
       if (b.getAttribute('aria-label') !== label) b.setAttribute('aria-label', label);
       b.style.left = `${e.pixel!.x - 5}px`;
       b.style.top = `${e.pixel!.y - 5}px`;

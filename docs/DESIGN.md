@@ -177,7 +177,10 @@ on every retry:
    *data* feature (source, id, properties), not the rendered layer, so a foreign layer's label still
    occludes correctly. A feature that is rendered but invisible (opacity 0, a transparent color — see
    "Visibility" below) is likewise not counted as an occluder, on the reasoning that occlusion is
-   about what a person can see, not about which layer receives an event first.
+   about what a person can see, not about which layer receives an event first. The limit of this rule: what is
+   "at that pixel" comes from the map's hit test, which returns features only. A raster, image, video, canvas,
+   heatmap or hillshade layer drawn above the feature is never an occluder, even when it is opaque (see "Costs and
+   known limitations").
 5. **No DOM element covers the pixel** — a popup, a control, an overlay. Checked with
    `document.elementFromPoint`, so a marker or popup sitting exactly on a feature's best interior
    candidate correctly blocks that candidate and the search moves on to the next one.
@@ -855,6 +858,14 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   GeoJSON geometry, which was read as "no features", so nothing could be learnt from it. Fixed; the statistical
   confirmation under contention is still owed.)
 - Two id-less, property-identical shapes that visually touch on screen are still treated as a single feature.
+- Pixel-only layers (raster, image, video, canvas, heatmap, hillshade) never occlude a feature. Occlusion is decided
+  from the hit test, and the hit test returns features only, so an opaque image or raster layer drawn above a feature
+  (a loading veil, an opaque overlay) does not stop an action on it. Deciding it needs pixels: whether the feature's
+  own layer still changes the pixels at the aimed point with the overlay drawn. That is a pixel probe per action
+  (three renders, and MapLibre reloads the probed layer's source afterwards, so the feature can briefly vanish from
+  the very hit test that verifies the click). The contribution of the overlay alone is not enough either: a
+  translucent radar layer contributes pixels and hides nothing. Not done; a test marked as failing
+  (`tests/act.spec.ts`) turns green when it is.
 - The globe query workaround is a grid-based heuristic: an extrusion narrower than 16 px whose footprint centre is
   off-screen or on the far side can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
 - The version matrix covers the core on six versions; globe, terrain, extrusions, touch, drawing tools and the

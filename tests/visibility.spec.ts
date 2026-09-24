@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { geowright } from '../src/playwright';
 
 /**
  * "Rendered is not visible": MapLibre's queryRenderedFeatures also returns features that the style
@@ -161,5 +162,18 @@ test.describe('visibility', () => {
     const e = await expect(map).not.toHaveLayerPixels('no-such-layer', { at: { lng: 34.78, lat: 32.08 }, timeout: 800 }).then(() => null, (e: Error) => e);
     expect(e, '.not.toHaveLayerPixels passed for a layer that does not exist').not.toBeNull();
     expect(e?.message).toContain('layer "no-such-layer" does not exist');
+  });
+
+  test('the pixel probe of toBeVisibleOnMap honours the map-level ignoreLayers', async ({ map, page }) => {
+    // a translucent highlight drawn over parcel 106: the parcel shows through it, and the app declares the highlight
+    // a layer that never counts as an occluder
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('veil', { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[[34.79, 32.05], [34.81, 32.05], [34.81, 32.07], [34.79, 32.07], [34.79, 32.05]]] } } });
+      m.addLayer({ id: 'veil', type: 'fill', source: 'veil', paint: { 'fill-color': '#fff', 'fill-opacity': 0.3 } });
+    });
+    await map.waitForIdle();
+    const lenient = geowright(page, { ignoreLayers: ['veil'] });
+    await expect(lenient.feature({ layer: 'parcels', id: 106 })).toBeVisibleOnMap({ timeout: 3000 });
   });
 });

@@ -88,7 +88,7 @@ const api = {
   overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
   geometry: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).geometry(q)),
   compareGeometry: async (mapId: string, q: any, expected: any, tolerancePx: number) => (await engine(mapId).learnIdentity(q), engine(mapId).compareGeometry(q, expected, tolerancePx)),
-  pixelProbe: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).pixelProbe(q)),
+  pixelProbe: async (mapId: string, q: any, opts?: any) => (await engine(mapId).learnIdentity(q), engine(mapId).pixelProbe(q, opts)),
   /**
    * Pixel-only layers (raster, image, canvas, video, heatmap, hillshade): how much do the pixels at a location change when
    * the layer is not drawn? `ok: false` = no verdict could be reached (the matchers: inconclusive, ); a hidden layer
@@ -102,6 +102,8 @@ const api = {
     if (el.isConnected === false || el.clientWidth < 1 || el.clientHeight < 1) return { ok: false as const, message: el.isConnected === false ? 'map canvas is detached from the document; the map was removed or its container was detached' : `map canvas is ${el.clientWidth}x${el.clientHeight}` };
     const p = a.project(world);
     if (p.x < 0 || p.y < 0 || p.x > el.clientWidth || p.y > el.clientHeight) return { ok: false as const, message: 'that location is outside the viewport' };
+    // Its pixel shows something else — the near side of a globe, the ridge in front of it: no verdict about it.
+    if (a.isOnSurface?.(world) === false) return { ok: false as const, message: 'that location is not on the visible map surface (the far side of the globe, or hidden behind terrain or beyond the horizon)' };
     if (!info.visible) return { ok: true as const, diff: 0, surface: p, hidden: true };
     const diff = await a.pixelContribution?.(layer, p, radiusPx); // an AREA: imagery is often transparent at any one pixel
     return diff === undefined ? { ok: false as const, message: `this map cannot be probed (no WebGL context to read from, or no frame was rendered — a hidden tab?)` } : { ok: true as const, diff, surface: p };
