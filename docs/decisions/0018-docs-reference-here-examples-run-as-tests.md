@@ -1,8 +1,8 @@
 # 0018. Reference docs live with the code, and their examples run as tests
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-24
-- Decided by: Shai Sinai (to accept or reject)
+- Decided by: Shai Sinai
 - Supersedes: 0012
 
 ## Decision

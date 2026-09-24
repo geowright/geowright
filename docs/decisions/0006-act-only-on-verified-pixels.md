@@ -1,6 +1,6 @@
 # 0006. Act only on verified pixels
 
-- Status: Accepted
+- Status: Superseded by 0019
 - Date: 2026-09-20
 - Decided by: Shai Sinai
 

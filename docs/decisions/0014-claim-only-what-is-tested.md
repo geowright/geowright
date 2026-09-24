@@ -1,6 +1,6 @@
 # 0014. Claim only what is tested
 
-- Status: Accepted
+- Status: Superseded by 0017
 - Date: 2026-09-22
 - Decided by: Shai Sinai
 

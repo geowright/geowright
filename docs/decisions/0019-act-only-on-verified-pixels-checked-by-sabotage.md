@@ -1,8 +1,8 @@
 # 0019. Act only on verified pixels; the click-time check is held by sabotage specs
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-24
-- Decided by: Shai Sinai (to accept or reject)
+- Decided by: Shai Sinai
 - Supersedes: 0006
 
 ## Decision

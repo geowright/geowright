@@ -1,6 +1,6 @@
 # 0012. Reference docs live with the code; articles live on the site
 
-- Status: Accepted
+- Status: Superseded by 0018
 - Date: 2026-09-22
 - Decided by: Shai Sinai
 
