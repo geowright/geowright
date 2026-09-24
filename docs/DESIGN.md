@@ -215,8 +215,9 @@ snapshot lists whole pixels, and for shapes thinner than a pixel (a country sque
 four whole pixels around a candidate are tried as well. The general lesson: verify the pixel the application will see,
 not the pixel you computed.
 
-**Targets that never stop moving.** The two-frame stability check refuses a perpetually animated feature for ever —
-correct, and stricter than a person, who can click a slowly moving dot. `{ moving: 'allow' }` drops the two checks a
+**Targets that never stop moving.** The two-frame stability check refuses a perpetually animated feature for ever on a
+page that keeps drawing (a page that stalls is under "What is still wrong") — correct, and stricter than a person, who
+can click a slowly moving dot. `{ moving: 'allow' }` drops the two checks a
 moving target cannot pass (map at rest, same pixel two frames running) and keeps every other one; what protects against
 acting on the wrong thing is the click-time verification, which swallows a late press before the application sees it.
 Measured before designing: on a light page the freshest pixel is good enough (a 9 px dot at up to 200 px/s: 20 of 20
@@ -825,6 +826,13 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
 
 - `hover({ moving: 'allow' })` is only dependable when a frame of the page is short compared with the time the target
   spends under one pixel; `click` holds up under contention, hover does not (a `mousemove` is frame-aligned).
+- On a page that stalls, the default refusal of a moving target is not absolute. When the renderer (and, for a GeoJSON
+  source re-set every frame, its worker) is starved, two consecutive frames can show a perpetually moving feature at the
+  same pixel; the stability check then passes and an action goes out without `moving: 'allow'`. Seen once, on Linux in
+  a container at a load of about 30 with other CI jobs on the machine: `hover()` on MapLibre's "animate a point" was
+  delivered onto the pixel where the point was drawn at that instant. Nothing else was hovered, and `click` stays
+  protected by the click-time check, but a `hover` has no such check. "Same pixel over two frames" is too weak a
+  definition of "at rest" for a source that changes every frame; a stronger one is planned.
 - A target moving faster than roughly its own diameter per input latency cannot be clicked at all; the action times
   out honestly (every late press is swallowed), it does not mis-click.
 - Identity disambiguation by asking the source only works for GeoJSON sources; a vector-tile source cannot be asked.

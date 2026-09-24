@@ -295,7 +295,10 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
 - **Tiled sources:** the browser cannot know what is off-screen, and the failure messages say so.
 - **On a globe** MapLibre's own viewport-wide query is wrong; the workaround is a grid: an extrusion narrower than 16 px whose
   footprint centre is off-screen can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
-- **`hover` on a moving target** is only dependable when frames are short; `click` holds up.
+- **`hover` on a moving target** is only dependable when frames are short; `click` holds up. And when the page stalls
+  (a starved renderer draws a perpetually moving feature at the same pixel two frames running), the default refusal of a
+  moving target can let a `hover` through, onto where the feature is drawn at that instant. A `click` is still verified
+  when the press arrives.
 - The injected script is ~135 KB (it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
 
 The full list, with costs measured on a dense map: [DESIGN — Costs and known limitations](docs/DESIGN.md#costs-and-known-limitations).
