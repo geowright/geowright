@@ -13,6 +13,9 @@ export default defineConfig({
     outDir: 'dist',
     sourcemap: false,
     emptyOutDir: true,
+    // dist/ is committed and redistributed: ship the license text of every package the build bundles next to it
+    // (decision 0015; `node wild/scripts/apps.mjs check` fails without it).
+    license: { fileName: 'THIRD_PARTY_LICENSES.md' },
     rollupOptions: {
       input: {
         filter: resolve(__dirname, 'filter/index.html'),

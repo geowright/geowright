@@ -40,7 +40,12 @@ dist/vendor/maplibre-gl.css
 dist/vendor/maplibre-gl.LICENSE.txt
 dist/vendor/pmtiles.js
 dist/vendor/fflate.LICENSE
+dist/THIRD_PARTY_LICENSES.md
 ```
+
+`dist/THIRD_PARTY_LICENSES.md` holds the license texts of all three packages, in the format Vite's `build.license`
+writes for the other wild apps (`node wild/scripts/apps.mjs check` requires it). The `pmtiles` npm package ships no
+license file; its text there is this directory's `LICENSE`, the PMTiles repository's own.
 
 The HTML deliberately retains the upstream unpkg URLs. Tests can route those exact URLs to the app-local files using
 absolute paths; no CDN request is allowed to escape the harness. No Playwright test or server is run by this build.
@@ -49,7 +54,8 @@ absolute paths; no CDN request is allowed to escape the harness. No Playwright t
 
 - `pmtiles@4.5.0`: BSD-3-Clause; `fflate`: MIT.
 - `maplibre-gl@5.13.0`: BSD-3-Clause and MapLibre/Mapbox dependency notices.
-- The build keeps MapLibre's full `LICENSE.txt` and bundled `fflate`'s MIT `LICENSE` beside the browser assets.
+- The build keeps MapLibre's full `LICENSE.txt` and bundled `fflate`'s MIT `LICENSE` beside the browser assets, and
+  writes all three packages' texts (PMTiles' own BSD-3-Clause included) to `dist/THIRD_PARTY_LICENSES.md`.
 - Installed transitive packages were checked from their package metadata: MIT, BSD-2/3-Clause, ISC, and
   `(MIT OR Apache-2.0)` only. No CC-BY, GPL, LGPL, AGPL, MPL, EPL, CDDL, or SSPL package was found.
 - `npm install` resolved 34 packages and reported one audit advisory; no audit fix was run.

@@ -6,8 +6,11 @@
 //       a row in wild/fixtures/SOURCES.md and tests/wild/<name>.spec.ts. Every TODO(new-app) is yours to fill in.
 //   node wild/scripts/apps.mjs check
 //       Every wild/apps/<name>/ keeps a license file on the allowlist, has an UPSTREAM.md naming the upstream
-//       repository, a full commit SHA and the hook line, and is opened by a spec in tests/wild/; wild/maplibre-examples/
-//       keeps its license; no TODO(new-app) is left anywhere. Run by tests/unit/wild-apps.unit.spec.ts.
+//       repository, a full commit SHA and the hook line, and is opened by a spec in tests/wild/; its built dist/ ships
+//       dist/THIRD_PARTY_LICENSES.md with a section and a license text for each package it bundles;
+//       wild/maplibre-examples/ keeps its license; every file under wild/fixtures/ is named in SOURCES.md or a
+//       sources/*.md record (by path, by name, or by a directory it is in); no TODO(new-app) is left anywhere.
+//       Run by tests/unit/wild-apps.unit.spec.ts.
 //
 // No network, no dependencies. Paths are relative to this file, so a scratch copy of the tree works the same.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
@@ -16,6 +19,10 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TODO = 'TODO(new-app)';
+// What a vendored app's dist/ must carry: the license text of everything its build bundles (decision 0015). Vite writes
+// it with `build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } }`; a build that only copies files writes the same
+// format itself (wild/apps/pmtiles/scripts/build.mjs): one `## <package> - <version>` section per package, text below.
+const NOTICES = 'dist/THIRD_PARTY_LICENSES.md';
 const ALLOWLIST = 'MIT, BSD, ISC, Apache-2.0, CC0, Unlicense (and OFL for fonts)';
 
 // Recognised by the license text itself, not by what anyone says it is. Whitespace is normalised first.
@@ -106,7 +113,8 @@ function newApp([name, url, commit, ...licenses]) {
 Next (wild/README.md, "Bring your app"):
   1. copy the app's files from upstream @ ${commit.slice(0, 12)} into ${rel(app)}/, unchanged
   2. add the ONE hook line; record it, and every vendored path, in UPSTREAM.md
-  3. add package.json + build config, build into ${rel(app)}/dist/ and commit dist/ (served at /apps/${name}/)
+  3. add package.json + build config, build into ${rel(app)}/dist/ and commit dist/ (served at /apps/${name}/);
+     the build writes ${NOTICES} (Vite: build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } })
   4. run the spec: every request it has no fixture for fails the test, named — answer each one
   5. make the spec fail the way the issue says, then fix the LIBRARY, never the app
   \`node wild/scripts/apps.mjs check\` (and the unit suite) fails until every ${TODO} is gone.`);
@@ -137,8 +145,11 @@ function check() {
     if (!/`[0-9a-f]{40}`/.test(text)) problems.push(`${rel(up)}: names no full upstream commit SHA in backticks`);
     if (!text.includes('__geowright_maps')) problems.push(`${rel(up)}: does not show the one added hook line`);
     if (!specText.includes(`/apps/${name}/`)) problems.push(`${rel(dir)}/: no spec in tests/wild/ opens /apps/${name}/`);
+    noticesOf(dir, problems);
   }
   licensesOf(join(ROOT, 'wild/maplibre-examples'));
+
+  fixturesRecorded(problems);
 
   const scaffolded = [
     ...readdirSync(apps).map((n) => join(apps, n, 'UPSTREAM.md')),
@@ -149,7 +160,45 @@ function check() {
   for (const p of scaffolded) if (existsSync(p) && read(p).includes(TODO)) problems.push(`${rel(p)}: still has ${TODO} placeholders`);
 
   if (problems.length) fail(problems);
-  console.log('wild apps: licenses on the allowlist, upstream pinned, hook recorded, each opened by a spec');
+  console.log('wild apps: licenses on the allowlist, upstream pinned, hook recorded, each opened by a spec, dist/ notices shipped');
+}
+
+/**
+ * Every fixture file has a provenance and license row: its path or file name, or a directory it is in (as `dir/…`),
+ * appears in wild/fixtures/SOURCES.md or wild/fixtures/sources/*.md. License and notices files are records themselves.
+ */
+function fixturesRecorded(problems) {
+  const fixtures = join(ROOT, 'wild/fixtures');
+  const sources = join(fixtures, 'sources');
+  const records = [join(fixtures, 'SOURCES.md'), ...(existsSync(sources) ? readdirSync(sources).map((f) => join(sources, f)) : [])];
+  const text = records.filter(existsSync).map(read).join('\n');
+  const walk = (d) => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : [join(d, f)]));
+  for (const file of walk(fixtures)) {
+    const r = relative(fixtures, file).split('\\').join('/');
+    const name = basename(file);
+    if (records.includes(file) || isLicenseFile(name) || name === 'THIRD_PARTY_LICENSES.md' || name === '.DS_Store') continue;
+    const dirs = [];
+    for (let d = r.split('/').slice(0, -1); d.length; d.pop()) dirs.push(`\`${d.join('/')}/`);
+    if (text.includes(r) || text.includes(name) || dirs.some((d) => text.includes(d))) continue;
+    problems.push(`wild/fixtures/${r}: not named in wild/fixtures/SOURCES.md or a sources/*.md record (origin, license)`);
+  }
+}
+
+/** dist/ redistributes third-party code, so it ships their notices: a section with a license text per bundled package. */
+function noticesOf(dir, problems) {
+  const file = join(dir, NOTICES);
+  if (!existsSync(file)) {
+    problems.push(`${rel(file)}: missing. dist/ redistributes what the build bundles, so it must ship their license texts (Vite: build.license; see wild/README.md, "Bring your app")`);
+    return;
+  }
+  const sections = read(file).split(/^## /m).slice(1).map((s) => {
+    const [head, ...body] = s.split('\n');
+    return { head: head.trim(), text: body.join('\n').trim() };
+  });
+  if (!sections.length) problems.push(`${rel(file)}: lists no package (one "## <package> - <version>" section each, license text below)`);
+  for (const s of sections) if (!s.text) problems.push(`${rel(file)}: "${s.head}" has no license text (the package ships no license file: add its text to the build)`);
+  // Not checked: that every package.json dependency is listed. A dependency whose module only re-exports another
+  // package (react-map-gl/maplibre re-exports @vis.gl/react-maplibre) contributes no code, and Vite rightly omits it.
 }
 
 function fail(lines, code = 1) {
@@ -186,8 +235,8 @@ ${TODO}: where the line is and why there, as a diff against upstream. Exactly on
 
 ## Build
 
-${TODO}: the commands (\`npm ci && npm run build\` here), what lands in \`dist/\`, and the map library, wrapper and
-versions it resolves.
+${TODO}: the commands (\`npm ci && npm run build\` here), what lands in \`dist/\` (including
+\`${NOTICES}\`, the license texts of what it bundles), and the map library, wrapper and versions it resolves.
 
 ## Dependencies and license audit
 

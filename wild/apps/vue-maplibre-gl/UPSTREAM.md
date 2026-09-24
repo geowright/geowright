@@ -123,7 +123,8 @@ cd wild/apps/vue-maplibre-gl && npm install && npm run build
 ```
 
 `npm run build` runs `vite build`. `dist/` is committed (see the root `.gitignore` exception) so
-tests never need a second `npm install`/build.
+tests never need a second `npm install`/build. `build.license` makes Vite write `dist/THIRD_PARTY_LICENSES.md`: the license text of every npm package the build bundles
+(`node wild/scripts/apps.mjs check` fails without it).
 
 ## Findings worth recording
 

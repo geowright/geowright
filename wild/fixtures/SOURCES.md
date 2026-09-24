@@ -17,7 +17,7 @@ More fixtures, one record per app that needed them (`sources/*.md`, same columns
 | `sources/center-the-map-on-a-clicked-symbol.md` | `custom_marker.png` | BSD-3 (maplibre-gl-js repo asset) |
 | `sources/update-a-feature-in-realtime.md` | `hike.geojson` (provenance beyond the repo not traced), `vendor/d3@3/` | BSD-3 repo asset; d3 v3: BSD-3 (LICENSE kept) |
 | `sources/show-polygon-information-on-click.md` | `ne_110m_admin_1_states_provinces_shp.geojson` | Natural Earth — public domain |
-| `sources/measure-distances.md` | `vendor/turf@7/turf.min.js` (also served, wrapped as an ES module, for the mapbox-gl-draw example's `esm.sh` import) | MIT (LICENSE kept) |
+| `sources/measure-distances.md` | `vendor/turf@7/turf.min.js` (also served, wrapped as an ES module, for the mapbox-gl-draw example's `esm.sh` import) | Turf: MIT (LICENSE kept). The bundle also contains JSTS, `(EDL-1.0 OR EPL-1.0)`, used under EDL-1.0 (BSD-3-Clause text), and MIT / ISC / BSD-2 / BSD-3 / Unlicense dependencies: every text in `vendor/turf@7/THIRD_PARTY_LICENSES.md` |
 | `sources/draw-geometries-with-terra-draw.md` | `vendor/maplibre-gl-terradraw@1.0.1/` (UMD + CSS) | MIT (LICENSE kept) |
 | `sources/react-map-gl.md` | `react-map-gl/us-income.geojson`, `react-map-gl/counties.KS-NE-OK.json` (trimmed from 6 MB) | MIT ×2 (LICENSE files kept) |
 | `sources/deck-gl.md` | deck.gl app's CARTO style and POI data requests, answered by generated test data | Synthetic data, no copied third-party asset |
@@ -28,7 +28,7 @@ that asks unpkg for 1.5.0; `maplibre-gl.css` 6.10.0 (BSD-3) for svelte-maplibre-
 
 Generated at test time, not files: raster tiles (`tests/tile-png.ts`), sprites and road shields (`tests/wild/png.ts`), the
 synthetic "bright" / CARTO / MapTiler-streets basemaps with their city and surrounding region (`tests/wild/basemap.ts`), the synthetic Terrarium DEM (`tests/wild/terrain.ts`). Glyphs: Noto Sans Regular 0–255
-(OFL) from `demo/public/glyphs`.
+(OFL, notice and text in `demo/public/glyphs/OFL.txt`) from `demo/public/glyphs`.
 
 NOT committable, and therefore substituted or skipped (checked 2026-09-20): OpenFreeMap / any
 OSM-derived tiles (ODbL) and the OSM Bright design (CC-BY); MapTiler tiles (proprietary, key); OSM
