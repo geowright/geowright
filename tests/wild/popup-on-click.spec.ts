@@ -58,9 +58,8 @@ test.describe('wild: display-a-popup-on-click', () => {
   );
 
   test('snapshot under a tight budget: the basemap gives up its rows first, the app layer keeps its own', async ({ wild }) => {
-    // KNOWN LIBRARY BUG, exposed when the synthetic basemap became production-dense (an earlier change): see the minimal spec
-    // "KNOWN BUG — snapshot budget" in dense-basemap.spec.ts. Remove this line when it is fixed.
-    test.fail(true, 'snapshot budget: basemap sections crowd out the app layer rows on a production-sized basemap');
+    // Was a known library bug (an earlier change), exposed when the synthetic basemap became production-dense (an earlier change): see
+    // "snapshot budget" in dense-basemap.spec.ts.
     const map = await wild.open(example('display-a-popup-on-click'), { routes });
     const snap = await map.snapshot({ maxChars: 3900 });
     expect(snap.length).toBeLessThanOrEqual(3900);

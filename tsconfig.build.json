@@ -10,6 +10,7 @@
   },
   "include": [
     "src/playwright",
+    "src/app.ts",
     "src/inpage/types.ts"
   ]
 }
