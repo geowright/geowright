@@ -38,6 +38,9 @@ Not published; versions start when the package does. Until then this lists what 
   against the API and run against the demo app by the normal suite (`tests/docs/`); a block that cannot run says why
   in the Markdown (`<!-- example: skip (reason) -->`). The README examples that did not run as written (undefined
   variables, steps in an order the map could not be in, query objects that were not code) now do.
+- **Bring your app:** an app geowright does not work on can become a `wild/` app and a library fix, along a written
+  path (`wild/README.md`, "Bring your app"); the "app does not work" issue template asks for what vendoring needs, and
+  `node wild/scripts/apps.mjs new|check` scaffolds an app and refuses a license outside the allowlist.
 - **Peer dependency**: `@playwright/test` `>=1.49.0` (was `>=1.50.0`, never tested): a CI job (`playwright-floor`)
   runs typecheck and the full suite on exactly the version the range names
   ([0014](docs/decisions/0014-claim-only-what-is-tested.md)). Below 1.49 the suite's `toMatchAriaSnapshot` is missing,

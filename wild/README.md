@@ -25,3 +25,52 @@ no network in tests: an unanswered external request aborts and fails the test, l
 `tests/wild/`. Basemaps: `DEMOTILES` (recorded, BSD-3 + Natural Earth) and `brightBasemap()` (SYNTHETIC
 stand-in for OpenFreeMap "bright", whose OSM data / CC-BY design cannot be committed) — see
 `tests/wild/harness.ts` and `tests/wild/basemap.ts`.
+
+`node wild/scripts/apps.mjs check` (run by the unit suite, `tests/unit/wild-apps.unit.spec.ts`) holds every app here to
+the rules below: a license file on the allowlist, an `UPSTREAM.md` with the repository, the full commit and the hook
+line, and a spec that opens it.
+
+## Bring your app
+
+From "my app does not work with geowright" to "it runs in this suite, and the library is fixed". It starts with an
+issue from the "My map app does not work" template, which asks for everything below.
+
+1. **Triage.** Is the map library a supported version (README, "Supported map library versions")? Does
+   `docs/RECIPES.md` already cover it ("The map never becomes idle", the wrapper hooks)? Can the failure be shown on the
+   demo app or on an app already in `wild/`? If so, fix it there — an app is vendored for a failure only it shows. Ask
+   in the issue for whatever is missing: the commit, the failing call, what it fetches.
+2. **The license.** Read the repository's license file at that commit — the file, not the badge. It must be MIT, BSD,
+   ISC, Apache-2.0, CC0 or Unlicense ([0008](../docs/decisions/0008-third-party-license-allowlist.md)), and so must
+   everything the app's build bundles into `dist/`. Anything else: see "When the license is not on the list" below.
+3. **Scaffold.** `node wild/scripts/apps.mjs new <name> <repository-url> <full-commit-sha> <path/to/upstream/LICENSE>`
+   reads the license text and refuses anything off the list, before writing a byte. Then it writes
+   the license file (byte-identical, same name) and `UPSTREAM.md` in `apps/<name>/`, `fixtures/sources/<name>.md`, a row in
+   `fixtures/SOURCES.md` and `tests/wild/<name>.spec.ts`, and never overwrites. Every `TODO(new-app)` in them is a
+   question to answer; `check` (and so the unit suite) fails until none is left.
+4. **Vendor, plus ONE line.** Copy the app's files from that commit into `apps/<name>/` unchanged — as few as the
+   failure needs: one example, not the monorepo. Add exactly one line, the hook
+   ([0010](../docs/decisions/0010-wild-apps-not-bent.md)). Our own build files (`package.json`, the bundler config,
+   an `index.html` if upstream has none) sit beside them; build with `npm ci && npm run build` and commit `dist/`, which
+   `serve.mjs` serves at `/apps/<name>/`. `UPSTREAM.md` lists every vendored path and shows the one line as a diff.
+5. **Fixtures for everything it fetches.** Run the spec
+   (`npx playwright test tests/wild/<name>.spec.ts`): the harness aborts every request to the outside and fails the
+   test naming each URL. Answer each one with a route, from what exists first — `DEMOTILES`, `glyphs()`,
+   `rasterTiles()` (`tests/wild/harness.ts`), the synthetic basemaps (`tests/wild/basemap.ts`) — then with generated
+   data, or a permissively licensed file kept with its license. Never OpenStreetMap-derived data (ODbL), CC-BY assets,
+   or vendor tiles; an API key stays in the app's source and the route answers it. One row per fixture in
+   `fixtures/sources/<name>.md`.
+6. **The failing spec first.** Write the geowright call from the issue into the spec and watch it fail the way the
+   report says, before `src/` changes. That failure is the evidence the fix is measured against.
+7. **Fix the library, never the app.** When the app is awkward to test, geowright changes, or the friction is
+   written down in the issue and `UPSTREAM.md`. The spec passes; a change to waiting, input or timing also passes
+   `--repeat-each=20`; `node wild/scripts/apps.mjs check` passes; the issue gets the report (AGENTS.md, *What "done" means*).
+
+### When the license is not on the list
+
+GPL, LGPL, AGPL, MPL, CC-BY in any form, ODbL, a dual license with a non-permissive option, or no license at all
+(which means all rights reserved): the app cannot be vendored, in whole or in part, and the helper refuses it. The
+report still counts. Help happens in the issue — the snapshot, the failing call, the fix if it is in geowright. If
+the failure can be reproduced by a page written from scratch (on the demo app or a new first-party page under
+`tests/`, never a copy of their code), that page carries the failing spec instead. What made the app hard to test is
+written down in the issue, so the friction is not lost with the app. A dual license whose every option is on the list
+(`MIT OR Apache-2.0`, as `apps/svelte-maplibre-gl/`) is fine: keep both files.

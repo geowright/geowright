@@ -3,7 +3,8 @@
 ## Before you start
 - **Open an issue first** for anything bigger than a fix to an obvious bug, and wait for a go-ahead: the
   maintainer works on this in limited time, and a pull request nobody asked for may be closed unreviewed.
-  An app that geowright does not work on is always welcome — use the "app does not work" issue template.
+  An app that geowright does not work on is always welcome — use the "app does not work" issue template. The path
+  from there to a vendored app in the test suite and a fix is [wild/README.md, "Bring your app"](wild/README.md#bring-your-app).
 - Direction is in [ROADMAP.md](ROADMAP.md); settled questions are in [docs/decisions/](docs/decisions/).
   To argue with a decision, bring new evidence in an issue — not a pull request that quietly undoes it.
 - **AI-assisted contributions are welcome, under the same bar.** You are the author: you have read every
