@@ -32,13 +32,14 @@ as written (it adds types only).
   mapbox-gl-draw.
 - **Actionability**: before any input, the target must be the only match, painted, still, under the pointer, the
   topmost visible hit, and not covered by a DOM element. For `click`, `dblclick`, `rightClick` and `tap`, the hit test
-  runs again when the press arrives, and a late press is swallowed and retried. A press that reached the app is never
+  runs again when the press arrives and must find the same feature (not a look-alike that slid under the pointer); a
+  late press is swallowed, a tap's touch events included, and retried. A press that reached the app is never
   sent again: not when the app re-creates its map in the click handler, not when the click navigates. Options: `force`,
   `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for a feature that never stops moving, on `click`,
   `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never clicks the wrong
   thing). `dragTo`, `dragBy` and `lngLat` refuse `moving`, in their types and at run time: they have no check when the
   input arrives.
-  Works on rotated, pitched, globe and terrain maps. A location on the far side of the globe or behind a mountain is
+  Works on rotated, pitched, globe and terrain maps, and inside a container scaled with CSS `transform: scale()`. A location on the far side of the globe or behind a mountain is
   an error, never a click on something else.
 - **When it fails, it says what WAS on the map**: the features per layer with their properties, the values of the
   property you asked about, and the reason. Reasons: not rendered, layer hidden, off-screen, occluded (naming the

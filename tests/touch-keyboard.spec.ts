@@ -17,6 +17,28 @@ test.describe('touch', () => {
     await expect(map).not.toHavePopup();
   });
 
+  // a tap swallowed by the click-time check used to let its touchstart/touchend through: the app (and MapLibre's
+  // double-tap recogniser) saw two taps close together — the rejected one and the retry.
+  test('a tap rejected by click-time verification delivers no touch events to the app', async ({ map, page }) => {
+    const zoom = (await map.viewState()).zoom;
+    await page.evaluate(() => {
+      const w = window as any;
+      const m = w.__geowright_maps.main;
+      w.__touchstarts = 0;
+      m.getCanvasContainer().addEventListener('touchstart', () => w.__touchstarts++);
+      // on the first real press, the app moves the map 20px sideways: the target is no longer under the finger
+      window.addEventListener('pointerdown', () => {
+        const c = m.project(m.getCenter());
+        m.jumpTo({ center: m.unproject([c.x + 20, c.y]) });
+      }, { capture: true, once: true });
+    });
+    await map.feature({ layer: 'alerts', id: 2 }).tap();
+    expect(await page.evaluate(() => (window as any).__touchstarts), 'touchstarts the app received').toBe(1);
+    await map.waitForIdle();
+    expect((await map.viewState()).zoom, 'no double-tap zoom').toBeCloseTo(zoom, 5);
+    await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 2 } }); // the retried tap was a tap, not the end of a double tap
+  });
+
   test('pinch zooms around the fingers, two-finger rotate turns the map', async ({ map }) => {
     const before = await map.viewState();
     await map.pinchAt({ lng: 34.78, lat: 32.08 }, { scale: 2 });

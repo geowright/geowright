@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { geowright } from '../src/playwright';
 
 /** ACT gap: actions that originate ON the map, with real mouse input at projected pixels. */
 test.describe('act gap', () => {
@@ -136,6 +137,57 @@ test.describe('act gap', () => {
     await map.feature({ layer: 'alerts', id: 1 }).click();
     expect(await page.evaluate(() => (window as any).__sabotaged)).toBe(1);
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1'); // right target, after retry
+  });
+
+  // the click-time check used to accept any hit that matched the QUERY, so a property-identical, id-less
+  // neighbour that slid under the pointer was clicked "successfully". It must be a piece of the resolved target.
+  test('click-time verification: a look-alike neighbour that slid under the pointer is not accepted', async ({ map, page }) => {
+    const pts = await page.evaluate(() => {
+      const w = window as any;
+      const m = w.__geowright_maps.main;
+      const c = m.project(m.getCenter());
+      const at = (dx: number) => m.unproject([c.x + dx, c.y]).toArray();
+      const coords = [at(-40), at(0), at(40)];
+      m.addSource('look', { type: 'geojson', data: { type: 'FeatureCollection', features: coords.map((co: number[]) => ({ type: 'Feature', properties: { icon: 'music' }, geometry: { type: 'Point', coordinates: co } })) } });
+      m.addLayer({ id: 'look', type: 'circle', source: 'look', paint: { 'circle-radius': 8, 'circle-color': '#00f' } });
+      w.__lookClicks = [];
+      m.on('click', 'look', (e: any) => w.__lookClicks.push(e.features[0].geometry.coordinates));
+      return { coords, shiftTo: at(40) };
+    });
+    await expect(map.features({ layer: 'look' })).toHaveFeatureCount(3);
+    await page.evaluate((shiftTo) => {
+      // on the first real mousemove (the aim), the app pans exactly one spacing: the east look-alike slides under the pointer
+      window.addEventListener('mousemove', () => (window as any).__geowright_maps.main.jumpTo({ center: shiftTo }), { capture: true, once: true });
+    }, pts.shiftTo);
+    await map.feature({ layer: 'look', at: { lng: pts.coords[1][0], lat: pts.coords[1][1] } }).click({ ignoreLayers: ['alerts', 'alerts-labels', 'parcels', 'roads'] });
+    const clicks: number[][] = await page.evaluate(() => (window as any).__lookClicks);
+    expect(clicks.length).toBe(1);
+    expect(clicks[0][0], `the app received a click on ${JSON.stringify(clicks[0])}, not the middle point ${JSON.stringify(pts.coords[1])}`).toBeCloseTo(pts.coords[1][0], 5);
+  });
+
+  // MapLibre divides pointer offsets by the CSS scale of its canvas (rect.width / offsetWidth); geowright used to
+  // point at rect.left + surface x, which under scale(0.5) is another place — and the click-time check agreed with it.
+  test('a map under a CSS transform: scale() is clicked on the target', async ({ map, page }) => {
+    await page.addStyleTag({ content: '#map { transform: scale(0.5); transform-origin: 0 0; }' });
+    await page.evaluate(() => (window as any).__geowright_maps.main.resize());
+    await map.waitForIdle();
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 5000 }).then(() => null, (e: Error) => e);
+    const popupId = await page.getByTestId('popup').getAttribute('data-id', { timeout: 1000 }).catch(() => null);
+    expect({ error: e?.message.split('\n')[0] ?? null, popupId }).toEqual({ error: null, popupId: '1' });
+    // a location, too (clientPoint), and the way back (worldAt)
+    const two = await map.feature({ layer: 'alerts', id: 2 }).lngLat();
+    await map.clickAt(two);
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '2');
+    const back = await map.lngLatAt(await map.clientPoint(two));
+    expect(back.lng).toBeCloseTo(two.lng, 4);
+    expect(back.lat).toBeCloseTo(two.lat, 4);
+  });
+
+  // A15: a map-level ignoreLayers that lists the target's own layer made the target impossible to act on.
+  test("ignoreLayers never hides the target's own layer", async ({ map, page }) => {
+    const ignoring = geowright(page, { mapId: map.mapId, ignoreLayers: ['alerts'] }); // the map fixture has loaded the page
+    await ignoring.feature({ layer: 'alerts', id: 1 }).click({ timeout: 3000 });
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
   });
 
   // the click-time check is armed in the page; an app that re-creates its map in the click handler used to make

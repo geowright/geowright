@@ -225,7 +225,7 @@ export class Engine<W = unknown> {
     const f = pieces[0];
     const size = this.surfaceSize();
     const best = this.candidates(pieces, size)[0];
-    const rect = this.adapter.surface().getBoundingClientRect();
+    const frame = this.frame();
     const vis = this.visibility(f);
     return {
       visible: vis.visible,
@@ -235,7 +235,7 @@ export class Engine<W = unknown> {
       properties: f.properties,
       geometryType: f.geometry.type,
       pixel: best && round(best),
-      client: best && round({ x: rect.left + best.x, y: rect.top + best.y }),
+      client: best && round(toClient(frame, best)),
       world: best && this.adapter.unproject(best),
       state: f.state && Object.keys(f.state).length ? f.state : undefined,
     };
@@ -321,16 +321,16 @@ export class Engine<W = unknown> {
     const velocity = { x: v2.x + (acc.x * d2) / 2, y: v2.y + (acc.y * d2) / 2 }; // at the time of the last look
     const lead = opts.leadMs ?? 0;
     let surface = { x: b.r.surface.x + velocity.x * lead + (acc.x * lead * lead) / 2, y: b.r.surface.y + velocity.y * lead + (acc.y * lead * lead) / 2 };
-    const rect = this.adapter.surface().getBoundingClientRect();
+    const frame = this.frame();
     const size = this.surfaceSize();
     // Where it WILL be cannot be hit-tested now; it must at least be a pixel of the map that a pointer can reach.
-    const reachable = surface.x >= 2 && surface.y >= 2 && surface.x <= size.w - 2 && surface.y <= size.h - 2 && topElementAt(rect.left + surface.x, rect.top + surface.y) === this.adapter.surface();
+    const reachable = surface.x >= 2 && surface.y >= 2 && surface.x <= size.w - 2 && surface.y <= size.h - 2 && topElementAt(toClient(frame, surface).x, toClient(frame, surface).y) === this.adapter.surface();
     if (!reachable) surface = b.r.surface;
     const speed = Math.hypot(velocity.x, velocity.y) * 1000;
     return {
       ...b.r,
       surface: round(surface),
-      client: { x: Math.round(rect.left + surface.x), y: Math.round(rect.top + surface.y) },
+      client: round(toClient(frame, surface)),
       velocity,
       why: `${b.r.why}; moving: 'allow' — target moves at ${Math.round(speed)}px/s, aimed ${Math.round(reachable ? lead : 0)}ms ahead of where it was drawn; the real event is verified when it arrives`,
     };
@@ -347,8 +347,9 @@ export class Engine<W = unknown> {
     if (r.top < 0 || r.left < 0 || r.bottom > window.innerHeight || r.right > window.innerWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   }
 
-  private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions): ActionPointResult {
-    if (this.adapter.surface().isConnected !== false) this.scrollIntoView();
+  /** `scroll: false` inside an input event handler: the page must not scroll under an event being delivered (A21). */
+  private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions, scroll = true): ActionPointResult {
+    if (scroll && this.adapter.surface().isConnected !== false) this.scrollIntoView();
     const problem = this.surfaceProblem();
     if (problem) return fail('offscreen', problem);
     const size = this.surfaceSize();
@@ -374,8 +375,8 @@ export class Engine<W = unknown> {
     const cands = this.candidates(pieces, size, stats);
     if (cands.length === 0) return fail('offscreen', 'feature is rendered but no part of it is inside the viewport');
 
-    const ignore = new Set(opts.ignoreLayers ?? []);
-    const rect = this.adapter.surface().getBoundingClientRect();
+    const ignore = this.ignoring(opts, pieces);
+    const frame = this.frame();
     let occluder: RenderedFeature | undefined;
     let domCover: Element | undefined;
     const skipped = { miss: 0, occluded: 0, dom: 0, offview: 0 };
@@ -386,7 +387,7 @@ export class Engine<W = unknown> {
     // ran between the two, we said "the building is on top" and MapLibre said "the label is". Snap first, then verify.
     // A shape thinner than a pixel (a country squeezed against the limb of a globe) may contain the candidate but not
     // its nearest whole pixel: the four whole pixels around it are tried too, each verified like any other candidate.
-    const whole = wholePixels(cands, rect);
+    const whole = wholePixels(cands, frame);
     for (const [i, c] of whole.entries()) {
       // Bounded: a big shape that is almost entirely under another layer has thousands of covered
       // candidates (a country under the app's own polygons: 25,000, ~0.4ms each, twice per action).
@@ -404,7 +405,7 @@ export class Engine<W = unknown> {
         skipped.occluded++;
         continue;
       }
-      const client = { x: rect.left + c.x, y: rect.top + c.y };
+      const client = toClient(frame, c);
       if (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight) {
         skipped.offview++; // the map is bigger than the window: this part of it cannot be reached by a pointer
         continue;
@@ -487,6 +488,22 @@ export class Engine<W = unknown> {
     return { w: el.clientWidth, h: el.clientHeight };
   }
 
+  /** client ⇄ surface pixels for this map, now (see clientFrame: a CSS-scaled map is not just offset). */
+  private frame(): ClientFrame {
+    return clientFrame(this.adapter.surface());
+  }
+
+  /**
+   * The layers to look through when hit-testing THIS target: the ones asked to be ignored, except its own. A map-level
+   * `ignoreLayers` that lists the target's own layer used to make it impossible to act on, with "no candidate pixel
+   * hit-tests back to it" as the only explanation (A15): nobody means "click it, but look through it".
+   */
+  private ignoring(opts: ActionPointOptions, pieces: RenderedFeature[]): Set<string> {
+    const ignore = new Set(opts.ignoreLayers ?? []);
+    ignore.delete(pieces[0].layer);
+    return ignore;
+  }
+
   /**
    * Ground-truth visibility: do the pixels at the feature's action point change when its layer is
    * not drawn? Catches what paint evaluation cannot (transparent icon image, colour identical to
@@ -505,19 +522,16 @@ export class Engine<W = unknown> {
    * classified the same way `actionPoint` classifies them, plus the asked-for location if any.
    */
   debugMarks(q: FeatureQuery, opts: ActionPointOptions = {}): DebugMark[] {
-    const rect = this.adapter.surface().getBoundingClientRect();
+    const frame = this.frame();
     const size = this.surfaceSize();
-    const ignore = new Set(opts.ignoreLayers ?? []);
     const marks: DebugMark[] = [];
-    if (q.at) {
-      const p = this.adapter.project(q.at as W);
-      marks.push({ x: rect.left + p.x, y: rect.top + p.y, kind: 'target', label: 'at' });
-    }
+    if (q.at) marks.push({ ...toClient(frame, this.adapter.project(q.at as W)), kind: 'target', label: 'at' });
     for (const pieces of [...this.group(q).values()].slice(0, 8)) {
+      const ignore = this.ignoring(opts, pieces);
       let labelled = false;
       for (const c of this.candidates(pieces, size).slice(0, 25)) {
         const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
-        const client = { x: rect.left + c.x, y: rect.top + c.y };
+        const client = toClient(frame, c);
         const el = topElementAt(client.x, client.y);
         const top = this.topVisible(hits);
         const kind: DebugMark['kind'] = !hits.some((h) => this.isPieceOf(h, pieces)) ? 'miss' : !this.sameEntity(top!, pieces) ? 'occluded' : el !== this.adapter.surface() ? 'dom' : 'ok';
@@ -622,51 +636,69 @@ export class Engine<W = unknown> {
    * Closes the race between "point computed" and "real click arrives": the app may have moved the
    * map or drawn something on top in between. Same idea as Playwright's hit-target interception:
    * a capture-phase listener re-runs the hit test at the exact pixel of the real pointerdown, and if
-   * the target is no longer what is there, the whole click is swallowed so the caller can retry.
+   * the target is no longer what is there, the whole click — touch events of a tap included — is
+   * swallowed so the caller can retry.
    * The caller keeps the returned check (index.ts: a registry that outlives this Engine — the app may
    * re-create its map in the very click handler this check lets through) and must dispose of it.
+   *
+   * WHAT is verified is the feature the query resolved to, not "something the query matches": three id-less
+   * `{ icon: 'music' }` points all match `{ layer, where }`, the aim picked one of them (by `at`), and a look-alike
+   * that slides under the pointer afterwards (the app panned) is another feature. So the target is resolved when the
+   * check is armed — right after the aim was verified — and the hit at the pointer must be a piece of IT: the same
+   * key, and for an id-less feature, touching its pieces (isPieceOf; geometry is in world coordinates, so a pan does
+   * not move it). A moving target cannot be resolved ahead: its pieces from before the press would not touch the ones
+   * drawn at the press. It is resolved again when the event arrives (`at` included), which is as far as identity goes
+   * for a moving target: a moving id-less look-alike under the pointer is not told apart from it.
    */
   armClick(q: FeatureQuery, opts: ActionPointOptions = {}): ArmedCheck {
     const verdict: ClickVerdict = { fired: false, ok: false };
-    const ignore = new Set(opts.ignoreLayers ?? []);
+    const target = opts.moving === 'allow' ? undefined : this.resolved(q);
+    trackPresses(); // before this check's own listeners: it must see every press first
     let blocking = false;
+    let presses = 0;
+    let afterSwallowed = false;
     const swallow = (e: Event) => {
       e.stopImmediatePropagation();
       e.preventDefault();
     };
     const onDown = (e: Event) => {
+      if (e.type === 'pointerdown' && presses++ === 0) afterSwallowed = press.previousSwallowed;
       if (verdict.fired) return blocking ? swallow(e) : undefined;
       verdict.fired = true;
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
-      const rect = surface.getBoundingClientRect();
       if (me.target !== surface && !isMirrorNode(me.target)) {
         verdict.reason = `pointer event landed on ${describeEl(me.target as Element)}, not the map canvas`;
       } else {
-        const hits = this.adapter.queryFeatures({ at: { x: me.clientX - rect.left, y: me.clientY - rect.top } }).filter((h) => !ignore.has(h.layer));
-        const layers = this.layersOf(q);
-        const mine = hits.find((h) => (!layers || layers.includes(h.layer)) && this.matches(h, q));
-        if (!mine) {
+        const at = toSurface(clientFrame(surface), { x: me.clientX, y: me.clientY });
+        const miss = this.verifyAt(at, q, opts, target);
+        if (!miss) verdict.ok = true;
+        else if (miss.covered) verdict.reason = `target was covered by ${describe({ ...miss.covered, geometryType: miss.covered.geometry.type })} when the click arrived`;
+        else {
           verdict.reason = 'target was no longer under the pointer when the click arrived';
-          if (opts.moving === 'allow') verdict.offset = this.offsetFrom({ x: me.clientX - rect.left, y: me.clientY - rect.top }, q, opts);
+          if (opts.moving === 'allow') verdict.offset = this.offsetFrom(at, q, opts);
         }
-        else if (!opts.force && !this.sameEntity(this.topVisible(hits)!, [mine])) {
-          const top = this.topVisible(hits)!;
-          verdict.reason = `target was covered by ${describe({ ...top, geometryType: top.geometry.type })} when the click arrived`;
-        } else verdict.ok = true;
       }
       if (!verdict.ok) {
         blocking = true;
+        press.lastSwallowed = true;
         swallow(e);
       }
     };
     const onRest = (e: Event) => {
-      if (blocking) swallow(e);
+      // The browser counts a swallowed tap: the retried tap close by arrives as the second of a double tap (click
+      // detail 2, then a dblclick — MapLibre zooms). A dblclick is swallowed when this check let through ONE press and
+      // the press before it was swallowed: the app never saw a first click to pair it with.
+      if (blocking || (e.type === 'dblclick' && presses === 1 && afterSwallowed)) swallow(e);
     };
     const downs = ['pointerdown', 'mousedown'];
-    const rest = ['pointerup', 'mouseup', 'click', 'dblclick', 'contextmenu', 'auxclick'];
-    downs.forEach((t) => window.addEventListener(t, onDown, true));
-    rest.forEach((t) => window.addEventListener(t, onRest, true));
+    // A tap is pointerdown, touchstart, pointerup, touchend, then the compatibility mouse events: a swallowed tap that let
+    // its touch events through still reached the app's touch listeners and MapLibre's tap recognisers — with the retry
+    // close by, a double tap. Not passive: on window, touch listeners are passive by default and cannot cancel.
+    const rest = ['pointerup', 'pointercancel', 'mouseup', 'click', 'dblclick', 'contextmenu', 'auxclick', 'touchstart', 'touchmove', 'touchend', 'touchcancel'];
+    const listen = { capture: true, passive: false };
+    downs.forEach((t) => window.addEventListener(t, onDown, listen));
+    rest.forEach((t) => window.addEventListener(t, onRest, listen));
     return {
       verdict,
       dispose: () => {
@@ -683,34 +715,64 @@ export class Engine<W = unknown> {
    */
   armHover(q: FeatureQuery, opts: ActionPointOptions = {}): ArmedCheck {
     const verdict: ClickVerdict = { fired: false, ok: false };
-    const ignore = new Set(opts.ignoreLayers ?? []);
+    const target = opts.moving === 'allow' ? undefined : this.resolved(q);
     const onMove = (e: Event) => {
       verdict.fired = true;
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
-      const rect = surface.getBoundingClientRect();
       verdict.ok = false;
       if (me.target !== surface && !isMirrorNode(me.target)) {
         verdict.reason = `the pointer is over ${describeEl(me.target as Element)}, not the map canvas`;
         return;
       }
-      const hits = this.adapter.queryFeatures({ at: { x: me.clientX - rect.left, y: me.clientY - rect.top } }).filter((h) => !ignore.has(h.layer));
-      const layers = this.layersOf(q);
-      const mine = hits.find((h) => (!layers || layers.includes(h.layer)) && this.matches(h, q));
-      if (!mine) {
+      const at = toSurface(clientFrame(surface), { x: me.clientX, y: me.clientY });
+      const miss = this.verifyAt(at, q, opts, target);
+      if (!miss) (verdict.ok = true), (verdict.reason = undefined);
+      else if (miss.covered) verdict.reason = 'target was covered by another feature when the pointer arrived';
+      else {
         verdict.reason = 'target was no longer under the pointer when it arrived';
-        verdict.offset = this.offsetFrom({ x: me.clientX - rect.left, y: me.clientY - rect.top }, q, opts);
+        verdict.offset = this.offsetFrom(at, q, opts);
       }
-      else if (!opts.force && !this.sameEntity(this.topVisible(hits)!, [mine])) verdict.reason = 'target was covered by another feature when the pointer arrived';
-      else (verdict.ok = true), (verdict.reason = undefined);
     };
     window.addEventListener('mousemove', onMove, true);
     return { verdict, dispose: () => window.removeEventListener('mousemove', onMove, true) };
   }
 
-  /** Where the (moving) target is drawn right now, relative to where the pointer arrived. */
+  /** The ONE feature the query resolves to now, or undefined (none, several, or a surface that cannot be looked at). */
+  private resolved(q: FeatureQuery): RenderedFeature[] | undefined {
+    try {
+      const groups = [...this.group(q).values()];
+      return groups.length === 1 ? groups[0] : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * Is the target at this surface pixel, on top? Undefined: yes. `target`: the feature resolved when the check was armed;
+   * without one (a moving target, or none could be resolved then), the features the query resolves to at this instant.
+   */
+  private verifyAt(at: Pt, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature } | undefined {
+    let candidates: RenderedFeature[][];
+    try {
+      candidates = target ? [target] : [...this.group(q).values()];
+    } catch {
+      return {}; // removed or 0×0 since: nothing is under the pointer
+    }
+    const hits = this.adapter.queryFeatures({ at });
+    for (const pieces of candidates) {
+      const ignore = this.ignoring(opts, pieces);
+      const seen = hits.filter((h) => !ignore.has(h.layer));
+      if (!seen.some((h) => this.isPieceOf(h, pieces))) continue;
+      const top = this.topVisible(seen)!;
+      return !opts.force && !this.sameEntity(top, pieces) ? { covered: top } : undefined;
+    }
+    return {};
+  }
+
+  /** Where the (moving) target is drawn right now, relative to where the pointer arrived. Runs inside an event handler: no scrolling. */
   private offsetFrom(pointer: Pt, q: FeatureQuery, opts: ActionPointOptions): Pt | undefined {
-    const now = this.actionPointOnce(q, { ...opts, force: true });
+    const now = this.actionPointOnce(q, { ...opts, force: true }, false);
     return now.ok ? { x: now.surface.x - pointer.x, y: now.surface.y - pointer.y } : undefined;
   }
 
@@ -874,17 +936,18 @@ export class Engine<W = unknown> {
   /** The expensive part, done only for entities that will actually be shown: verified hit tests. */
   private locate(e: Collected, ignoreDom?: (el: Element) => boolean): { pixel?: Pt; coveredPixel?: Pt; blocked?: string } {
     const surface = this.adapter.surface();
-    const rect = surface.getBoundingClientRect();
+    const frame = clientFrame(surface);
     let coveredPixel: Pt | undefined;
     // Candidates come from the GEOMETRY; what is hit-tested is what is DRAWN. They differ for a label placed
     // along a line, an icon with an offset, or a symbol hidden by collision at the pixels we tried.
     let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
     // whole client pixels, exactly as actionPointOnce() tries them: what the snapshot lists as clickable is what click() uses
-    for (const c of wholePixels((e.cands ?? []).slice(0, 40), rect)) {
+    for (const c of wholePixels((e.cands ?? []).slice(0, 40), frame)) {
       const hits = this.adapter.queryFeatures({ at: c });
       const all = [...e.byLayer.values()].flat();
       if (!hits.some((h) => this.sameEntity(h, all))) continue;
-      const el = document.elementsFromPoint(rect.left + c.x, rect.top + c.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
+      const client = toClient(frame, c);
+      const el = document.elementsFromPoint(client.x, client.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
       const top = this.topVisible(hits)!;
       if (this.sameEntity(top, all) && el === surface) return { pixel: round(c) };
       coveredPixel ??= round(c);
@@ -945,6 +1008,7 @@ export class Engine<W = unknown> {
     const a = this.adapter;
     const view = a.getViewState() as any;
     const rect = a.surface().getBoundingClientRect();
+    const frame = clientFrame(a.surface());
     const size = this.surfaceSize();
     const layers = a.listLayers();
     const skip = new Set(o.skipLayers ?? []);
@@ -1072,7 +1136,7 @@ export class Engine<W = unknown> {
           if (!loc) located.set(e.key, (loc = this.locate(e)));
           const f = e.byLayer.get(e.owner)![0];
           const pt = loc.pixel ?? loc.coveredPixel;
-          const pos = pt ? `@(${Math.round(rect.left + pt.x)},${Math.round(rect.top + pt.y)})` : `@(${loc.blocked})`;
+          const pos = pt ? `@(${Math.round(toClient(frame, pt).x)},${Math.round(toClient(frame, pt).y)})` : `@(${loc.blocked})`;
           const invisible = this.entityInvisible(e.byLayer);
           const colour = driven ? this.adapter.colour?.(f) : undefined;
           sec.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${loc.pixel || !pt ? '' : ' ' + loc.blocked}${invisible ? ` NOT-VISIBLE(${invisible})` : ''}${colour ? ` drawn ${nameColour(colour.colour)}` : ''}${f.state && Object.keys(f.state).length ? ` state=${JSON.stringify(f.state)}` : ''} ${fmtProps(f.properties, maxProps)}`);
@@ -1233,14 +1297,42 @@ export type Part =
   | { kind: 'line'; coords: number[][] }
   | { kind: 'polygon'; rings: number[][][] };
 
-/** Candidates as WHOLE client pixels (surface-relative): the nearest one first, then the four around it; no duplicates. */
-export function wholePixels(cands: Pt[], rect: { left: number; top: number }): Pt[] {
+/**
+ * Where the surface is in the viewport, and how much CSS has scaled it. Surface pixels (what the map library projects
+ * to and hit-tests) and client pixels (where real input lands) differ by more than an offset when the map sits in a
+ * container with `transform: scale()` (a preview pane, a scaled dashboard): MapLibre reads a pointer at
+ * `(clientX - rect.left) / (rect.width / offsetWidth) - clientLeft` (its DOM.mousePos), and so must we — in both
+ * directions, everywhere. Rotation and skew are not handled (MapLibre does not handle them either).
+ */
+export interface ClientFrame {
+  left: number;
+  top: number;
+  sx: number;
+  sy: number;
+}
+
+export function clientFrame(el: HTMLElement): ClientFrame {
+  const r = el.getBoundingClientRect();
+  const sx = r.width / el.offsetWidth || 1, sy = r.height / el.offsetHeight || 1;
+  return { left: r.left + (el.clientLeft || 0) * sx, top: r.top + (el.clientTop || 0) * sy, sx, sy };
+}
+
+export function toClient(f: ClientFrame, p: Pt): Pt {
+  return { x: f.left + p.x * f.sx, y: f.top + p.y * f.sy };
+}
+
+export function toSurface(f: ClientFrame, c: Pt): Pt {
+  return { x: (c.x - f.left) / f.sx, y: (c.y - f.top) / f.sy };
+}
+
+/** Candidates as WHOLE client pixels (converted back to surface pixels): the nearest one first, then the four around it; no duplicates. */
+export function wholePixels(cands: Pt[], frame: ClientFrame): Pt[] {
   const tried = new Set<string>();
   return cands.flatMap((raw) => {
-    const fx = rect.left + raw.x, fy = rect.top + raw.y;
+    const { x: fx, y: fy } = toClient(frame, raw);
     return [[Math.round(fx), Math.round(fy)], [Math.floor(fx), Math.floor(fy)], [Math.ceil(fx), Math.floor(fy)], [Math.floor(fx), Math.ceil(fy)], [Math.ceil(fx), Math.ceil(fy)]]
       .filter(([x, y]) => !tried.has(`${x},${y}`) && !!tried.add(`${x},${y}`))
-      .map(([x, y]) => ({ x: x - rect.left, y: y - rect.top }));
+      .map(([x, y]) => toSurface(frame, { x, y }));
   });
 }
 
@@ -1404,6 +1496,17 @@ export function nameColour(hex: string): string {
  * Topmost element at a client point, looking THROUGH the accessibility mirror's own buttons: they
  * sit on top of features by design and forward real clicks to the map, so they are never a cover.
  */
+/**
+ * Page-wide: was the press before the current one swallowed by a click-time check? Kept at module level (checks come
+ * and go, and the Engine may be re-created); the listener is installed once, ahead of the first check's own.
+ */
+const press = { installed: false, lastSwallowed: false, previousSwallowed: false };
+function trackPresses(): void {
+  if (press.installed) return;
+  press.installed = true;
+  window.addEventListener('pointerdown', () => ((press.previousSwallowed = press.lastSwallowed), (press.lastSwallowed = false)), true);
+}
+
 export function topElementAt(x: number, y: number): Element | null {
   for (const el of document.elementsFromPoint(x, y)) {
     if (!el.closest('[data-geowright-mirror]')) return el;

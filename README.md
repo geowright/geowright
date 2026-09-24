@@ -122,13 +122,13 @@ Actions refuse an invisible feature unless `{ force: true }`. How it works: [DES
 3. the pixel is **on** the feature — for polygons an interior point far from the edge, never the centroid
 4. the feature is the **topmost visible hit** at that pixel (its own label on top does not count as an occluder; neither does anything the style paints invisibly, e.g. a transparent hit area)
 5. no DOM element (popup, control, overlay) covers the pixel
-6. at the instant the real `pointerdown` arrives, the hit test is re-run; if the target is no longer there the click is swallowed and the action retries
+6. at the instant the real `pointerdown` arrives, the hit test is re-run; if the feature the query resolved to is no longer there (a look-alike that slid under the pointer does not count) the click — or the tap, touch events included — is swallowed and the action retries
 
-Works unchanged on rotated, pitched, globe and terrain maps. A location on the far side of the globe, behind the camera or
+Works unchanged on rotated, pitched, globe and terrain maps, and on a map inside a container scaled with CSS `transform: scale()`. A location on the far side of the globe, behind the camera or
 hidden behind a mountain is an error, never a click on whatever is drawn at that pixel. Features need **no ids**: identity
 is id + properties, and id-less look-alikes are told apart by where they are drawn.
 
-Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map), `{ autoPan: true }`, `{ timeout }`, and
+Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map; never the target's own layer), `{ autoPan: true }`, `{ timeout }`, and
 `{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
 arrives late is swallowed before the app sees it — it can time out, it never clicks the wrong thing; `dragTo`, `dragBy`
 and `lngLat` have no such check and refuse the option). The reasoning and the measurements:

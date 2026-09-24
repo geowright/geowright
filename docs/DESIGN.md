@@ -187,8 +187,14 @@ on every retry:
    computing a target pixel in the page and Playwright dispatching input for it a few milliseconds
    later in the test process, the application could have moved the map. An armed, capture-phase
    listener re-checks the hit test at the pixel and moment of the real `pointerdown`; on a mismatch it
-   swallows the whole click sequence before it reaches the application, and the action retries from
-   the top. This closes the same class of race Playwright's own hit-target interception closes for
+   swallows the whole click sequence (a tap's touch events included) before it reaches the application,
+   and the action retries from the top. The browser still counts a swallowed tap, so the retried tap
+   arrives as the second of a double tap (a `dblclick`, and MapLibre zooms): that `dblclick` is
+   swallowed as well. What must be under the pointer is the feature the query
+   resolved to when the check was armed — a piece of it, by key and, for an id-less feature, by
+   touching its pieces — not merely something the query matches: an id-less look-alike that slides
+   under the pointer is another feature. A moving target (`moving: 'allow'`) is resolved again when
+   the event arrives, since its pieces from before the press no longer touch the ones drawn at it. This closes the same class of race Playwright's own hit-target interception closes for
    ordinary DOM elements, and it was verified with a targeted mutation test: with the check disabled,
    a spec built to provoke the race fails; with it enabled, the same spec passes.
 

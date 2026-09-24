@@ -1,4 +1,4 @@
-import { Engine, topElementAt, type ArmedCheck } from './engine';
+import { Engine, clientFrame, toClient, toSurface, topElementAt, type ArmedCheck } from './engine';
 import { MapLibreAdapter } from './maplibre-adapter';
 import { startMirror } from './mirror';
 import type { CanvasAdapter, ClickVerdict, FeatureSummary } from './types';
@@ -141,17 +141,15 @@ const api = {
     const a = engine(mapId).adapter;
     const p = a.project(world);
     const el = a.surface();
-    const r = el.getBoundingClientRect();
     const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
-    const client = { x: r.left + p.x, y: r.top + p.y };
+    const client = toClient(clientFrame(el), p); // a CSS-scaled map is not just offset
     const top = inside ? topElementAt(client.x, client.y) : null;
     const hidden = inside && a.isOnSurface ? !a.isOnSurface(world) : false;
     return { client, surface: p, inside, hidden, covered: inside && top !== el, moving: a.isMoving() };
   },
   worldAt: (mapId: string, client: { x: number; y: number }) => {
     const a = engine(mapId).adapter;
-    const r = a.surface().getBoundingClientRect();
-    return a.unproject({ x: client.x - r.left, y: client.y - r.top });
+    return a.unproject(toSurface(clientFrame(a.surface()), client));
   },
   revealWorld: async (mapId: string, world: any) => {
     await engine(mapId).adapter.reveal?.(world);
