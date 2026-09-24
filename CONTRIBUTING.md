@@ -21,8 +21,10 @@
 - **The flake bar.** A change is done when `npx playwright test --repeat-each=20` passes with zero
   flakes, zero retries and no fixed sleeps — on a quiet machine (check `uptime` first).
 - **Do not bend third-party apps** under `wild/` to fit the library: exactly one added line (the hook)
-  per app, verified by `bash wild/scripts/examples.sh verify`. If something is awkward, fix the library
-  or write the friction down.
+  per vendored file. `node wild/scripts/apps.mjs check` (in the unit suite) checks the recorded hook lines
+  and the examples' committed patches; `bash wild/scripts/examples.sh verify` diffs the examples against
+  upstream. Nothing checks the rest of a wrapper app's files against upstream: that is on you and the
+  reviewer. If something is awkward, fix the library or write the friction down.
 - **Licenses.** Third-party material only under MIT / BSD / ISC / Apache-2.0 / CC0 / Unlicense / OFL
   (fonts), with its license file kept and a row in `wild/fixtures/SOURCES.md` or
   `docs/THIRD_PARTY_NOTICES.md`. No OpenStreetMap-derived data (ODbL), no CC-BY assets, no vendor tiles.

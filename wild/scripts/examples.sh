@@ -4,9 +4,12 @@
 #   bash wild/scripts/examples.sh fetch <name>   download the pristine upstream file to .upstream/ and, if the
 #                                                example is not vendored yet, copy it to examples/ (then add the hook line by hand)
 #   bash wild/scripts/examples.sh patches        regenerate patches/<name>.diff = upstream -> vendored, for every example
-#   bash wild/scripts/examples.sh verify         fail if any vendored example differs from upstream by more than added lines
+#   bash wild/scripts/examples.sh verify         regenerate the patches, then fail unless each one is exactly one added line,
+#                                                the hook, and nothing removed (node wild/scripts/apps.mjs patches)
 #
-# Needs the network + an authenticated `gh`. Never run by the test suite.
+# Upstream is fetched once into the git-ignored .upstream/ and compared against from then on: delete .upstream/ to
+# compare against a fresh copy (after changing TAG, always). Needs the network + an authenticated `gh` for a fetch.
+# Never run by the test suite; the suite checks the COMMITTED patches offline (apps.mjs check), not upstream itself.
 set -euo pipefail
 TAG=v6.10.0
 DIR=$(cd "$(dirname "$0")/../maplibre-examples" && pwd -P)
@@ -27,12 +30,11 @@ case "${1:-}" in
       name=$(basename "$f" .html)
       [ -e "$DIR/.upstream/$name.html" ] || fetch "$name"
       diff -u --label "upstream/test/examples/$name.html ($TAG)" --label "wild/maplibre-examples/examples/$name.html" "$DIR/.upstream/$name.html" "$f" > "$DIR/patches/$name.diff" || true
-      removed=$(grep -c '^-[^-]' "$DIR/patches/$name.diff" || true)
-      added=$(grep -c '^+[^+]' "$DIR/patches/$name.diff" || true)
-      echo "$name: +$added -$removed"
-      if [ "$1" = verify ] && { [ "$removed" != 0 ] || [ "$added" != 1 ]; }; then status=1; fi
     done
-    exit $status
+    # The verdict is apps.mjs's, the same code the unit suite runs over the committed patches: it counts every line of
+    # the diff body (blank ones, and content starting with - or +) and requires the one added line to be the hook.
+    node "$DIR/../scripts/apps.mjs" patches || status=$?
+    if [ "$1" = verify ]; then exit $status; fi
     ;;
-  *) sed -n '2,9p' "$0"; exit 2 ;;
+  *) sed -n '2,12p' "$0"; exit 2 ;;
 esac

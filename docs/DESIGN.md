@@ -638,11 +638,13 @@ wrote: MapLibre's own official examples, and small applications built by others 
 wrapper libraries around MapLibre (React, Svelte, and Vue).
 
 Every one of these applications is vendored as **upstream plus exactly one added line** — the same
-one-line registration hook described earlier, and nothing else. For the official examples this is
-verified mechanically: a script re-fetches the pinned upstream release tag and confirms the diff
-against the vendored copy is still exactly one added line, for every example, so nothing can quietly
-drift out of sync with what upstream actually publishes. The wrapper applications get the same
-treatment by hand, with the exact upstream version recorded per application. Nothing in any of these
+one-line registration hook described earlier, and nothing else. For the official examples a script
+diffs each vendored copy against the pinned upstream release tag (fetched once and cached) and
+confirms the diff is exactly one added line, the hook, for every example; the committed diffs are
+checked again by the unit suite without the network. The wrapper applications record the exact
+upstream commit and their one line; the unit suite checks that each app's sources hold exactly that
+line, once per vendored file, and nothing else naming the hook — that the rest of each file is
+upstream's was checked by hand when it was vendored, not by the suite. Nothing in any of these
 applications was bent to fit the testing library: where something was awkward, the library's own
 adapter changed, or the friction was written down as a known limitation — never the vendored
 application. No network reaches outside these tests either; a routing layer answers everything each

@@ -6,8 +6,9 @@ import { fileURLToPath } from 'node:url';
 
 /**
  * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0008) and a pinned UPSTREAM.md
- * with its one hook line (0010), its dist/ ships the notices of what it bundles (0015), and the `new` scaffold refuses
- * a license outside the allowlist. No network.
+ * with its one hook line (0016), its dist/ ships the notices of what it bundles (0015), each MapLibre example's
+ * committed patch is the hook and nothing else (0016), and the `new` scaffold refuses a license outside the
+ * allowlist. No network.
  */
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SCRIPT = 'wild/scripts/apps.mjs';
@@ -20,7 +21,8 @@ function run(root: string, ...args: string[]) {
 
 /**
  * The part of the tree `check` reads, copied from `from` (this checkout by default) into `name`: the script, each
- * app's license, UPSTREAM.md and dist/THIRD_PARTY_LICENSES.md, the fixture records, the wild specs.
+ * app's sources (not its build output, apart from dist/THIRD_PARTY_LICENSES.md), the MapLibre examples with their
+ * patches, the fixture records, the wild specs.
  */
 function scratchTree(name = 'tree', from = ROOT): string {
   const dir = test.info().outputPath(name);
@@ -28,14 +30,43 @@ function scratchTree(name = 'tree', from = ROOT): string {
   copy(SCRIPT);
   copy('wild/fixtures/SOURCES.md');
   copy('wild/fixtures/sources');
-  copy('wild/maplibre-examples/LICENSE.txt');
+  for (const p of ['LICENSE.txt', 'examples', 'patches']) copy(`wild/maplibre-examples/${p}`);
   copy('tests/wild');
   // Directories only: a stray file (Finder's .DS_Store) is not an app, as in apps.mjs.
   for (const app of readdirSync(join(from, 'wild/apps')).filter((n) => statSync(join(from, 'wild/apps', n)).isDirectory())) {
-    for (const f of readdirSync(join(from, 'wild/apps', app))) if (/^(licen[cs]e|copying)|^UPSTREAM\.md$/i.test(f)) copy(`wild/apps/${app}/${f}`);
+    for (const f of readdirSync(join(from, 'wild/apps', app))) if (f !== 'dist' && f !== 'node_modules') copy(`wild/apps/${app}/${f}`);
     if (existsSync(join(from, 'wild/apps', app, NOTICES))) copy(`wild/apps/${app}/${NOTICES}`);
   }
   return dir;
+}
+
+const HOOK = '(window.__geowright_maps ??= {}).main = map;';
+/** A minimal vendored app in `tree`: its one source file holds the hook, UPSTREAM.md shows it and marks the file. */
+function plantApp(tree: string, { license = true, spec = true } = {}): string {
+  const planted = join(tree, 'wild/apps/planted');
+  mkdirSync(join(planted, 'src'), { recursive: true });
+  writeFileSync(join(planted, 'UPSTREAM.md'), [
+    '- Repository: https://github.com/example/planted',
+    `- Pinned commit: \`${SHA}\``,
+    '',
+    '```',
+    'wild/apps/planted/src/app.js <- src/app.js (+1 line)',
+    'wild/apps/planted/src/util.js <- src/util.js (byte-identical)',
+    '```',
+    '',
+    '```diff',
+    ' const map = new maplibregl.Map({});',
+    `+${HOOK}`,
+    '```',
+    '',
+  ].join('\n'));
+  writeFileSync(join(planted, 'src/app.js'), `const map = new maplibregl.Map({});\n${HOOK}\nmap.on('load', () => {});\n`);
+  writeFileSync(join(planted, 'src/util.js'), 'export const noop = () => {};\n');
+  if (license) writeFileSync(join(planted, 'LICENSE'), MIT);
+  mkdirSync(join(planted, 'dist'), { recursive: true });
+  writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}`);
+  if (spec) writeFileSync(join(tree, 'tests/wild/planted.spec.ts'), `// opens '/apps/planted/'\n`);
+  return planted;
 }
 
 const MIT = `MIT License
@@ -74,10 +105,7 @@ test('check fails when a wild app has no LICENSE, or one outside the allowlist',
   const tree = scratchTree();
   expect(run(tree, 'check').code, 'the copied tree passes before anything is planted').toBe(0);
 
-  const planted = join(tree, 'wild/apps/planted');
-  mkdirSync(planted);
-  writeFileSync(join(planted, 'UPSTREAM.md'), `- Repository: https://github.com/example/planted\n- Pinned commit: \`${SHA}\`\n\n+(window.__geowright_maps ??= {}).main = map;\n`);
-  writeFileSync(join(tree, 'tests/wild/planted.spec.ts'), `// opens '/apps/planted/'\n`);
+  const planted = plantApp(tree, { license: false });
   let r = run(tree, 'check');
   expect(r.code).toBe(1);
   expect(r.out).toContain('wild/apps/planted/: no LICENSE file');
@@ -89,8 +117,6 @@ test('check fails when a wild app has no LICENSE, or one outside the allowlist',
   expect(r.out).toContain('GPL');
 
   writeFileSync(join(planted, 'LICENSE'), MIT);
-  mkdirSync(join(planted, 'dist'));
-  writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}`);
   expect(run(tree, 'check').code, 'an MIT license, a pinned commit, the hook, a spec and dist notices: passes').toBe(0);
 
   rmSync(join(tree, 'tests/wild/planted.spec.ts'));
@@ -103,11 +129,8 @@ test('check fails when a wild app has no LICENSE, or one outside the allowlist',
 
 test('check fails when an app\'s dist/ ships no notices, or a notice without its license text', () => {
   const tree = scratchTree();
-  const planted = join(tree, 'wild/apps/planted');
-  mkdirSync(join(planted, 'dist'), { recursive: true });
-  writeFileSync(join(planted, 'LICENSE'), MIT);
-  writeFileSync(join(planted, 'UPSTREAM.md'), `- Repository: https://github.com/example/planted\n- Pinned commit: \`${SHA}\`\n\n+(window.__geowright_maps ??= {}).main = map;\n`);
-  writeFileSync(join(tree, 'tests/wild/planted.spec.ts'), `// opens '/apps/planted/'\n`);
+  const planted = plantApp(tree);
+  rmSync(join(planted, NOTICES));
 
   let r = run(tree, 'check');
   expect(r.code).toBe(1);
@@ -125,6 +148,97 @@ test('check fails when an app\'s dist/ ships no notices, or a notice without its
 
   writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n## other-lib - 2.0.0 (MIT)\n\n${MIT}`);
   expect(run(tree, 'check').code, 'every package with its text: passes').toBe(0);
+});
+
+// the one-line rule (decision 0016) as far as it can be checked offline. Each planted edit below passed the old
+// checks: examples.sh counted `^+[^+]` / `^-[^-]` (so a blank line, `--x` or `++y` was not counted, and any one added
+// line passed), and apps.mjs read only UPSTREAM.md, never the app's sources.
+const EXAMPLE = '3d-terrain';
+const plantPatch = (tree: string, edit: (lines: string[], hook: number) => void) => {
+  const p = join(tree, `wild/maplibre-examples/patches/${EXAMPLE}.diff`);
+  const lines = readFileSync(p, 'utf8').split('\n');
+  edit(lines, lines.findIndex((l) => l.startsWith('+') && l.includes('__geowright_maps')));
+  writeFileSync(p, lines.join('\n'));
+};
+
+test('check and `patches` pass on the committed example patches, and name each count', () => {
+  const r = run(ROOT, 'patches');
+  expect(r.code, r.out).toBe(0);
+  expect(r.out).toContain(`${EXAMPLE}: +1 -0`);
+  expect(r.out.match(/: \+1 -0$/gm)?.length, 'one line per vendored example').toBe(readdirSync(join(ROOT, 'wild/maplibre-examples/examples')).length);
+});
+
+for (const [what, edit, says] of [
+  ['an extra edit beyond the hook', (l: string[], h: number) => l.splice(h + 1, 0, '+    map.setZoom(3);'), '+2 -0'],
+  ['an added blank line', (l: string[], h: number) => l.splice(h + 1, 0, '+'), 'added line "" is not the hook'],
+  ['a removed blank line', (l: string[], h: number) => l.splice(h + 1, 0, '-'), '+1 -1'],
+  ['a removed line whose content starts with --', (l: string[], h: number) => l.splice(h + 1, 0, '---x;'), '+1 -1'],
+  ['an added line whose content starts with + (instead of the hook)', (l: string[], h: number) => l.splice(h, 1, '++y;'), 'added line "+y;" is not the hook'],
+  ['one added line that is not the hook', (l: string[], h: number) => l.splice(h, 1, '+    window.leak = map;'), 'added line "    window.leak = map;" is not the hook'],
+  ['the hook plus code on the same line', (l: string[], h: number) => l.splice(h, 1, `+    ${HOOK} map.setZoom(3);`), 'is not the hook'],
+] as const) {
+  test(`check fails on an example patch with ${what}`, () => {
+    const tree = scratchTree();
+    plantPatch(tree, edit);
+    for (const cmd of ['check', 'patches']) {
+      const r = run(tree, cmd);
+      expect(r.code, `${cmd}: ${r.out}`).toBe(1);
+      expect(r.out).toContain(`wild/maplibre-examples/patches/${EXAMPLE}.diff: `);
+      expect(r.out).toContain(says);
+    }
+  });
+}
+
+test('check fails when an example and its patch disagree, or one has no other', () => {
+  let tree = scratchTree();
+  const html = join(tree, `wild/maplibre-examples/examples/${EXAMPLE}.html`);
+  writeFileSync(html, readFileSync(html, 'utf8').replace(HOOK, `${HOOK}\n    ${HOOK}`));
+  let r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`wild/maplibre-examples/examples/${EXAMPLE}.html: 2 lines name __geowright_maps; the patch shows one`);
+
+  tree = scratchTree('moved');
+  const moved = join(tree, `wild/maplibre-examples/examples/${EXAMPLE}.html`);
+  writeFileSync(moved, '<!-- an edit above the hook shifts it by a line -->\n' + readFileSync(moved, 'utf8'));
+  r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toMatch(new RegExp(`patches/${EXAMPLE}\\.diff: its added line is not line \\d+ of examples/${EXAMPLE}\\.html`));
+
+  tree = scratchTree('unpatched');
+  rmSync(join(tree, `wild/maplibre-examples/patches/${EXAMPLE}.diff`));
+  r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`wild/maplibre-examples/examples/${EXAMPLE}.html: no patches/${EXAMPLE}.diff`);
+});
+
+test('check fails when a wrapper app\'s sources hold more than the one recorded hook line', () => {
+  const tree = scratchTree();
+  const planted = plantApp(tree);
+  expect(run(tree, 'check').code, 'the planted app, as recorded: passes').toBe(0);
+  const app = join(planted, 'src/app.js');
+  const clean = readFileSync(app, 'utf8');
+
+  const cases: [string, () => void, string][] = [
+    ['a second hook line in the same file', () => writeFileSync(app, clean + `${HOOK}\n`), 'wild/apps/planted/src/app.js: 2 lines name __geowright_maps'],
+    ['a hook line UPSTREAM.md does not show', () => writeFileSync(app, clean.replace(HOOK, '(window.__geowright_maps ??= {}).main = map; map.setZoom(3);')), 'wild/apps/planted/src/app.js:2: the hook line is not the one wild/apps/planted/UPSTREAM.md shows'],
+    ['another use of the global', () => writeFileSync(app, clean.replace(HOOK, 'window.__geowright_maps = { main: map };')), 'wild/apps/planted/src/app.js:2: names __geowright_maps but is not the hook line'],
+    ['a hook in a file recorded as byte-identical', () => writeFileSync(join(planted, 'src/util.js'), `${HOOK}\n`), 'wild/apps/planted/src/util.js: holds the hook, but wild/apps/planted/UPSTREAM.md does not mark it "(+1 line)"'],
+    ['a hook in an unrecorded file', () => writeFileSync(join(planted, 'main.js'), `${HOOK}\n`), 'wild/apps/planted/main.js: holds the hook, but wild/apps/planted/UPSTREAM.md does not mark it'],
+    ['no hook where UPSTREAM.md marks "+1 line"', () => writeFileSync(app, clean.replace(`${HOOK}\n`, '')), 'wild/apps/planted/src/app.js: marked "(+1 line)" in UPSTREAM.md, but holds no hook line'],
+  ];
+  for (const [what, plant, says] of cases) {
+    plant();
+    const r = run(tree, 'check');
+    expect(r.code, what).toBe(1);
+    expect(r.out, what).toContain(says);
+    writeFileSync(app, clean);
+    rmSync(join(planted, 'main.js'), { force: true });
+    writeFileSync(join(planted, 'src/util.js'), 'export const noop = () => {};\n');
+  }
+  expect(run(tree, 'check').code, 'restored: passes').toBe(0);
+  // build output is not source: a bundle that inlines the hook (as every dist/ does) is not a second line
+  writeFileSync(join(planted, 'dist/index.js'), `${HOOK}\n${HOOK}\n`);
+  expect(run(tree, 'check').code, 'dist/ is not scanned').toBe(0);
 });
 
 test('check fails when a file under wild/fixtures has no row in SOURCES.md or a sources/*.md record', () => {

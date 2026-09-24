@@ -42,7 +42,9 @@ test.describe('dense map', () => {
 
   test('polygons under a pile of points: an interior pixel that is really theirs, or a clear refusal', async ({ dense, page }) => {
     const ents = await dense._call<EntityView[]>('entities', { layers: ['lots'], max: 40 });
-    for (const e of ents.filter((x) => x.pixel).slice(0, 4)) {
+    const clean = ents.filter((x) => x.pixel);
+    expect(clean.length, 'lots with a clean pixel: without them this test would pass having clicked nothing').toBeGreaterThanOrEqual(4);
+    for (const e of clean.slice(0, 4)) {
       await dense.feature({ layer: 'lots', id: e.id }).click();
       await expect(page.getByTestId('selected')).toHaveText(`lots:${e.id}`);
     }
@@ -77,6 +79,8 @@ test.describe('dense map', () => {
   });
 
   test('measurements (printed, not asserted: wall-clock limits are flakes waiting to happen)', async ({ dense, page }) => {
+    // Asserts nothing, so it runs only when asked for, like tests/measure.spec.ts: it cost ~10 s of every suite and 20x.
+    test.skip(!process.env.GEOWRIGHT_MEASURE, 'set GEOWRIGHT_MEASURE=1');
     // The UNCAPPED entity list below is the deliberately expensive path: every entity without a clean pixel tries up to
     // 40 of them (1,436 such entities here) — ~10 s on the development Mac, 43 s at a 4x slower CPU
     // (GEOWRIGHT_CPU_THROTTLE=4). What users get is capped (mirror: 80, snapshot: per layer): 0.1–0.5 s even at 4x.

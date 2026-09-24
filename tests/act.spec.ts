@@ -139,6 +139,58 @@ test.describe('act gap', () => {
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1'); // right target, after retry
   });
 
+  // the two other ways the click-time check (engine armClick) turns a press away. The pixel was clean when it was
+  // aimed; the app changes what is on it between the aim's mousemove and the press. The press must be swallowed — the
+  // app sees nothing of it — and the retry, once the obstacle is gone again, clicks the target. The app's listeners
+  // below are registered before the check's own (armed per attempt), so on window/capture they run first.
+  test('click-time verification: a fill drawn over the target as the pointer arrives -> press swallowed, then retried', async ({ map, page }) => {
+    const { lngLat } = await map.feature({ layer: 'alerts', id: 1 }).info();
+    await page.evaluate(({ lng, lat }) => {
+      const m = (window as any).__geowright_maps.main;
+      const d = 0.004;
+      const ring = [[lng - d, lat - d], [lng + d, lat - d], [lng + d, lat + d], [lng - d, lat + d], [lng - d, lat - d]];
+      m.addSource('cover', { type: 'geojson', data: { type: 'Feature', properties: { name: 'cover' }, geometry: { type: 'Polygon', coordinates: [ring] } } });
+      // drawn but invisible until the pointer arrives: a paint change needs no re-parse, so the fill is there at the press
+      m.addLayer({ id: 'cover', type: 'fill', source: 'cover', paint: { 'fill-color': '#000', 'fill-opacity': 0 } });
+    }, lngLat!);
+    await map.waitForIdle();
+    await page.evaluate(() => {
+      const w = window as any;
+      const m = w.__geowright_maps.main;
+      w.__presses = 0;
+      window.addEventListener('mousemove', () => m.setPaintProperty('cover', 'fill-opacity', 0.9), { capture: true, once: true });
+      window.addEventListener('pointerdown', () => {
+        if (w.__presses++ === 0) setTimeout(() => m.setPaintProperty('cover', 'fill-opacity', 0)); // after the check has looked
+      }, true);
+    });
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    expect(await page.evaluate(() => (window as any).__presses), 'two presses: the first one, through the fill, was swallowed').toBe(2);
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
+  });
+
+  test('click-time verification: a DOM element shown over the pixel as the pointer arrives -> press swallowed, then retried', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__presses = 0;
+      w.__bannerClicks = 0;
+      window.addEventListener('mousemove', (e) => {
+        const banner = document.createElement('div');
+        banner.dataset.testid = 'late-banner';
+        banner.style.cssText = `position:fixed;left:${e.clientX - 30}px;top:${e.clientY - 30}px;width:60px;height:60px;background:#c00;z-index:10`;
+        banner.addEventListener('click', () => w.__bannerClicks++);
+        document.body.append(banner);
+        w.__banner = banner;
+      }, { capture: true, once: true });
+      window.addEventListener('pointerdown', () => {
+        if (w.__presses++ === 0) setTimeout(() => w.__banner.remove()); // after the check has looked
+      }, true);
+    });
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    const seen = await page.evaluate(() => ({ presses: (window as any).__presses, bannerClicks: (window as any).__bannerClicks }));
+    expect(seen, 'the first press landed on the banner, not the map canvas: swallowed, the banner saw no click').toEqual({ presses: 2, bannerClicks: 0 });
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
+  });
+
   // the click-time check used to accept any hit that matched the QUERY, so a property-identical, id-less
   // neighbour that slid under the pointer was clicked "successfully". It must be a piece of the resolved target.
   test('click-time verification: a look-alike neighbour that slid under the pointer is not accepted', async ({ map, page }) => {

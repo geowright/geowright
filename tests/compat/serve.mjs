@@ -24,13 +24,18 @@ function resolvePath(pathname) {
 }
 
 createServer(async (req, res) => {
-  const { pathname } = new URL(req.url ?? '/', 'http://localhost');
-  const file = resolvePath(decodeURIComponent(pathname));
-  const body = file && (await readFile(file).catch(() => null));
-  if (!body) {
-    res.writeHead(404, { 'content-type': 'text/plain' });
-    return res.end(`not found: ${pathname}`);
+  try {
+    const { pathname } = new URL(req.url ?? '/', 'http://localhost');
+    const file = resolvePath(decodeURIComponent(pathname)); // throws on a malformed %: a 500 for that request, not a dead server
+    const body = file && (await readFile(file).catch(() => null));
+    if (!body) {
+      res.writeHead(404, { 'content-type': 'text/plain' });
+      return res.end(`not found: ${pathname}`);
+    }
+    res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
+    res.end(body);
+  } catch (e) {
+    res.writeHead(500, { 'content-type': 'text/plain' });
+    res.end(String(e));
   }
-  res.writeHead(200, { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream', 'cache-control': 'no-store' });
-  res.end(body);
-}).listen(PORT, () => console.log(`compat page on http://localhost:${PORT}`));
+}).listen(PORT, 'localhost', () => console.log(`compat page on http://localhost:${PORT}`)); // this machine only, as vite preview

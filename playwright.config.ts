@@ -25,6 +25,8 @@ export const WILD_PORT = Number(process.env.GEOWRIGHT_WILD_PORT ?? PORT + 1);
 export default defineConfig({
   testDir: 'tests',
   testIgnore: 'compat/**', // the version matrix has its own config: playwright.compat.config.ts
+  // A reused preview server (outside CI) is checked against this checkout's demo build: tests/stale-preview.ts.
+  globalSetup: './tests/global-setup.ts',
   fullyParallel: true,
   retries: 0, // flakes must be visible
   reporter: [['list']],

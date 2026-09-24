@@ -10,7 +10,16 @@
 //       dist/THIRD_PARTY_LICENSES.md with a section and a license text for each package it bundles;
 //       wild/maplibre-examples/ keeps its license; every file under wild/fixtures/ is named in SOURCES.md or a
 //       sources/*.md record (by path, by name, or by a directory it is in); no TODO(new-app) is left anywhere.
+//       The one-line rule (docs/decisions/0016), as far as it can be checked offline: each app's sources hold the hook
+//       line UPSTREAM.md shows, at most one per file, in the files UPSTREAM.md marks "+1 line" and in no other vendored
+//       file; each MapLibre example's committed patch is exactly one added line, the hook, and nothing removed (as
+//       `patches` below). Not checked: that the rest of a vendored file equals upstream — that needs the upstream copy.
 //       Run by tests/unit/wild-apps.unit.spec.ts.
+//   node wild/scripts/apps.mjs patches
+//       Only the examples' patches: wild/maplibre-examples/patches/<name>.diff (upstream -> vendored, written by
+//       `bash wild/scripts/examples.sh patches|verify`) has one added line, the hook, no removed line, and matches the
+//       vendored examples/<name>.html. Every line after the diff header counts: blank ones, and ones whose content
+//       starts with - or +. Run by examples.sh verify, after it regenerated the patches from upstream.
 //
 // No network, no dependencies. Paths are relative to this file, so a scratch copy of the tree works the same.
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync, appendFileSync } from 'node:fs';
@@ -23,6 +32,10 @@ const TODO = 'TODO(new-app)';
 // it with `build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } }`; a build that only copies files writes the same
 // format itself (wild/apps/pmtiles/scripts/build.mjs): one `## <package> - <version>` section per package, text below.
 const NOTICES = 'dist/THIRD_PARTY_LICENSES.md';
+// The hook (docs/decisions/0002). In a MapLibre example it is this exact statement, a line comment allowed after it; a
+// wrapper app reaches the map its own way (`e.target`, `e.map`, a ref), so there only the registration itself is fixed.
+const EXAMPLE_HOOK = /^\s*\(window\.__geowright_maps \?\?= \{\}\)\.main = map;(\s*\/\/.*)?$/;
+const APP_HOOK = /__geowright_maps\s*\?\?=\s*\{\}\s*\)\s*\.main\s*=/;
 const ALLOWLIST = 'MIT, BSD, ISC, Apache-2.0, CC0, Unlicense (and OFL for fonts)';
 
 // Recognised by the license text itself, not by what anyone says it is. Whitespace is normalised first.
@@ -146,8 +159,10 @@ function check() {
     if (!text.includes('__geowright_maps')) problems.push(`${rel(up)}: does not show the one added hook line`);
     if (!specText.includes(`/apps/${name}/`)) problems.push(`${rel(dir)}/: no spec in tests/wild/ opens /apps/${name}/`);
     noticesOf(dir, problems);
+    hookLines(dir, name, text, problems);
   }
   licensesOf(join(ROOT, 'wild/maplibre-examples'));
+  examplePatches(problems);
 
   fixturesRecorded(problems);
 
@@ -160,7 +175,93 @@ function check() {
   for (const p of scaffolded) if (existsSync(p) && read(p).includes(TODO)) problems.push(`${rel(p)}: still has ${TODO} placeholders`);
 
   if (problems.length) fail(problems);
-  console.log('wild apps: licenses on the allowlist, upstream pinned, hook recorded, each opened by a spec, dist/ notices shipped');
+  console.log('wild apps: licenses on the allowlist, upstream pinned, one hook line each (as recorded), each opened by a spec, dist/ notices shipped; example patches: one added line each, the hook');
+}
+
+function patchesOnly() {
+  const problems = [];
+  examplePatches(problems, true);
+  if (problems.length) fail(problems);
+  console.log('maplibre examples: every patch is one added line, the hook, and nothing removed');
+}
+
+/**
+ * The one added line of a wrapper app (decision 0016), checked against the app's own record: every source line that
+ * names `__geowright_maps` is a hook line, a file holds at most one, the line is the one UPSTREAM.md shows (`+` in its
+ * diff), and it sits in a file UPSTREAM.md marks "+1 line" in its vendored paths — or, for an app with no such list,
+ * in a file UPSTREAM.md names. A vendored file not marked "+1 line" holds none. dist/ is build output, not source.
+ */
+function hookLines(dir, name, upstreamMd, problems) {
+  const shown = new Set(upstreamMd.split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1).trim()));
+  const vendored = new Map(); // app-relative path -> marked "+1 line"
+  for (const m of upstreamMd.matchAll(new RegExp(`^wild/apps/${name}/(\\S+)\\s+<-.*$`, 'gm'))) vendored.set(m[1], /\(\+1 line/.test(m[0]));
+  const walk = (d) => readdirSync(d).flatMap((f) => {
+    const p = join(d, f);
+    if (statSync(p).isDirectory()) return f === 'dist' || f === 'node_modules' ? [] : walk(p);
+    return f === 'UPSTREAM.md' ? [] : [p];
+  });
+  let total = 0;
+  const hooked = new Set();
+  for (const file of walk(dir)) {
+    const r = relative(dir, file).split('\\').join('/');
+    const lines = read(file).split('\n').map((l, i) => ({ l, n: i + 1 })).filter(({ l }) => l.includes('__geowright_maps'));
+    if (!lines.length) continue;
+    for (const { l, n } of lines) {
+      if (!APP_HOOK.test(l)) problems.push(`${rel(file)}:${n}: names __geowright_maps but is not the hook line ((…__geowright_maps ??= {}).main = map): ${l.trim()}`);
+      else if (!shown.has(l.trim())) problems.push(`${rel(file)}:${n}: the hook line is not the one ${rel(join(dir, 'UPSTREAM.md'))} shows as its added line: ${l.trim()}`);
+    }
+    if (lines.length > 1) problems.push(`${rel(file)}: ${lines.length} lines name __geowright_maps (lines ${lines.map((x) => x.n).join(', ')}); a vendored file gets exactly one added line, the hook`);
+    total += lines.length;
+    hooked.add(r);
+    if (vendored.size ? vendored.get(r) !== true : !upstreamMd.includes(r)) {
+      problems.push(`${rel(file)}: holds the hook, but ${rel(join(dir, 'UPSTREAM.md'))} does not ${vendored.size ? 'mark it "(+1 line)" in its vendored paths' : 'name it'}`);
+    }
+  }
+  if (!total) problems.push(`${rel(dir)}/: no source file holds the hook line`);
+  for (const [r, plusOne] of vendored) if (plusOne && !hooked.has(r)) problems.push(`${rel(join(dir, r))}: marked "(+1 line)" in UPSTREAM.md, but holds no hook line`);
+}
+
+/**
+ * The MapLibre examples (decision 0016): patches/<name>.diff, upstream -> vendored, is one added line — the hook — and
+ * nothing removed; it belongs to examples/<name>.html (its added line is that file's line where the hunk says, and the
+ * file names __geowright_maps nowhere else). Every line after the two header lines counts, whatever it holds: a blank
+ * added line, a removed line whose content starts with "--", an added one whose content starts with "+".
+ */
+function examplePatches(problems, print = false) {
+  const dir = join(ROOT, 'wild/maplibre-examples');
+  if (!existsSync(join(dir, 'examples'))) return;
+  const names = (sub, ext) => (existsSync(join(dir, sub)) ? readdirSync(join(dir, sub)).filter((f) => f.endsWith(ext)).map((f) => f.slice(0, -ext.length)) : []);
+  const examples = names('examples', '.html');
+  const patches = names('patches', '.diff');
+  for (const n of examples) if (!patches.includes(n)) problems.push(`wild/maplibre-examples/examples/${n}.html: no patches/${n}.diff (bash wild/scripts/examples.sh patches)`);
+  for (const n of patches) if (!examples.includes(n)) problems.push(`wild/maplibre-examples/patches/${n}.diff: no examples/${n}.html`);
+  for (const n of examples.filter((x) => patches.includes(x))) {
+    const where = `wild/maplibre-examples/patches/${n}.diff`;
+    const lines = read(join(dir, 'patches', `${n}.diff`)).split('\n');
+    if (lines.at(-1) === '') lines.pop();
+    if (!lines[0]?.startsWith('--- ') || !lines[1]?.startsWith('+++ ')) {
+      problems.push(`${where}: not a unified diff (no ---/+++ header)`);
+      continue;
+    }
+    const added = [];
+    let removed = 0;
+    let newLine = 0;
+    for (const l of lines.slice(2)) {
+      const hunk = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/.exec(l);
+      if (hunk) newLine = Number(hunk[1]);
+      else if (l.startsWith('+')) added.push({ text: l.slice(1), at: newLine++ });
+      else if (l.startsWith('-')) removed++;
+      else if (l.startsWith(' ')) newLine++;
+      else if (!l.startsWith('\\')) problems.push(`${where}: a line that is not part of a unified diff: ${JSON.stringify(l)}`);
+    }
+    if (print) console.log(`${n}: +${added.length} -${removed}`);
+    if (added.length !== 1 || removed) problems.push(`${where}: +${added.length} -${removed}; the vendored example must be upstream plus exactly one added line, the hook`);
+    for (const a of added) if (!EXAMPLE_HOOK.test(a.text)) problems.push(`${where}: added line ${JSON.stringify(a.text)} is not the hook ((window.__geowright_maps ??= {}).main = map;)`);
+    const html = read(join(dir, 'examples', `${n}.html`)).split('\n');
+    if (added.length === 1 && html[added[0].at - 1] !== added[0].text) problems.push(`${where}: its added line is not line ${added[0].at} of examples/${n}.html: regenerate it (bash wild/scripts/examples.sh patches)`);
+    const named = html.filter((l) => l.includes('__geowright_maps')).length;
+    if (named > 1) problems.push(`wild/maplibre-examples/examples/${n}.html: ${named} lines name __geowright_maps; the patch shows one`);
+  }
 }
 
 /**
@@ -277,4 +378,5 @@ test('wild: ${name} — ${TODO}: what the issue says fails', async ({ wild }) =>
 const [cmd, ...args] = process.argv.slice(2);
 if (cmd === 'new') newApp(args);
 else if (cmd === 'check') check();
-else fail([read(fileURLToPath(import.meta.url)).split('\n').slice(0, 12).join('\n').replace(/^\/\/ ?/gm, '')], 2);
+else if (cmd === 'patches') patchesOnly();
+else fail([read(fileURLToPath(import.meta.url)).split('\n').slice(0, 22).join('\n').replace(/^\/\/ ?/gm, '')], 2);

@@ -56,10 +56,14 @@ console.log(head(snap, 3000));
 
 if (after.includes('browser_mouse_click_xy')) {
   const m = snap.match(/#1 Point @\((\d+),(\d+)\)[^\n]*severity=\\?"high/);
-  console.log('\n=== coordinate click on the high-severity alert at', m?.[1], m?.[2], '===');
-  const res = await call('browser_mouse_click_xy', { element: 'high severity alert on the map', x: +m[1], y: +m[2] });
-  console.log(head(res, 600));
-  console.log('popup:', await call('browser_evaluate', { function: "() => document.querySelector('[data-testid=popup]')?.outerHTML ?? 'NO POPUP'" }));
+  if (!m) {
+    console.log('\n=== coordinate click skipped: no row for the high-severity alert 1 with a pixel in the snapshot above ===');
+  } else {
+    console.log('\n=== coordinate click on the high-severity alert at', m[1], m[2], '===');
+    const res = await call('browser_mouse_click_xy', { element: 'high severity alert on the map', x: +m[1], y: +m[2] });
+    console.log(head(res, 600));
+    console.log('popup:', await call('browser_evaluate', { function: "() => document.querySelector('[data-testid=popup]')?.outerHTML ?? 'NO POPUP'" }));
+  }
 }
 child.kill();
 process.exit(0);

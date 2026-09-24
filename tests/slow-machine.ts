@@ -7,8 +7,15 @@ import type { Page } from '@playwright/test';
  * Unset (every normal run): nothing happens.
  */
 export async function throttleFromEnv(page: Page): Promise<void> {
-  const rate = Number(process.env.GEOWRIGHT_CPU_THROTTLE || 0);
-  if (!(rate > 1)) return;
+  const rate = cpuSlowdown();
+  if (rate === 1) return;
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Emulation.setCPUThrottlingRate', { rate });
+}
+
+/** How many times slower the page's JavaScript runs in this run: 1 unless GEOWRIGHT_CPU_THROTTLE is above 1. A spec that
+ * bounds how long in-page work may take scales the bound by it, so the measurement run does not fail on its own slowness. */
+export function cpuSlowdown(): number {
+  const rate = Number(process.env.GEOWRIGHT_CPU_THROTTLE || 0);
+  return rate > 1 ? rate : 1;
 }
