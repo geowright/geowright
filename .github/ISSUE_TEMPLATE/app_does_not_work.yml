@@ -5,23 +5,59 @@ body:
   - type: markdown
     attributes:
       value: |
-        geowright is tested against apps its authors did not write, and reports like this are how that list grows.
+        Thank you. geowright is tested against apps its authors did not write, and reports like this are how that list grows.
         First check docs/RECIPES.md — "The map never becomes idle" and the wrapper hooks cover the common cases.
+
+        If your app is public and permissively licensed, we can add it to the test suite (`wild/`) unchanged apart from the hook
+        line, and fix geowright against it — the path is in `wild/README.md`, "Bring your app". A private app still gets help;
+        only the first and last questions are required.
   - type: textarea
     id: app
     attributes:
       label: The app
-      description: Map library and version, wrapper and version, bundler / dev server. A public repository or a minimal page helps most.
+      description: Map library and version, wrapper and version (react-map-gl, svelte-maplibre-gl, vue-maplibre-gl, …, or none), bundler / dev server.
+      placeholder: maplibre-gl 5.13.0 · react-map-gl 8.1.0 · Vite 7
     validations:
       required: true
+  - type: input
+    id: repo
+    attributes:
+      label: Public repository and commit
+      description: The URL, and the commit SHA (or tag) where it fails. A minimal public page that shows the problem is just as good.
+      placeholder: https://github.com/you/your-app at 1a2b3c4d…
+  - type: dropdown
+    id: license
+    attributes:
+      label: The repository's license
+      description: We can only add MIT, BSD, ISC, Apache-2.0, CC0 or Unlicense code to the suite (OFL for fonts). Anything else is still worth reporting.
+      options:
+        - MIT
+        - BSD (2- or 3-clause)
+        - ISC
+        - Apache-2.0
+        - CC0
+        - Unlicense
+        - Something else, or not sure
+        - No public repository
+  - type: textarea
+    id: network
+    attributes:
+      label: What it fetches from the network
+      description: Style, tiles, sprites, glyphs, data files, APIs — the URLs if you can, and whether any needs an API key. The tests run offline, so each one needs a local stand-in.
+      placeholder: |
+        https://tiles.example.com/style.json (vector tiles, needs a key)
+        /data/stations.geojson (our own file)
   - type: textarea
     id: hook
     attributes:
       label: The hook line you added, and where
+      description: The file and the line it follows, e.g. right after `new maplibregl.Map({...})` or in the wrapper's `onLoad`.
       render: text
   - type: textarea
     id: output
     attributes:
       label: What geowright printed
-      description: The full error text. `console.log(await map.snapshot())` output is welcome when the map does load.
+      description: The full error text, and the call that failed. `console.log(await map.snapshot())` output is welcome when the map does load.
       render: text
+    validations:
+      required: true
