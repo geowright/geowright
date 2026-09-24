@@ -30,6 +30,9 @@ const map = new maplibregl.Map({ ... });
 (window.__geowright_maps ??= {}).main = map;   // that's it; nothing is imported, nothing ships
 ```
 
+Keep that line out of production builds (`if (import.meta.env.MODE !== 'production')`, or your bundler's equivalent):
+it makes the map instance reachable by every script on the page ([SECURITY.md](SECURITY.md)).
+
 In TypeScript, add `/// <reference types="geowright/app" />` to a `.d.ts` file your **app's** tsconfig includes (a Vite
 app has `src/vite-env.d.ts`) and the line compiles as written, without `(window as any)`. It is types only: nothing ships.
 
@@ -49,8 +52,10 @@ The in-page adapter is injected by Playwright at test time. (Auto-discovery is n
 
 ## Test side
 
+Inside a Playwright test, once the page shows your app:
+
 ```ts
-import { geowright, expect } from 'geowright';   // inside this repository: '../src/playwright'
+import { geowright, expect } from 'geowright';
 
 const map = geowright(page);                       // { mapId?: 'main', timeout?, ignoreLayers?, mirror?, failureScreenshots? }
 await map.waitForIdle();
