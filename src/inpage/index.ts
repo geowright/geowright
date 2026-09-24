@@ -86,6 +86,24 @@ const api = {
   actionPoint: async (mapId: string, q: any, opts: any) => (await engine(mapId).learnIdentity(q), engine(mapId).actionPoint(q, opts)),
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
   overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
+  /**
+   * map.marker() / map.popup(): match AND pin in one call, so the pinned element is the one that matched ( C15: in
+   * two round trips an overlay inserted in between re-pointed a document index). With exactly one match its element is
+   * kept in `window.__geowright_pins` under a token, for the Playwright side's pin selector engine. `docIndex`: its
+   * position among the document's matches, for the order-bound fallback (-1 inside a shadow root).
+   */
+  pinOverlay: (mapId: string, kind: any, o: any) => {
+    const e = engine(mapId);
+    const list = e.overlaysAt(kind, o);
+    if (list.length !== 1) return { list };
+    const el = e.adapter.overlayElement?.(list[0]);
+    if (!el) return { list };
+    const w = window as any;
+    const pins: Map<string, Element> = (w.__geowright_pins ??= new Map());
+    const token = `${pins.size + 1}-${Math.random().toString(36).slice(2, 8)}`;
+    pins.set(token, el);
+    return { list, token, docIndex: [...document.querySelectorAll(list[0].selector)].indexOf(el) };
+  },
   geometry: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).geometry(q)),
   compareGeometry: async (mapId: string, q: any, expected: any, tolerancePx: number) => (await engine(mapId).learnIdentity(q), engine(mapId).compareGeometry(q, expected, tolerancePx)),
   pixelProbe: async (mapId: string, q: any, opts?: any) => (await engine(mapId).learnIdentity(q), engine(mapId).pixelProbe(q, opts)),
@@ -94,7 +112,7 @@ const api = {
    * the layer is not drawn? `ok: false` = no verdict could be reached (the matchers: inconclusive, ); a hidden layer
    * is a verdict — 0.
    */
-  layerPixels: async (mapId: string, layer: string, world: any, radiusPx = 24) => {
+  layerPixels: async (mapId: string, layer: string, world: any, radiusPx = 24, budgetMs = 2000) => {
     const a = engine(mapId).adapter;
     const info = a.listLayers().find((l) => l.id === layer);
     if (!info) return { ok: false as const, message: `layer "${layer}" does not exist. Layers: ${a.listLayers().map((l) => l.id).join(', ')}` };
@@ -105,8 +123,11 @@ const api = {
     // Its pixel shows something else — the near side of a globe, the ridge in front of it: no verdict about it.
     if (a.isOnSurface?.(world) === false) return { ok: false as const, message: 'that location is not on the visible map surface (the far side of the globe, or hidden behind terrain or beyond the horizon)' };
     if (!info.visible) return { ok: true as const, diff: 0, surface: p, hidden: true };
-    const diff = await a.pixelContribution?.(layer, p, radiusPx); // an AREA: imagery is often transparent at any one pixel
-    return diff === undefined ? { ok: false as const, message: `this map cannot be probed (no WebGL context to read from, or no frame was rendered — a hidden tab?)` } : { ok: true as const, diff, surface: p };
+    // an AREA: imagery is often transparent at any one pixel
+    const r = a.probePixels ? await a.probePixels(layer, p, radiusPx, budgetMs) : { diff: await a.pixelContribution?.(layer, p, radiusPx) };
+    if ('diff' in r && r.diff !== undefined) return { ok: true as const, diff: r.diff, surface: p };
+    const why = 'inconclusive' in r ? r.inconclusive : 'unavailable' in r ? r.unavailable : 'no WebGL context to read from, or no frame was rendered — a hidden tab?';
+    return { ok: false as const, message: `this map could not be probed: ${why}` };
   },
   armClick: (mapId: string, q: any, opts: any) => arm(engine(mapId).armClick(q, opts)),
   armHover: (mapId: string, q: any, opts: any) => arm(engine(mapId).armHover(q, opts)),

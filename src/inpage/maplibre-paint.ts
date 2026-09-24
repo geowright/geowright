@@ -1,4 +1,5 @@
 import {
+  Color,
   createVisibilityExpression,
   expression as styleExpression,
   function as styleFunction,
@@ -32,10 +33,95 @@ const UNPARSEABLE = Symbol('unparseable') as unknown as StylePropertyExpression;
 
 const GEOM_TYPE: Record<string, 1 | 2 | 3> = { Point: 1, MultiPoint: 1, LineString: 2, MultiLineString: 2, Polygon: 3, MultiPolygon: 3 };
 
+/**
+ * The projection the map renders with, and whether it is a GLOBE. `getProjection().type` is a name ('mercator',
+ * 'globe', 'vertical-perspective') or, since MapLibre 5, an EXPRESSION of zoom (the style-spec's own example goes from
+ * 'vertical-perspective' to 'mercator'); MapLibre renders every one but 'mercator' with its globe transform
+ * (createProjectionFromName), so all of them get the globe treatment. `name` is always a string: an expression is
+ * named by what it evaluates to at the current zoom.
+ */
+export function projectionOf(map: MlMap): { name: string; globe: boolean } {
+  let type: unknown;
+  try {
+    type = (map.getProjection?.() as { type?: unknown } | undefined)?.type;
+  } catch {
+    type = undefined; // (a map whose style is not loaded yet)
+  }
+  if (type === undefined || type === null) return { name: 'mercator', globe: false };
+  if (!Array.isArray(type)) return { name: String(type), globe: type !== 'mercator' };
+  let now = 'unknown';
+  try {
+    const v = normalizePropertyExpression(type as any, 'projection', spec.projection.type).evaluate({ zoom: map.getZoom() } as any, undefined as any);
+    now = v && typeof v === 'object' && 'from' in (v as any) ? `${(v as any).from}→${(v as any).to} ${Math.round((v as any).transition * 100)}%` : String(v);
+  } catch {
+    /* an expression the bundled evaluator cannot parse: said as such */
+  }
+  return { name: `expression (at this zoom: ${now})`, globe: true };
+}
+
+/**
+ * The tile zoom MapLibre draws a source's features at, and whether it VARIES across the view. MapLibre evaluates
+ * zoom-and-data ("composite") paint per tile, at the tile's zoom z and z+1, and blends by the camera zoom
+ * (CompositeExpressionBinder). z = floor(zoom + log2(512 / tileSize)) (coveringZoomLevel; GeoJSON / vector sources
+ * reparse overscaled tiles, so it is not capped by the source's maxzoom). Since MapLibre 5 different tiles of one view
+ * can have different zooms: with terrain, at high pitch (the threshold depends on the field of view and roll), and on
+ * a globe past tile zoom 4 (covering_tiles.ts). Older versions never vary; answering "varies" there only makes a
+ * verdict less confident, never wrong.
+ */
+function tileZoom(map: MlMap, source: string | undefined): { z: number; varies: boolean } {
+  let tileSize = 512;
+  try {
+    const ts = source ? (map.getSource?.(source) as { tileSize?: unknown } | undefined)?.tileSize : undefined;
+    if (typeof ts === 'number' && ts > 0) tileSize = ts;
+  } catch {
+    /* removed source */
+  }
+  const z = Math.max(0, Math.floor(map.getZoom() + Math.log2(512 / tileSize)));
+  let varies = false;
+  try {
+    if (map.getTerrain?.()) varies = true;
+    else if (projectionOf(map).globe && z > 4) varies = true;
+    else {
+      const pitch = map.getPitch?.() ?? 0;
+      const fov = (map as any).getVerticalFieldOfView?.() ?? 36.87;
+      const roll = (((map as any).getRoll?.() ?? 0) * Math.PI) / 180;
+      const canvas = map.getCanvas?.();
+      const w = canvas?.clientWidth || 1, h = canvas?.clientHeight || 1;
+      const zfov = (fov * (Math.abs(Math.cos(roll)) * h + Math.abs(Math.sin(roll)) * w)) / h;
+      varies = pitch > Math.min(60, Math.max(0, 78.5 - zfov / 2));
+    }
+  } catch {
+    varies = true; // cannot tell: not confident
+  }
+  return { z, varies };
+}
+
+/** `within` / `distance` anywhere in a style value: they need the feature's tile geometry, which the evaluator does not have. */
+function needsGeometry(v: unknown): 'within' | 'distance' | undefined {
+  if (!Array.isArray(v)) return undefined;
+  if (v[0] === 'within' || v[0] === 'distance') return v[0];
+  for (const x of v) {
+    const r = needsGeometry(x);
+    if (r) return r;
+  }
+  return undefined;
+}
+
+/** A value between two tile zooms, blended as the renderer's shader does (colours are premultiplied, blended per channel). */
+function blend(lo: any, hi: any, t: number): any {
+  if (t <= 0) return lo;
+  if (t >= 1) return hi;
+  if (typeof lo === 'number' && typeof hi === 'number') return lo + (hi - lo) * t;
+  if (lo instanceof Color && hi instanceof Color) return new Color(lo.r + (hi.r - lo.r) * t, lo.g + (hi.g - lo.g) * t, lo.b + (hi.b - lo.b) * t, lo.a + (hi.a - lo.a) * t);
+  return undefined; // not interpolable: unknown
+}
+
 /** Evaluates this layer's paint/layout properties FOR ONE FEATURE. Shared by visibility and appearance. */
 function evaluatorFor(map: MlMap, f: RenderedFeature) {
-  const type = map.getLayer(f.layer)!.type;
-  const globals = { zoom: map.getZoom() };
+  const layer = map.getLayer(f.layer)!;
+  const type = layer.type;
+  const zoom = map.getZoom();
+  const globals = { zoom };
   const feature = { type: GEOM_TYPE[f.geometry.type] ?? 1, id: f.id, properties: f.properties };
   let globalState: Record<string, unknown> = {};
   try {
@@ -43,6 +129,7 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
   } catch {
     /* older MapLibre: no global state */
   }
+  let tiles: { z: number; varies: boolean } | undefined;
 
   const expression = (group: 'paint' | 'layout', name: string): StylePropertyExpression | null | undefined => {
     const propSpec = spec[`${group}_${type}`]?.[name];
@@ -66,36 +153,78 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
         // literal value (verified). An array with a string head, on a property that is not array-typed,
         // that is not a known expression, is an expression from the future.
         const fromTheFuture = Array.isArray(input) && typeof input[0] === 'string' && propSpec.type !== 'array' && !styleExpression.isExpression(input);
-        expr = fromTheFuture ? UNPARSEABLE : normalizePropertyExpression(input, name, propSpec as any, globalState);
+        // `within` / `distance` evaluate to false / NaN without the tile geometry — a wrong answer, not an unknown one.
+        const geometry = needsGeometry(input);
+        if (geometry) unparseable.set(`${f.layer}: ${name}`, geometry);
+        expr = fromTheFuture || geometry ? UNPARSEABLE : normalizePropertyExpression(input, name, propSpec as any, globalState);
       } catch {
         expr = UNPARSEABLE;
       }
-      if (expr === UNPARSEABLE) unparseable.add(`${f.layer}: ${name}`);
+      if (expr === UNPARSEABLE && !unparseable.has(`${f.layer}: ${name}`)) unparseable.set(`${f.layer}: ${name}`, 'newer');
       parsed.set(key, expr);
     }
     return expr === UNPARSEABLE ? undefined : expr;
   };
+
+  const state = (f.state ?? {}) as any;
+  /** A zoom-and-data paint value as the renderer draws it from tiles of zoom z (see tileZoom). */
+  const composite = (expr: StylePropertyExpression, z: number): any => {
+    const lo = expr.evaluate({ zoom: z } as any, feature as any, state);
+    const hi = expr.evaluate({ zoom: z + 1 } as any, feature as any, state);
+    const t = Math.min(1, Math.max(0, (expr as { interpolationFactor?: (i: number, a: number, b: number) => number }).interpolationFactor?.(zoom, z, z + 1) ?? 0));
+    return blend(lo, hi, t);
+  };
+  const isComposite = (group: 'paint' | 'layout', expr: StylePropertyExpression) => group === 'paint' && (expr as { kind?: string }).kind === 'composite';
 
   /** Evaluated value; undefined = could not evaluate (unknown property, unsupported expression), null = not set. */
   const value = (group: 'paint' | 'layout', name: string): any => {
     const expr = expression(group, name);
     if (!expr) return expr;
     try {
-      return expr.evaluate(globals as any, feature as any, (f.state ?? {}) as any);
+      if (isComposite(group, expr)) return composite(expr, (tiles ??= tileZoom(map, layer.source)).z);
+      return expr.evaluate(globals as any, feature as any, state);
     } catch {
       return undefined;
     }
   };
-  return { type, value, expression, globalState, feature };
+  /**
+   * Where tile zooms vary across the view, the values a zoom-and-data paint property can have in OTHER tiles of it
+   * (every tile zoom up to a few past the centre's). Empty when the value is the same everywhere.
+   */
+  const elsewhere = (group: 'paint' | 'layout', name: string): any[] => {
+    const expr = expression(group, name);
+    if (!expr || !isComposite(group, expr)) return [];
+    const t = (tiles ??= tileZoom(map, layer.source));
+    if (!t.varies) return [];
+    const out: any[] = [];
+    for (let z = 0; z <= Math.min(24, t.z + 4); z++) {
+      try {
+        out.push(composite(expr, z));
+      } catch {
+        out.push(undefined);
+      }
+    }
+    return out;
+  };
+  return { type, value, elsewhere, expression, globalState, feature };
 }
 
 /**
- * Properties whose expression the BUNDLED evaluator could not parse (the app runs a newer MapLibre
- * than the style-spec we ship). For those the visibility answer degrades to "visible" — safe, but
- * weaker, and it must not be silent: diagnostics print this list once.
+ * Properties the bundled evaluator cannot answer for: an expression it could not parse (the app runs a newer MapLibre
+ * than the style-spec we ship: 'newer'), or one that uses `within` / `distance`, which need the feature's tile
+ * geometry ('within' / 'distance'). For those the visibility answer degrades to "visible" — safe, but weaker, and it
+ * must not be silent: diagnostics print this list once.
  */
-const unparseable = new Set<string>();
-export const unparseableProperties = (): string[] => [...unparseable];
+const unparseable = new Map<string, 'newer' | 'within' | 'distance'>();
+export const unparseableProperties = (): string[] => [...unparseable.keys()];
+export const unparseableReasons = (): [property: string, why: 'newer' | 'within' | 'distance'][] => [...unparseable];
+
+/**
+ * Zoom-and-data paint properties whose verdict was UNCERTAIN because tile zooms vary across the view (pitch, terrain,
+ * globe): hidden at one tile zoom, drawn at another. Treated as visible, and said once.
+ */
+const zoomUncertain = new Set<string>();
+export const zoomUncertainProperties = (): string[] => [...zoomUncertain];
 
 /** A style property a verdict rests on. */
 type Prop = { group: 'paint' | 'layout'; name: string };
@@ -111,15 +240,23 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
   const ev = evaluatorFor(map, f);
   const { type, value } = ev;
 
+  /** A hiding reason only if it hides in EVERY tile of the view (zoom-and-data paint where tile zooms vary). */
+  const everywhere = (group: 'paint' | 'layout', name: string, hides: (v: any) => boolean): boolean => {
+    if (ev.elsewhere(group, name).every(hides)) return true;
+    zoomUncertain.add(`${f.layer}: ${name}`);
+    return false;
+  };
+  const isZero = (v: any) => typeof v === 'number' && v <= 0;
+  const isClear = (v: any) => !!v && typeof v === 'object' && typeof v.a === 'number' && v.a <= 0;
   const zero = (group: 'paint' | 'layout', name: string): string | undefined => {
     const v = value(group, name);
-    const r = typeof v === 'number' && v <= 0 ? `${name} evaluates to ${v}` : undefined;
+    const r = isZero(v) && everywhere(group, name, isZero) ? `${name} evaluates to ${v}` : undefined;
     if (r) props.set(r, [{ group, name }]);
     return r;
   };
   const transparent = (name: string): string | undefined => {
     const v = value('paint', name);
-    const r = v && typeof v === 'object' && typeof v.a === 'number' && v.a <= 0 ? `${name} is fully transparent` : undefined;
+    const r = isClear(v) && everywhere('paint', name, isClear) ? `${name} is fully transparent` : undefined;
     if (r) props.set(r, [{ group: 'paint', name }]);
     return r;
   };
@@ -157,6 +294,8 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
         const opacity = first(zero('paint', 'fill-layer-opacity'), zero('paint', 'fill-opacity'));
         if (opacity) return verdict(opacity);
         if (isSet('paint', 'fill-pattern')) return { visible: true };
+        // The outline is drawn only with fill-antialias (draw_fill.ts): without it there is no outline to see (B12).
+        if (value('paint', 'fill-antialias') === false) return verdict(transparent('fill-color'), alias('no outline (fill-antialias is false)', [], [{ group: 'paint', name: 'fill-antialias' }]));
         const outlineSet = map.getPaintProperty(f.layer, 'fill-outline-color') != null;
         // "no separate outline colour" is context, not a cause of its own: the outline is drawn in fill-color.
         return verdict(transparent('fill-color'), outlineSet ? transparent('fill-outline-color') : alias('no separate outline colour', []));
@@ -174,7 +313,14 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
           const halo = colour && (zero('paint', 'text-halo-width') || transparent('text-halo-color'));
           text = first(zero('paint', 'text-opacity'), zero('layout', 'text-size'), halo ? alias('text-color and halo are fully transparent', [colour, halo]) : undefined)!;
         } else text = alias('no text', [], [{ group: 'layout', name: 'text-field' }]);
-        const icon = isSet('layout', 'icon-image') ? first(zero('paint', 'icon-opacity'), zero('layout', 'icon-size')) : alias('no icon', [], [{ group: 'layout', name: 'icon-image' }]);
+        // An SDF icon is a shape drawn IN icon-color (plus its halo); an ordinary image ignores icon-color (B13).
+        const sdfClear = (): string | undefined => {
+          if (!sdfIcon(map, value('layout', 'icon-image'))) return undefined;
+          const colour = transparent('icon-color');
+          const halo = colour && (zero('paint', 'icon-halo-width') || transparent('icon-halo-color'));
+          return halo ? alias('icon-color and halo are fully transparent (an SDF icon)', [colour, halo]) : undefined;
+        };
+        const icon = isSet('layout', 'icon-image') ? first(zero('paint', 'icon-opacity'), zero('layout', 'icon-size'), sdfClear()) : alias('no icon', [], [{ group: 'layout', name: 'icon-image' }]);
         return verdict(text, icon);
       }
       default:
@@ -402,6 +548,17 @@ export function explainLayerHidden(map: MlMap, layerId: string): StyleCause[] {
     out.push({ ...base, group: 'layout', property: 'visibility', value, origin: 'expression', branches: attribute(raw, value, ctx) });
   }
   return out;
+}
+
+/** Is this evaluated icon-image an SDF image of the style? `map.getImage` is feature-detected (not in Mapbox GL 1). */
+function sdfIcon(map: MlMap, image: unknown): boolean {
+  const name = image && typeof image === 'object' ? String((image as { name?: unknown }).name ?? '') : typeof image === 'string' ? image : '';
+  if (!name || typeof (map as any).getImage !== 'function') return false;
+  try {
+    return (map as any).getImage(name)?.sdf === true;
+  } catch {
+    return false;
+  }
 }
 
 const COLOUR_PROPERTY: Record<string, string> = { circle: 'circle-color', fill: 'fill-color', line: 'line-color', 'fill-extrusion': 'fill-extrusion-color' };

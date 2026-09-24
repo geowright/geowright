@@ -1,7 +1,7 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, layoutVisible, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
-import type { InternalCanvasAdapter, StyleCause } from './types-internal';
+import type { InternalCanvasAdapter, ProbeResult, StyleCause } from './types-internal';
 
 /** A source that is not loaded right now: its type, whether its GeoJSON is inline (nothing to download), and how long
  *  it has been pending as far as this adapter has seen (the retries of one waitForIdle() share that clock). */
@@ -62,8 +62,9 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       pitch: this.map.getPitch(),
       bounds: { west: b.getWest(), south: b.getSouth(), east: b.getEast(), north: b.getNorth() },
       size: { width: canvas.clientWidth, height: canvas.clientHeight },
-      // Both change what a pixel means (a globe has a far side, terrain hides what is behind a ridge).
-      projection: (this.map.getProjection?.()?.type as string | undefined) ?? 'mercator',
+      // Both change what a pixel means (a globe has a far side, terrain hides what is behind a ridge). Always a string:
+      // a projection expression (MapLibre 5+) is named by what it is at this zoom.
+      projection: projectionOf(this.map).name,
       terrain: !!this.map.getTerrain?.(),
     };
   }
@@ -102,7 +103,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
 
   /** The copy of the world nearest the view centre (the camera's lng may be outside [-180, 180] after panning). */
   nearestCopy(anchor: number[]): ((coord: number[]) => LngLat) | undefined {
-    if (this.map.getProjection?.()?.type === 'globe' || !(this.map.getRenderWorldCopies?.() ?? true)) return undefined;
+    if (projectionOf(this.map).globe || !(this.map.getRenderWorldCopies?.() ?? true)) return undefined;
     const shift = 360 * Math.round((this.map.getCenter().lng - anchor[0]) / 360);
     return shift ? (c) => ({ lng: c[0] + shift, lat: c[1] }) : undefined;
   }
@@ -114,7 +115,8 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     if (q.layers && layers!.length === 0) return [];
     const opts = layers ? { layers } : {};
     if (q.at) return this.map.queryRenderedFeatures([q.at.x, q.at.y], opts).map(toRendered);
-    if (this.map.getProjection?.()?.type !== 'globe') return this.map.queryRenderedFeatures(opts).map(toRendered);
+    // 'globe', 'vertical-perspective' and projection expressions all render through MapLibre's globe transform.
+    if (!projectionOf(this.map).globe) return this.map.queryRenderedFeatures(opts).map(toRendered);
     return this.queryGlobe(opts);
   }
 
@@ -158,7 +160,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     // fill-extrusion on a globe: BOX queries return nothing at all for it (verified: MapLibre's own globe +
     // fill-extrusion example, 3 extrusions plainly drawn, box query 0, point query hits). Only point queries
     // see them, so sweep a grid of points over those layers. A point hit IS the near side: no check needed.
-    const extrusions = (opts.layers ?? this.layerIds()).filter((id) => this.map.getLayer(id)?.type === 'fill-extrusion' && this.map.getLayoutProperty(id, 'visibility') !== 'none');
+    const extrusions = (opts.layers ?? this.layerIds()).filter((id) => this.map.getLayer(id)?.type === 'fill-extrusion' && layoutVisible(this.map, id));
     if (extrusions.length) {
       const probe = (x: number, y: number) => {
         if (x < 0 || y < 0 || x > w || y > h) return;
@@ -397,9 +399,13 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   }
 
   wrapPx(): number | undefined {
-    if (this.map.getProjection?.()?.type === 'globe' || !(this.map.getRenderWorldCopies?.() ?? true)) return undefined;
+    if (projectionOf(this.map).globe || !(this.map.getRenderWorldCopies?.() ?? true)) return undefined;
     const c = this.map.getCenter();
-    const w = this.map.project([c.lng + 360, c.lat]).x - this.map.project([c.lng, c.lat]).x;
+    const a = this.map.project([c.lng, c.lat]), b = this.map.project([c.lng + 360, c.lat]);
+    // The period is a horizontal pixel distance only on an unrotated map; rotated, the next copy is also up or down
+    // and folding x alone would pair the wrong pieces (B14). No folding then: a copy counts as another piece.
+    if (Math.abs(b.y - a.y) > 0.5) return undefined;
+    const w = b.x - a.x;
     return w > 0 && w < this.map.getCanvas().clientWidth * 2 ? w : undefined; // only when a second copy can be on screen
   }
 
@@ -409,7 +415,12 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   }
 
   caveats(): string[] {
-    const out = unparseableProperties().map((p) => `visibility unknown for layer ${p} — unsupported expression (newer than the bundled style-spec evaluator); treated as visible`);
+    const out = unparseableReasons().map(([p, why]) =>
+      why === 'newer'
+        ? `visibility unknown for layer ${p} — unsupported expression (newer than the bundled style-spec evaluator); treated as visible`
+        : `visibility unknown for layer ${p} — "${why}" depends on the feature's tile geometry, which the style evaluator does not have; treated as visible`,
+    );
+    for (const p of zoomUncertainProperties()) out.push(`visibility uncertain for layer ${p} — a zoom-and-data expression is drawn per tile zoom, and tile zooms vary across this view (pitch, terrain or globe); treated as visible where some tile zoom draws it`);
     // What THIS version of the map library cannot do (feature-detected). Said once, in diagnostics and the snapshot.
     if (typeof this.map.redraw !== 'function') out.push('this map library version has no synchronous redraw(): the pixel probe renders through the frame loop instead (three real frames; the frame without the layer may be seen as a one-frame flicker)');
     if (this.geojsonWithoutData().length) out.push(`source(s) ${this.geojsonWithoutData().join(', ')}: this map library version has no GeoJSONSource.getData() and the source was given a URL — features outside the viewport and full geometries are unknowable (as for tiled sources)`);
@@ -426,22 +437,37 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
 
   /**
    * Pixel probe. A WebGL canvas without preserveDrawingBuffer reads back zeros — except in the
-   * same task as the draw. `redraw()` (public, MapLibre >= 2) renders synchronously, so: draw, read, hide
-   * the layer, draw, read, restore, draw. All in one task, so the intermediate frame is never
-   * composited (no flicker). Costs three renders (~50ms each on SwiftShader), fires 'styledata'
+   * same task as the draw. `redraw()` (public, MapLibre >= 2) renders synchronously, so: draw, read, draw, read again
+   * (the CONTROL), hide the layer, draw, read, restore, draw. All in one task, so the intermediate frame is never
+   * composited (no flicker). Costs four renders (~50ms each on SwiftShader), fires 'styledata'
    * and makes MapLibre reload the layer's source afterwards — a probe, not something to run per poll.
    *
+   * The control read ( B6): the "with" and "without" reads are compared, and pixels that change BY THEMSELVES (a
+   * fade, an animation under the feature, a camera that never stops) would pass for the layer's contribution. So the
+   * layer-on pixels are read twice, and hiding the layer must change them by clearly more than they change by
+   * themselves (signal against noise); otherwise there is no verdict yet: inconclusive. Not a control after the
+   * restore: the layer is not drawn again until its source has reloaded. MapLibre 2–4 advance a paint transition only
+   * on a style change — the probe's own hide is one — so there a transition in progress under the feature can still
+   * pass for a contribution.
+   *
    * Without redraw() (Mapbox GL JS v1) the same reads happen inside the public 'render' event, which
-   * fires in the task that drew the frame: triggerRepaint(), read on 'render'. Three REAL frames — the one
-   * without the layer can be composited (a one-frame flicker), and it takes as long as three frames take.
+   * fires in the task that drew the frame: triggerRepaint(), read on 'render'. Four REAL frames — the one
+   * without the layer can be composited (a one-frame flicker), and it takes as long as four frames take: within
+   * `budgetMs` (the caller's remaining time), or inconclusive — "not yet", never "no pixels" ( B7).
    */
   pixelContribution(layer: string, at: Pt, radiusPx = 2): number | undefined | Promise<number | undefined> {
+    const r = this.probePixels(layer, at, radiusPx, 2000);
+    const diff = (p: ProbeResult) => ('diff' in p ? p.diff : undefined);
+    return r instanceof Promise ? r.then(diff) : diff(r);
+  }
+
+  probePixels(layer: string, at: Pt, radiusPx = 2, budgetMs = 2000): ProbeResult | Promise<ProbeResult> {
     const canvas = this.map.getCanvas();
     const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as WebGLRenderingContext | null;
-    if (!gl || !this.map.getLayer(layer) || this.map.getLayoutProperty(layer, 'visibility') === 'none') return undefined;
-    // Put back what the app had: since MapLibre 5.16 visibility may be an EXPRESSION on global state, and writing back
-    // the constant "visible" replaced it (and turned on a layer the app had hidden).
-    const restore = this.map.getLayoutProperty(layer, 'visibility') ?? 'visible';
+    if (!gl) return { unavailable: 'no WebGL context to read from' };
+    if (!this.map.getLayer(layer)) return { unavailable: `layer "${layer}" does not exist` };
+    // not `=== 'none'`: since MapLibre 5.16 visibility may be an expression on global state
+    if (!layoutVisible(this.map, layer)) return { unavailable: `layer "${layer}" is hidden` };
     const dpr = canvas.width / canvas.clientWidth;
     const R = Math.max(1, Math.round(radiusPx)); // (2R+1)² device pixels around the point
     const grab = () => {
@@ -454,37 +480,60 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
       return diff;
     };
+    // Signal against noise: the reads with the layer drawn differ by `control` by themselves; hiding the layer must change
+    // the pixels by clearly more than that (twice: a steady drift over one more read gives about the same again).
+    const verdict = (control: number, diff: number): ProbeResult =>
+      control === 0 || diff > 2 * control
+        ? { diff }
+        : { inconclusive: `the pixels there changed by ${control} between two reads with the layer drawn, and hiding the layer changed them by ${diff}, not clearly more than that — something is animating or still fading in there` };
+    // Put back what the app had: since MapLibre 5.16 visibility may be an EXPRESSION on global state, and writing back
+    // the constant "visible" replaced it (and turned on a layer the app had hidden). Read right before hiding, and put
+    // back only if it is still the probe's own "none" ( B8: the app may have set something else in between).
+    let restore: unknown;
+    const hide = () => {
+      restore = this.map.getLayoutProperty(layer, 'visibility') ?? 'visible';
+      this.map.setLayoutProperty(layer, 'visibility', 'none');
+    };
+    const unhide = () => {
+      if (this.map.getLayoutProperty(layer, 'visibility') === 'none') this.map.setLayoutProperty(layer, 'visibility', restore as any);
+    };
     if (typeof this.map.redraw === 'function') {
       const read = () => (this.map.redraw(), grab());
+      const first = read();
       const withLayer = read();
       let without: Uint8Array;
       try {
-        this.map.setLayoutProperty(layer, 'visibility', 'none');
+        hide();
         without = read();
       } finally {
-        this.map.setLayoutProperty(layer, 'visibility', restore);
+        unhide();
         this.map.redraw();
       }
-      return difference(withLayer, without);
+      return verdict(difference(first, withLayer), difference(withLayer, without));
     }
+    const deadline = performance.now() + Math.max(0, budgetMs);
     const frame = () =>
       new Promise<Uint8Array | undefined>((resolve) => {
-        const timer = setTimeout(() => (this.map.off('render', onRender), resolve(undefined)), 2000); // a hidden tab renders no frames
+        // A hidden tab renders no frames; a starved machine renders them late. Either way: not within the budget.
+        const timer = setTimeout(() => (this.map.off('render', onRender), resolve(undefined)), Math.max(0, deadline - performance.now()));
         const onRender = () => (clearTimeout(timer), this.map.off('render', onRender), resolve(grab()));
         this.map.on('render', onRender);
         this.map.triggerRepaint();
       });
-    return (async () => {
-      const withLayer = await frame();
+    const late: ProbeResult = { inconclusive: `no frame was rendered within ${Math.round(budgetMs)}ms (a slow machine, or a hidden tab, which renders none)` };
+    return (async (): Promise<ProbeResult> => {
+      const first = await frame();
+      const withLayer = first && (await frame());
+      if (!first || !withLayer) return late;
       let without: Uint8Array | undefined;
       try {
-        this.map.setLayoutProperty(layer, 'visibility', 'none');
+        hide();
         without = await frame();
       } finally {
-        this.map.setLayoutProperty(layer, 'visibility', restore);
+        unhide();
         this.map.triggerRepaint();
       }
-      return withLayer && without ? difference(withLayer, without) : undefined;
+      return without ? verdict(difference(first, withLayer), difference(withLayer, without)) : late;
     })();
   }
 
@@ -500,9 +549,9 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     const out: Overlay[] = [];
     const prefix = container.classList.contains('maplibregl-map') ? 'maplibregl' : 'mapboxgl';
     for (const [kind, selector] of [['marker', `.${prefix}-marker`], ['popup', `.${prefix}-popup`]] as const) {
-      const all = [...document.querySelectorAll(selector)];
-      all.forEach((el, index) => {
-        if (!container.contains(el)) return;
+      // Scoped to the container, not the document: a map inside a web component's shadow root is invisible to a
+      // document-wide query ( B9), and another map's overlays are not this one's.
+      container.querySelectorAll(selector).forEach((el, index) => {
         const r = el.getBoundingClientRect();
         const rect = { x: r.left - origin.left, y: r.top - origin.top, width: r.width, height: r.height };
         const side = [...el.classList].find((c) => c.startsWith(`${prefix}-${kind}-anchor-`))?.slice(`${prefix}-${kind}-anchor-`.length);
@@ -522,6 +571,10 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       });
     }
     return out;
+  }
+
+  overlayElement(o: Overlay): Element | undefined {
+    return this.map.getContainer().querySelectorAll(o.selector)[o.index];
   }
 
   subscribe(cb: () => void): () => void {

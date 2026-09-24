@@ -61,4 +61,32 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     for (const NAME of ['Australia', 'Japan', 'New Zealand']) await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME } }); // far side
     await map.feature({ layer: 'countries-fill', where: { NAME: 'Nigeria' } }).click();
   });
+
+  // B3: 'vertical-perspective' and a projection EXPRESSION render a globe too (MapLibre's createProjectionFromName):
+  // the viewport-query workaround must apply to them, and the view must say so.
+  for (const [name, type] of [
+    ['vertical-perspective', 'vertical-perspective'],
+    ['a projection expression', ['interpolate', ['linear'], ['zoom'], 10, 'vertical-perspective', 12, 'mercator']],
+  ] as const) {
+    test(`${name}: countries are found without \`at\`, near side only`, async ({ wild, page }) => {
+      const map = await open(wild);
+      await page.evaluate((type) => (window as any).__geowright_maps.main.setProjection({ type }), type as any);
+      await map.waitForIdle();
+      expect((await map.viewState()).projection).toMatch(/vertical-perspective/);
+      expect(await map.snapshot()).toMatch(/projection [^\n]*vertical-perspective/);
+      for (const NAME of ['Gabon', 'Nigeria', 'Brazil', 'Spain']) await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME } });
+      for (const NAME of ['Australia', 'Japan', 'New Zealand']) await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME } });
+    });
+  }
+
+  // B4: zoomed in so far that the viewport lies inside one big piece of a country: no vertex of it is on screen,
+  // yet it is drawn over the whole view.
+  test('a country that fills the whole view is found, though none of its vertices is on screen', async ({ wild, page }) => {
+    const map = await open(wild);
+    await page.evaluate(() => (window as any).__geowright_maps.main.jumpTo({ center: [-52, -10], zoom: 8 }));
+    await map.waitForIdle();
+    await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME: 'Brazil' } });
+    await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME: 'Gabon' } });
+  });
 });
+

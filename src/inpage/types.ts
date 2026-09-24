@@ -298,7 +298,7 @@ export interface GeometryVerdict {
 /** A DOM overlay positioned by the library (marker, popup). */
 export interface Overlay {
   kind: 'marker' | 'popup';
-  /** CSS selector for this kind, and the element's index among ALL matches in the document. */
+  /** CSS selector for this kind, and the element's index among its matches inside the map's container. */
   selector: string;
   index: number;
   /** Bounding box, surface-relative CSS pixels. */

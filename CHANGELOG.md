@@ -22,7 +22,8 @@ as written (it adds types only).
 - **Query** by `layer`, `layerType`, `source` (for layer ids a wrapper generates), `id`, `where` (equality, RegExp,
   `eq ne gt gte lt lte in matches exists`; any other value, such as an array or an unknown operator, is an error),
   `at` a location (one on the far side of the globe or behind a mountain matches nothing). By default, queries match only what a user can SEE. The
-  style's paint properties are evaluated for each feature: opacity 0, a transparent colour and zero size do not count
+  style's paint properties are evaluated for each feature, as the renderer draws them (a zoom-and-data expression at
+  the tile zoom): opacity 0, a transparent colour and zero size do not count
   as visible. A layer's `visibility` (including a `visibility` expression, MapLibre 5.16+), `minzoom` and `maxzoom`
   are respected. `visible: 'any'` opts out. Features need no ids: identity is id + properties, and look-alikes are
   told apart by where they are drawn.
@@ -53,13 +54,16 @@ as written (it adds types only).
   timeout (actions a third of it, at least 10 s; `waitForIdle()` two thirds; matchers use Playwright's expect timeout).
   An action's timeout is wall-clock, its failure report included, even on a page too busy to answer, and an action
   with several points (a drag, a shape) has one timeout for all of them. As in Playwright, `timeout: 0` means no timeout.
-- DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element.
+- DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element. They are found
+  inside the map's container, also when a web component hosts the map in its shadow root.
 - **Typings**: `expect` is typed from `@playwright/test` alone (so it keeps its matcher types under pnpm and Yarn PnP),
   every type a public signature names can be imported from `'geowright'` (`LayerInfo`, `SnapshotOptions`, `WhereValue`,
   `ActionPointOptions`, `Pt`, and `GeowrightMatchers` for merging `expect`s), and `types` / `typesVersions` let
   resolvers that do not read `exports` find `geowright`, `geowright/tiles` and `geowright/app`.
 - **Vector tiles without a tile server**: `routeVectorTiles()` / `vectorTileHandler()` (`geowright/tiles`) cut real MVT
-  tiles from GeoJSON inside `page.route`.
+  tiles from GeoJSON inside `page.route`, at any zoom: above `maxZoom` (default 14) a tile is cut at that detail, so a
+  source without `maxzoom` keeps its features (setting `maxzoom` on the source is still cheaper). Tile URLs may end in
+  `@2x` and any extension (`.pbf`, `.mvt`, `.vector.pbf`).
 - **Browser agents** (Playwright MCP): a text snapshot of the map with clickable pixels and evaluated colours, and an
   accessibility mirror that makes features clickable buttons (`dist/inpage.js`, `dist/inpage-agent.js`, `--init-script`).
   On a basemap with 100 layers, the snapshot shrinks the basemap first so that the app's own features stay listed.

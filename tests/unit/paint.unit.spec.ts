@@ -1,13 +1,22 @@
 import { test, expect } from '@playwright/test';
 import { describeLayerHidden, describeStyleCauses, nameColour, tally } from '../../src/inpage/engine';
-import { explainLayerHidden, explainPaint, paintColour, paintVisibility, unparseableProperties } from '../../src/inpage/maplibre-paint';
+import { explainLayerHidden, explainPaint, paintColour, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
 import type { RenderedFeature } from '../../src/inpage/types';
 
 /** Just enough of maplibregl.Map for the paint evaluator: one layer, its paint/layout, a zoom. */
-function fakeMap(type: string, paint: Record<string, unknown>, layout: Record<string, unknown> = {}, opts: { zoom?: number; minzoom?: number; maxzoom?: number; globalState?: Record<string, unknown> } = {}) {
+function fakeMap(
+  type: string,
+  paint: Record<string, unknown>,
+  layout: Record<string, unknown> = {},
+  opts: { zoom?: number; minzoom?: number; maxzoom?: number; globalState?: Record<string, unknown>; tileSize?: number; pitch?: number; images?: Record<string, { sdf: boolean }> } = {},
+) {
   return {
-    getLayer: (id: string) => (id === 'l' ? { id, type, minzoom: opts.minzoom, maxzoom: opts.maxzoom } : undefined),
+    getLayer: (id: string) => (id === 'l' ? { id, type, source: 's', minzoom: opts.minzoom, maxzoom: opts.maxzoom } : undefined),
+    getSource: (id: string) => (id === 's' ? { type: 'geojson', tileSize: opts.tileSize ?? 512 } : undefined),
     getZoom: () => opts.zoom ?? 10,
+    getPitch: () => opts.pitch ?? 0,
+    hasImage: (name: string) => !!opts.images?.[name],
+    getImage: (name: string) => opts.images?.[name],
     getGlobalState: () => opts.globalState ?? {},
     getPaintProperty: (_id: string, name: string) => paint[name],
     getLayoutProperty: (_id: string, name: string) => layout[name],
@@ -184,3 +193,63 @@ test.describe('nameColour / tally', () => {
     expect(tally(['a', 'b', 'a', 'a', 'b', 'c'])).toBe('a×3, b×2, c×1');
   });
 });
+
+/**
+ * what MapLibre DRAWS. A zoom-and-data paint expression is evaluated per tile at the tile zoom z and z+1 and
+ * blended by the camera zoom (CompositeExpressionBinder); z = floor(zoom + log2(512 / tileSize)).
+ */
+test.describe('zoom-and-data paint is judged as the renderer draws it', () => {
+  test('a step is read at the tile zoom: at camera zoom 11.7 a stop at 11.5 is not reached yet', () => {
+    const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.7 });
+    expect(paintVisibility(map, feature({ o: 1 })).visible).toBe(false);
+    expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 12.1 }), feature({ o: 1 })).visible).toBe(true);
+  });
+
+  test('an interpolate is blended between the tile zoom and the next one: never a false "invisible"', () => {
+    const map = fakeMap('circle', { 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11.5, 0, 11.6, ['get', 'o']] }, {}, { zoom: 11.2 });
+    expect(paintVisibility(map, feature({ o: 1 }))).toEqual({ visible: true });
+    const colour = fakeMap('fill', { 'fill-color': ['interpolate', ['linear'], ['zoom'], 11.5, 'rgba(0,0,0,0)', 11.6, ['get', 'c']] }, {}, { zoom: 11.2 });
+    expect(paintVisibility(colour, feature({ c: '#ff0000' })).visible).toBe(true);
+    expect(paintColour(colour, feature({ c: '#ff0000' }))?.colour).toBe('#ff0000');
+  });
+
+  test('a 256-pixel tile source is one tile zoom deeper', () => {
+    const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.2, tileSize: 256 });
+    expect(paintVisibility(map, feature({ o: 1 })).visible).toBe(true); // tile zoom 12
+  });
+
+  test('where tile zooms vary across the view (high pitch) it is uncertain: visible, and said once', () => {
+    const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.7, pitch: 75 });
+    expect(paintVisibility(map, feature({ o: 1 }))).toEqual({ visible: true });
+    expect(zoomUncertainProperties()).toContain('l: circle-opacity');
+    // hidden at EVERY tile zoom: still a confident "invisible"
+    expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 30, ['get', 'o']] }, {}, { zoom: 11.7, pitch: 75 }), feature({ o: 1 })).visible).toBe(false);
+  });
+
+  test('`within` and `distance` need the tile geometry: not evaluable, so visible — and said once', () => {
+    const area = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
+    expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 1, 0] }), feature({}))).toEqual({ visible: true });
+    expect(paintVisibility(fakeMap('line', { 'line-opacity': ['case', ['<', ['distance', { type: 'Point', coordinates: [0, 0] }], 100], 1, 0] }), feature({}))).toEqual({ visible: true });
+    expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 0, 1] }), feature({}))).toEqual({ visible: true });
+    expect(unparseableProperties().filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
+    expect(unparseableReasons()).toContainEqual(['l: line-opacity', 'distance']);
+  });
+});
+
+test.describe('outline and SDF icons', () => {
+  test('B12: fill-antialias false draws no outline — a transparent fill with an opaque outline is then invisible', () => {
+    const base = { 'fill-color': 'rgba(0,0,0,0)', 'fill-outline-color': '#000' };
+    expect(paintVisibility(fakeMap('fill', base), feature({})).visible).toBe(true);
+    expect(paintVisibility(fakeMap('fill', { ...base, 'fill-antialias': false }), feature({}))).toEqual({ visible: false, reason: 'fill-color is fully transparent and no outline (fill-antialias is false)' });
+  });
+
+  test('B13: an SDF icon is drawn in icon-color: alpha 0 and no halo is invisible; a plain image ignores icon-color', () => {
+    const images = { pin: { sdf: true }, photo: { sdf: false } };
+    const sdf = fakeMap('symbol', { 'icon-color': 'rgba(0,0,0,0)' }, { 'icon-image': 'pin' }, { images });
+    expect(paintVisibility(sdf, feature({})).visible).toBe(false);
+    expect(paintVisibility(sdf, feature({})).reason).toContain('icon-color and halo are fully transparent (an SDF icon)');
+    expect(paintVisibility(fakeMap('symbol', { 'icon-color': 'rgba(0,0,0,0)', 'icon-halo-width': 2, 'icon-halo-color': '#fff' }, { 'icon-image': 'pin' }, { images }), feature({})).visible).toBe(true);
+    expect(paintVisibility(fakeMap('symbol', { 'icon-color': 'rgba(0,0,0,0)' }, { 'icon-image': 'photo' }, { images }), feature({})).visible).toBe(true);
+  });
+});
+

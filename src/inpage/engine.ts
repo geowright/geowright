@@ -533,10 +533,13 @@ export class Engine<W = unknown> {
    * not drawn? Catches what paint evaluation cannot (transparent icon image, colour identical to
    * what is underneath). Layer-level differential at a pixel that hit-tests to the feature.
    */
-  async pixelProbe(q: FeatureQuery, opts: Pick<ActionPointOptions, 'ignoreLayers'> = {}): Promise<{ ok: true; diff: number | undefined; surface: Pt; layer: string } | { ok: false; message: string }> {
+  async pixelProbe(q: FeatureQuery, opts: Pick<ActionPointOptions, 'ignoreLayers'> & { budgetMs?: number } = {}): Promise<{ ok: true; diff: number | undefined; inconclusive?: string; surface: Pt; layer: string } | { ok: false; message: string }> {
+    const budgetMs = opts.budgetMs ?? 2000;
     const r = this.actionPointOnce(q, { ignoreLayers: opts.ignoreLayers }); // layers the caller says never occlude do not here either
     if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
-    return { ok: true, diff: await this.adapter.pixelContribution?.(r.feature.layer, r.surface), surface: r.surface, layer: r.feature.layer };
+    // the full answer when the adapter has it — "no verdict YET" (pixels changing by themselves, no frame in time) is not "cannot probe"
+    const p = this.adapter.probePixels ? await this.adapter.probePixels(r.feature.layer, r.surface, 2, budgetMs) : { diff: await this.adapter.pixelContribution?.(r.feature.layer, r.surface) };
+    return { ok: true, diff: 'diff' in p ? p.diff : undefined, inconclusive: 'inconclusive' in p ? p.inconclusive : undefined, surface: r.surface, layer: r.feature.layer };
   }
 
   /* ---------------- failure artefacts ---------------- */
