@@ -38,7 +38,8 @@ test.describe('failure artefacts', () => {
     const quiet = geowright(page, { failureScreenshots: false });
     await page.goto('/');
     await quiet.waitForIdle();
-    await quiet.feature({ layer: 'alerts', id: 99 }).click({ timeout: 300 }).catch(() => {});
+    const err = await quiet.feature({ layer: 'alerts', id: 99 }).click({ timeout: 300 }).then(() => null, (e: Error) => e);
+    expect(err?.message, 'the click failed: otherwise there was no failure to leave a screenshot of').toContain('timed out after 300ms');
     expect(testInfo.attachments.filter((a) => a.contentType === 'image/png')).toHaveLength(0);
   });
 });

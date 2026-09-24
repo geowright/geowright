@@ -76,7 +76,7 @@ export const test = base.extend<{ wild: Wild }>({
     const tolerated: RegExp[] = [];
     await page.route(/^https?:\/\//, (route) => {
       const url = route.request().url();
-      if (url.startsWith(WILD_ORIGIN)) return route.fallback();
+      if (new URL(url).origin === WILD_ORIGIN) return route.fallback(); // the exact origin: :41740 is not :4174
       if (!tolerated.some((t) => t.test(url))) unrouted.push(url);
       return route.abort();
     });

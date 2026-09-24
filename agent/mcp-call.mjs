@@ -2,10 +2,14 @@
 // One MCP tool call per invocation against a Playwright MCP server running with --port.
 // Usage: node agent/mcp-call.mjs <port> <tool|--list> ['<json args>']
 // Lets an LLM agent that only has a shell use Playwright MCP's tools and nothing else.
-import { readFileSync, writeFileSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 const [port, tool, json] = process.argv.slice(2);
 const url = `http://localhost:${port}/mcp`;
-const sessFile = `agent/runs/.session-${port}`;
+// agent/runs/ is git-ignored, so a fresh clone has none: made here, beside this script (not relative to the cwd).
+const runs = fileURLToPath(new URL('./runs/', import.meta.url));
+mkdirSync(runs, { recursive: true });
+const sessFile = `${runs}.session-${port}`;
 let session = existsSync(sessFile) ? readFileSync(sessFile, 'utf8').trim() : undefined;
 let id = Date.now();
 

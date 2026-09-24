@@ -66,4 +66,4 @@ createServer(async (req, res) => {
     res.writeHead(500, { 'content-type': 'text/plain' });
     res.end(String(e));
   }
-}).listen(PORT, () => console.log(`wild apps on http://localhost:${PORT}`));
+}).listen(PORT, 'localhost', () => console.log(`wild apps on http://localhost:${PORT}`)); // this machine only, as vite preview

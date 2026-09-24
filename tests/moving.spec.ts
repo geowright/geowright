@@ -1,4 +1,5 @@
-import { test as base, expect as baseExpect } from '@playwright/test';
+import { expect as baseExpect } from '@playwright/test';
+import { test } from './fixtures'; // the network guard and the slow-machine throttle
 import { geowright, expect } from '../src/playwright';
 
 /**
@@ -6,7 +7,6 @@ import { geowright, expect } from '../src/playwright';
  * circling a parked one at a speed the test sets; the map never idles, so nothing here waits for idle).
  * The contract: it may take several attempts, it NEVER acts on the wrong thing.
  */
-const test = base;
 
 test.describe("moving: 'allow'", () => {
   test.beforeEach(async ({ page }) => {

@@ -60,9 +60,11 @@ bash scripts/kill-preview.sh                 # stop THIS repo's preview servers 
 - **Read the installed version, not your memory.** Check `package.json` and the typings in `node_modules`
   before relying on an API: map libraries, Playwright, Vite and TypeScript here are recent majors.
 - Specs run against the **built** demo (`vite preview` on :4173, reused if already running). After changing
-  `demo/`, stop it with `bash scripts/kill-preview.sh` or you test stale code. `wild/serve.mjs` serves :4174.
+  `demo/`, stop it with `bash scripts/kill-preview.sh` or you test stale code — the run refuses a reused preview
+  whose build is older than `demo/` or not this checkout's (`tests/stale-preview.ts`). `wild/serve.mjs` serves :4174.
 - Wrapper apps under `wild/apps/*` are **prebuilt and committed** (`dist/`); rebuild inside the app with
-  `npm ci && npm run build`. Wild apps get exactly one added line; `bash wild/scripts/examples.sh verify`.
+  `npm ci && npm run build`. Wild apps get exactly one added line: `node wild/scripts/apps.mjs check` checks the
+  recorded hook lines offline, `bash wild/scripts/examples.sh verify` diffs the examples against upstream.
 - Two Playwright runs at once wipe each other's `test-results/` (fake `ENOENT … trace` failures). Give every
   concurrent run its own `--output=test-results/<name>`.
 - Queries match **visible** features by default. Feature identity is id + properties; id-less look-alikes

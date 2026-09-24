@@ -11,7 +11,7 @@ licenses, each made testable with **the one-line hook and nothing else**:
 | | what | license | how it is served |
 |---|---|---|---|
 | `maplibre-examples/examples/` | MapLibre GL JS's own examples (`maplibre/maplibre-gl-js`, tag v6.10.0, `test/examples/`) | BSD-3-Clause — `maplibre-examples/LICENSE.txt` | as-is at `/test/examples/<name>.html`; their `../../dist/maplibre-gl-dev.mjs` import resolves to `node_modules/maplibre-gl/dist` |
-| `maplibre-examples/patches/` | one unified diff per example: upstream → vendored. **Must be exactly one added line.** | | `bash wild/scripts/examples.sh verify` re-fetches upstream and checks |
+| `maplibre-examples/patches/` | one unified diff per example: upstream → vendored. **Must be exactly one added line, the hook.** | | `node wild/scripts/apps.mjs check` checks the committed patches offline; `bash wild/scripts/examples.sh verify` regenerates them from upstream (cached in the git-ignored `.upstream/`; delete it to re-fetch) and checks again |
 | `apps/` | real open-source apps (React / Svelte / Vue wrappers), source + prebuilt `dist/` | see each app's LICENSE | `/apps/<name>/` |
 | `apps/deck-gl/` | deck.gl's MapLibre `MapboxOverlay` React test app, interleaved WebGL layers | MIT — `apps/deck-gl/LICENSE` | `/apps/deck-gl/` |
 | `apps/pmtiles/` | Protomaps' MapLibre example, custom `pmtiles://` vector protocol and byte-range archive reads | BSD-3-Clause — `apps/pmtiles/LICENSE` | `/apps/pmtiles/` |
@@ -29,7 +29,11 @@ stand-in for OpenFreeMap "bright", whose OSM data / CC-BY design cannot be commi
 `node wild/scripts/apps.mjs check` (run by the unit suite, `tests/unit/wild-apps.unit.spec.ts`) holds every app here to
 the rules below: a license file on the allowlist, an `UPSTREAM.md` with the repository, the full commit and the hook
 line, a spec that opens it, and a `dist/THIRD_PARTY_LICENSES.md` with the license text of everything `dist/` bundles.
-It also fails on a file under `fixtures/` that no row in `fixtures/SOURCES.md` or `fixtures/sources/*.md` names.
+It also fails on a file under `fixtures/` that no row in `fixtures/SOURCES.md` or `fixtures/sources/*.md` names, and holds the
+one-line rule to what can be checked without the network ([0016](../docs/decisions/0016-wild-apps-not-bent-checked-offline.md),
+proposed): an app's sources name `__geowright_maps` only in the hook line its `UPSTREAM.md` shows, once per file, in the
+files it marks "+1 line"; each example's patch is that one added line and nothing else. Whether the REST of a vendored
+file is upstream's is not checked offline — for the examples `examples.sh verify` diffs them, for the apps it is review.
 
 ## Bring your app
 
