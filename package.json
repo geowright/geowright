@@ -55,6 +55,17 @@
   "bin": {
     "geowright": "./dist/cli.js"
   },
+  "types": "./dist/types/playwright/index.d.ts",
+  "typesVersions": {
+    "*": {
+      "tiles": [
+        "dist/types/playwright/tiles.d.ts"
+      ],
+      "app": [
+        "dist/types/app.d.ts"
+      ]
+    }
+  },
   "exports": {
     ".": {
       "types": "./dist/types/playwright/index.d.ts",

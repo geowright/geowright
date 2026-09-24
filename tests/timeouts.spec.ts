@@ -1,4 +1,4 @@
-import { test as base } from '@playwright/test';
+import { test as base, type Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { geowright } from '../src/playwright';
 
@@ -37,19 +37,96 @@ test.describe('timeouts', () => {
     expect(err?.message).toContain('DEAD WORKER');
   });
 
-  test('an action times out by the clock even while the page cannot answer (busy main thread)', async ({ map, page }) => {
-    // 4s of synchronous work in the page: every round trip into it blocks for that long.
-    void page.evaluate(() => {
-      const end = Date.now() + 4000;
-      while (Date.now() < end);
-    });
-    const started = Date.now();
-    const err = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 800 }).then(() => null, (e: Error) => e);
-    const took = Date.now() - started;
-    expect(err?.message).toContain('timed out after 800ms');
-    expect(err?.message).toContain('the page did not answer "actionPoint" in the time that was left');
-    // The failure ARTEFACTS (map state, screenshot) still have to wait for the page; the verdict did not.
-    expect(took).toBeLessThan(7000);
+  /** Synchronous work in the page: every round trip into it waits until it ends. Started, not awaited. */
+  const block = (page: Page, ms: number) =>
+    void page
+      .evaluate((ms) => {
+        const end = Date.now() + ms;
+        while (Date.now() < end);
+      }, ms)
+      .catch(() => {});
+
+  const BUSY = 5000;
+  const TIMEOUT = 1000;
+
+  // the verdict was abandoned at the deadline, but the map state, the screenshot and the click-time disarm then
+  // waited for the busy page (an action returned when the page answered, ~5 s here); clickAt never abandoned at all.
+  test('an action on a page that cannot answer rejects at its timeout, not when the page answers', async ({ map, page }) => {
+    for (const [name, act] of [
+      ['feature().click', () => map.feature({ layer: 'alerts', id: 1 }).click({ timeout: TIMEOUT })],
+      ['clickAt', () => map.clickAt({ lng: 34.78, lat: 32.08 }, { timeout: TIMEOUT })],
+      ['feature().info', () => map.feature({ layer: 'alerts', id: 1 }).info({ timeout: TIMEOUT })],
+    ] as const) {
+      await expect(map).toHaveView({ zoom: 12 }); // the page answers again: the previous block is over
+      block(page, BUSY);
+      const started = Date.now();
+      const err = await act().then(() => null, (e: Error) => e);
+      const took = Date.now() - started;
+      expect(err?.message, name).toContain(`timed out after ${TIMEOUT}ms`);
+      expect(err?.message, name).toMatch(/the page did not answer "\w+" in the time that was left/);
+      expect(took, `${name} rejected ${took}ms after it started, with a ${TIMEOUT}ms timeout and the page busy for ${BUSY}ms`).toBeLessThan(2 * TIMEOUT);
+    }
     await expect(page.getByTestId('popup')).toHaveCount(0); // and nothing was clicked afterwards
+  });
+
+  // (C12): a last attempt that started with a few ms left was abandoned for want of them, and the timeout then blamed
+  // "a busy main thread" on an idle page, burying the real reason (here: occluded). timeout: 1 makes it certain.
+  test('a timeout on an idle page gives the real reason, not "a busy main thread"', async ({ map, page }) => {
+    await page.getByTestId('alert-name').fill('Covering 106');
+    await page.getByTestId('alert-lng').fill('34.800');
+    await page.getByTestId('alert-lat').fill('32.060');
+    await page.getByTestId('alert-submit').click();
+    await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Covering 106' } });
+    for (const timeout of [1, 150, 400, 700]) {
+      const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout }).then(() => null, (e: Error) => e);
+      expect(err?.message, `timeout ${timeout}`).toContain(`timed out after ${timeout}ms — occluded`);
+      expect(err?.message, `timeout ${timeout}`).not.toContain('did not answer');
+    }
+  });
+
+  // (C17): every point of a multi-point action had its own full timeout: a drag waited for its start, then as long
+  // again for its end.
+  test('a multi-point action has ONE timeout, shared by its points', async ({ map, page }) => {
+    const timeout = 2000;
+    // The camera turns for most of the timeout (the start point waits for it to stop); the end point is off-screen.
+    await page.evaluate((ms) => {
+      const m = (window as any).__geowright_maps.main;
+      m.easeTo({ bearing: 20, duration: ms });
+    }, timeout * 0.8);
+    const started = Date.now();
+    const err = await map.dragAt({ lng: 34.78, lat: 32.08 }, { lng: 50, lat: 32.08 }, { timeout }).then(() => null, (e: Error) => e);
+    const took = Date.now() - started;
+    expect(err?.message).toContain('map.dragAt(to)');
+    expect(err?.message).toContain(`timed out after ${timeout}ms — location is outside the viewport`);
+    expect(took, `dragAt({ timeout: ${timeout} }) took ${took}ms`).toBeLessThan(timeout * 1.5);
+  });
+
+  // (C13): a failing toHaveLayerPixels projected its failure mark with clientPoint(), a full action timeout (≥ 10 s)
+  // of waiting for a location that is off-screen — after the assertion's own timeout.
+  test('a failing toHaveLayerPixels fails at its timeout', async ({ map }) => {
+    const started = Date.now();
+    const err = await expect(map).toHaveLayerPixels('basemap', { at: { lng: 100, lat: 0 }, timeout: TIMEOUT }).then(() => null, (e: Error) => e);
+    const took = Date.now() - started;
+    expect(err?.message).toContain('outside the viewport');
+    expect(took, `took ${took}ms`).toBeLessThan(3 * TIMEOUT);
+  });
+
+  // C19: as in Playwright, `timeout: 0` means no timeout — it used to mean ONE attempt.
+  test('timeout: 0 means no timeout, as in Playwright', async ({ map, page }) => {
+    // The app adds a layer a little later (its own timer: the test does not sleep).
+    const addLater = (id: string) =>
+      page.evaluate((id) => {
+        const m = (window as any).__geowright_maps.main;
+        setTimeout(() => {
+          m.addSource(id, { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [34.79, 32.07] } } });
+          m.addLayer({ id, type: 'circle', source: id, paint: { 'circle-radius': 10, 'circle-color': '#f0f' } });
+        }, 1200);
+      }, id);
+    await addLater('late0');
+    await expect(map).toHaveFeature({ layer: 'late0' }, { timeout: 0 });
+    await addLater('late1');
+    await map.feature({ layer: 'late1' }).hover({ timeout: 0 });
+    await addLater('late2');
+    expect((await geowright(page, { timeout: 0 }).feature({ layer: 'late2' }).info()).layer).toBe('late2');
   });
 });

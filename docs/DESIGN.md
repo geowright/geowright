@@ -490,13 +490,20 @@ busy machine; the earlier 10 s budget failed exactly where CI is slow. The defau
 read when used, so `test.slow()` scales it — a page that is slow enough to need `test.slow()` needed every geowright
 timeout raised by hand before. And an action's `timeout` is wall-clock: a side-effect-free round trip into a busy page
 (finding the pixel) is abandoned at the deadline — measured before: 33 s for `{ timeout: 2000 }` on an overloaded
-machine. Real input is never abandoned half-way.
+machine. Real input is never abandoned half-way. What follows a failure is bounded too: on a page that stopped
+answering, the map state and the screenshot are skipped (they would wait for it: `click({ timeout: 1000 })` on a page
+blocked for 5 s returned after 5 s, now after 1 s); otherwise they get 2 s. An action with several points (a drag, a
+shape) has one timeout for all of them, not one each. A round trip is never abandoned before it has had 500 ms: a last
+attempt that started with a few ms left used to be abandoned for want of them, and the timeout then blamed "a busy main
+thread" on an idle page instead of the real reason (the slowest round trip measured: 206 ms, on the dense page at 4x
+CPU throttling). As in Playwright, `timeout: 0` means no timeout.
 
-**No fixed sleeps remain anywhere in the library or its own tests.** The one that used to exist — a
+**The library has no fixed sleep of its own, and neither do its tests.** The one that used to exist — a
 short pause between vertices while drawing a shape, to avoid an unintended double-click — turned out to
 be unnecessary: CDP-dispatched mouse events carry an explicit click count, so two fast clicks at
 different pixels are never mistakenly treated as one double-click regardless of timing. Once that was
-understood, the pause was removed rather than tuned.
+understood, the pause was removed rather than tuned. What remains is a pause a caller asks for: `draw.polygon` /
+`draw.line`'s `vertexDelay` (default 0), for a draw tool of the app's that debounces clicks.
 
 **No network reaches the outside world during a test.** Style, GeoJSON sources, and raster tiles are
 all served from in-memory fixtures through `page.route`; vector tiles are cut from a GeoJSON fixture on
@@ -839,9 +846,9 @@ millisecond, and several thousand of them together still land well under 100 ms.
 density turned out to be correctness (features with no reachable pixel at all), not speed, which is
 why the ring-candidate mechanism described under actionability exists.
 
-The injected in-page script grew from roughly 22 KB to on the order of 135 KB minified once the
-bundled MapLibre style-spec evaluator (used for paint-visibility checks) was added, injected once per
-page load. This is a real, deliberate size-for-correctness trade, and it carries a version-coupling
+The injected in-page script grew from roughly 22 KB to about 380 KB (not minified; 78 KB gzipped, 186 KB if it were
+minified — measured on the 0.1.0 build) once the bundled MapLibre style-spec evaluator (used for paint-visibility
+checks) was added, injected once per page load. This is a real, deliberate size-for-correctness trade, and it carries a version-coupling
 risk worth stating plainly: an application on a MapLibre release newer than the bundled evaluator,
 using a style expression the evaluator does not recognize, will silently fall back to the safe-but-
 weaker answer described earlier ("visible," never a false "invisible") rather than failing outright.

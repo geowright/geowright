@@ -135,6 +135,28 @@ test.describe('assert gap', () => {
     expect(at!.message).toMatch(/nearest match without "at": alerts#1 .* \d+px away/);
   });
 
+  // C18: bearing and pitch had a fixed 0.1° tolerance while the message printed the CENTRE tolerance, and a bearing was
+  // not wrapped: MapLibre reports 270° as -90°.
+  test('toHaveView: a bearing is an angle (270 = -90), and the message states the tolerances it used', async ({ map, page }) => {
+    await page.evaluate(() => (window as any).__geowright_maps.main.jumpTo({ bearing: 270 }));
+    await expect(map).toHaveView({ bearing: 270 });
+    await expect(map).toHaveView({ bearing: -90 });
+    await expect(map).toHaveView({ bearing: 269.95 });
+    const e = await rejects(expect(map).toHaveView({ bearing: 260, zoom: 12 }, { timeout: 300 }));
+    expect(e?.message).toContain('(±0.01 zoom, ±0.0005° centre, ±0.1° bearing and pitch)');
+  });
+
+  // C25: the message said "rendered" for a query that matches only what a user can SEE.
+  test('toHaveFeature says "visible" when it looks for visible features; toHaveGeometry says what is on the map', async ({ map }) => {
+    const e = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: 300 }));
+    expect(e?.message).toContain('Expected: at least one visible feature matching, within 300ms');
+    const any = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: 300, visible: 'any' }));
+    expect(any?.message).toContain('Expected: at least one rendered feature matching');
+    const g = await rejects(expect(map.feature({ layer: 'alerts', id: 1 })).toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: 300 }));
+    expect(g?.message).toContain('What is on the map');
+    expect(g?.message).toContain('"name":"Gas leak"');
+  });
+
   test('toHaveView waits for the camera to come to rest', async ({ map, page }) => {
     await expect(map).toHaveView({ zoom: 12, center: { lng: 34.78, lat: 32.08 } });
     await page.getByTestId('fly-east').click();

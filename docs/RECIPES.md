@@ -117,9 +117,11 @@ a working example; its upstream Firenze archive is ODbL-derived and is never fet
 
 ## Slow pages (terrain, a globe, software GL in CI)
 
-`test.slow()` — geowright's default timeouts follow the test's timeout: a third of it for actions and assertions (at
-least 10 s), two thirds for `waitForIdle()` (the first idle is a page load, not an action). An action's
-`timeout` is wall-clock.
+`test.slow()` — geowright's default timeouts follow the test's timeout: a third of it for actions (at least 10 s), two
+thirds for `waitForIdle()` (the first idle is a page load, not an action). Assertions (`expect(map)…`) use Playwright's
+expect timeout, which `test.slow()` does not change: raise it in the config (`expect: { timeout: 15_000 }`) or per
+assertion (`{ timeout }`). An action's `timeout` is wall-clock, also on a page too busy to answer. As in Playwright,
+`timeout: 0` means no timeout.
 
 ## Old versions
 

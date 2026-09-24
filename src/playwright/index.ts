@@ -1,4 +1,4 @@
-import { expect as baseExpect, selectors, test, type CDPSession, type Locator, type Page } from '@playwright/test';
+import { expect as baseExpect, selectors, test, type CDPSession, type Expect, type ExpectMatcherState, type Locator, type MatcherReturnType, type Page } from '@playwright/test';
 import { existsSync } from 'node:fs';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
@@ -15,12 +15,14 @@ import type {
   LayerInfo,
   LngLat,
   Overlay,
+  Pt,
   SnapshotOptions,
   WhereOp,
   WhereValue,
 } from '../inpage/types.js'; // explicit extension: the published .d.ts must resolve under moduleResolution nodenext
 
-export type { Geometry, GeometryExpectation, LngLat, WhereOp };
+// Every type a public signature names is importable from 'geowright'.
+export type { ActionPointOptions, Geometry, GeometryExpectation, LayerInfo, LngLat, Pt, SnapshotOptions, WhereOp, WhereValue };
 
 /** Query as written in tests: like the wire format, but `where` values may also be a RegExp. */
 export interface FeatureQuery extends Omit<WireQuery, 'where'> {
@@ -99,7 +101,7 @@ const pinEngine: Promise<boolean> = selectors
 export interface GeowrightOptions {
   /** Key under window.__geowright_maps. Default "main". */
   mapId?: string;
-  /** Default timeout for actions and waits (ms). Assertions use Playwright's expect timeout. */
+  /** Timeout for actions and waits (ms); default: see `MapHandle.timeout`. 0: no timeout, as in Playwright. Assertions use Playwright's expect timeout. */
   timeout?: number;
   /**
    * Layers that never count as occluders for any action (basemap labels, highlight overlays...).
@@ -189,8 +191,36 @@ export interface TwoPointDrawOptions {
 
 const POLL = [0, 30, 60, 100, 100, 200, 300, 500];
 
+/**
+ * The least time a round trip into the page is given before it is abandoned at a deadline. A last attempt that started
+ * with a few ms left used to be abandoned for want of them, and the timeout then blamed "a busy main thread" on an idle
+ * page, burying the real reason. An answer that takes longer than this IS a busy page. Measured, the slowest round
+ * trip (actionPoint): 24–59 ms on the demo, 35–206 ms on the dense page at 4x CPU throttling.
+ */
+const MIN_ANSWER_MS = 500;
+/**
+ * How long failure diagnostics (the map state, the screenshot) may take after an action or assertion has failed. They
+ * wait for the page; without a bound, a page that stopped answering held the failure until it answered. Measured
+ * at 4x CPU throttling on the dense page: the map state ≤ 130 ms, the screenshot ≤ 110 ms.
+ */
+const DIAGNOSTIC_GRACE_MS = 2000;
+
+/** The deadline of a timeout. As in Playwright, 0 means no timeout. */
+const deadlineOf = (timeout: number) => (timeout === 0 ? Infinity : Date.now() + timeout);
+
 /** A side-effect-free round trip into the page outlived the action's deadline. */
 class DeadlineError extends Error {}
+
+/** `p`, or a DeadlineError from `message()` once `ms` have passed. The loser of the race is left to settle unobserved. */
+function within<T>(p: Promise<T>, ms: number, message: () => string): Promise<T> {
+  if (ms === Infinity) return p;
+  p.catch(() => {}); // if it loses the race, its eventual failure must not become an unhandled rejection
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new DeadlineError(message())), Math.max(0, ms));
+  });
+  return Promise.race([p, late]).finally(() => clearTimeout(timer));
+}
 
 /**
  * Aiming at a moving target. The pointer arrives some ms after the pixel was computed; how many is not
@@ -281,17 +311,17 @@ export class MapHandle {
     return { found: r.found.map(fromWire), missingLayer: r.missingLayer };
   }
 
-  /** @internal */
-  _explain(q: FeatureQuery): Promise<string> {
-    return this._call<string>('explain', toWire(q)).catch((e) => `(could not inspect the map: ${(e as Error).message.split('\n')[0]})`);
+  /** @internal The map state for a failure message; bounded (`by`): it must not hold up the failure it explains. */
+  _explain(q: FeatureQuery, by = Date.now() + DIAGNOSTIC_GRACE_MS): Promise<string> {
+    return this._callBy<string>(by, 'explain', toWire(q)).catch((e) => `(could not inspect the map: ${(e as Error).message.split('\n')[0]})`);
   }
 
   /**
    * @internal Failure artefact: the map as it is NOW, with marks drawn on it. The overlay is added,
    * screenshotted and removed in one go (never left in the app's DOM), and nothing here may throw:
-   * a failing artefact must not mask the real failure.
+   * a failing artefact must not mask the real failure — nor hold it up: it gives up at `by`.
    */
-  async _attachFailureScreenshot(name: string, query: FeatureQuery | undefined, extra: DebugMark[] = [], opts: ActionPointOptions = {}): Promise<void> {
+  async _attachFailureScreenshot(name: string, query: FeatureQuery | undefined, extra: DebugMark[] = [], opts: ActionPointOptions = {}, by = Date.now() + DIAGNOSTIC_GRACE_MS): Promise<void> {
     if (!this.failureScreenshots) return;
     try {
       test.info();
@@ -300,8 +330,9 @@ export class MapHandle {
     }
     const id = `geowright-marks-${Math.random().toString(36).slice(2)}`;
     try {
-      const marks = [...extra, ...(query ? await this._call<DebugMark[]>('debugMarks', toWire(query), opts) : [])];
-      const clip = await this.page.evaluate(
+      const left = () => by - Date.now();
+      const marks = [...extra, ...(query ? await this._callBy<DebugMark[]>(by, 'debugMarks', toWire(query), opts) : [])];
+      const drawn = this.page.evaluate(
         ([overlayId, mapId, list]) => {
           const map = (window as any).__geowright_maps?.[mapId as string];
           const r = (map?.getCanvas?.() as HTMLElement | undefined)?.getBoundingClientRect();
@@ -341,12 +372,15 @@ export class MapHandle {
         },
         [id, this.mapId, marks] as const,
       );
-      const body = await this.page.screenshot({ clip: clip ?? undefined, animations: 'disabled', caret: 'initial' });
+      const clip = await within(drawn, left(), () => 'no time left');
+      if (left() <= 0) return;
+      const body = await this.page.screenshot({ clip: clip ?? undefined, animations: 'disabled', caret: 'initial', timeout: Math.max(1, left()) });
       await test.info().attach(name, { body, contentType: 'image/png' });
     } catch {
       /* best effort */
     } finally {
-      await this.page.evaluate((overlayId) => document.getElementById(overlayId)?.remove(), id).catch(() => {});
+      // Sent even when out of time: the page runs it after the drawing, whenever it gets to them.
+      await within(this.page.evaluate((overlayId) => document.getElementById(overlayId)?.remove(), id), Math.max(0, by - Date.now()), () => '').catch(() => {});
     }
   }
 
@@ -354,18 +388,14 @@ export class MapHandle {
    * @internal `_call`, but gives up at `deadline`. ONLY for calls without side effects on the page (queries,
    * waits): the abandoned evaluate keeps running in the page and its answer is dropped. Never wrap real input.
    */
-  async _callBy<T>(deadline: number, method: string, ...args: unknown[]): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new DeadlineError(`the page did not answer "${method}" in the time that was left (a busy main thread: heavy rendering, or an overloaded machine)`)), Math.max(1, deadline - Date.now()));
-    });
-    const call = this._call<T>(method, ...args);
-    call.catch(() => {}); // if it loses the race, its eventual failure must not become an unhandled rejection
-    try {
-      return await Promise.race([call, late]);
-    } finally {
-      clearTimeout(timer);
-    }
+  _callBy<T>(deadline: number, method: string, ...args: unknown[]): Promise<T> {
+    return this._answerBy(deadline, method, this._call<T>(method, ...args));
+  }
+
+  /** @internal `call` (a round trip into the page, `method`), abandoned at `deadline` — but never before MIN_ANSWER_MS. */
+  _answerBy<T>(deadline: number, method: string, call: Promise<T>): Promise<T> {
+    const budget = deadline === Infinity ? Infinity : Math.max(MIN_ANSWER_MS, Math.round(deadline - Date.now()));
+    return within(call, budget, () => `the page did not answer "${method}" in the time that was left (${budget}ms; a busy main thread: heavy rendering, or an overloaded machine)`);
   }
 
   /**
@@ -400,9 +430,11 @@ export class MapHandle {
     return (res as { value: T }).value;
   }
 
-  /** @internal poll `attempt` until it returns a value or the timeout elapses. */
-  async _retry<T>(what: string, timeout: number, attempt: (deadline: number) => Promise<{ value: T } | { retry: string }>): Promise<T> {
-    const deadline = Date.now() + timeout;
+  /**
+   * @internal poll `attempt` until it returns a value or the timeout elapses (0: no timeout). `deadline`: when a call
+   * shares its timeout between several steps (a drag's two points), the one they share; `timeout` names it in messages.
+   */
+  async _retry<T>(what: string, timeout: number, attempt: (deadline: number) => Promise<{ value: T } | { retry: string }>, deadline = deadlineOf(timeout)): Promise<T> {
     let last = 'never attempted';
     for (let i = 0; ; i++) {
       try {
@@ -412,8 +444,9 @@ export class MapHandle {
       } catch (e) {
         if (e instanceof DeadlineError) {
           // `timeout` is a wall-clock promise. One slow round trip into a busy page used to run on for as long as it
-          // liked (measured: 33s for { timeout: 2000 } on an overloaded machine); it is abandoned instead.
-          throw new GeowrightError(`${what}: timed out after ${timeout}ms — ${e.message}; before that: ${last}`);
+          // liked (measured: 33s for { timeout: 2000 } on an overloaded machine); it is abandoned instead. The page is not
+          // answering: the caller skips the diagnostics that would wait for it.
+          throw new UnresponsiveError(`${what}: timed out after ${timeout}ms — ${e.message}; before that: ${last}`);
         }
         // "no map registered yet" and navigation races are retryable; they surface on timeout.
         last = (e as Error).message.split('\n')[0];
@@ -576,8 +609,9 @@ export class MapHandle {
   /** Real press-move-release. `steps` matters: MapLibre (and draw tools) ignore a single jump. */
   async dragAt(from: LngLat, to: LngLat, opts: ActionOptions & { steps?: number } = {}): Promise<void> {
     await step(`map.dragAt(${fmt(from)} -> ${fmt(to)})`, async () => {
-      const a = await this._pointAt(from, opts, 'map.dragAt(from)');
-      const b = await this._pointAt(to, { ...opts, autoPan: false }, 'map.dragAt(to)');
+      const deadline = deadlineOf(opts.timeout ?? this.timeout); // one timeout for the whole drag
+      const a = await this._pointAt(from, opts, 'map.dragAt(from)', deadline);
+      const b = await this._pointAt(to, { ...opts, autoPan: false }, 'map.dragAt(to)', deadline);
       await this._drag(a, b, opts.steps, opts.modifiers);
     });
   }
@@ -594,32 +628,40 @@ export class MapHandle {
     });
   }
 
-  /** @internal lngLat -> client pixel, waiting until it is in view, uncovered and the map is still. */
-  async _pointAt(at: LngLat, opts: ActionOptions, what: string): Promise<{ x: number; y: number }> {
+  /**
+   * @internal lngLat -> client pixel, waiting until it is in view, uncovered and the map is still. `deadline`: the one of
+   * the whole action, when it has several points; by default its own timeout.
+   */
+  async _pointAt(at: LngLat, opts: ActionOptions, what: string, deadline?: number): Promise<{ x: number; y: number }> {
     let last: { x: number; y: number } | undefined;
     try {
-      return await this._pointAtOnce(at, opts, what, (c) => (last = c));
+      return await this._pointAtOnce(at, opts, what, (c) => (last = c), deadline);
     } catch (e) {
-      if (e instanceof GeowrightError) await this._attachFailureScreenshot(`map screenshot — ${what}`, undefined, last ? [{ ...last, kind: 'target', label: fmt(at) }] : []);
+      // A page that is not answering would hold the screenshot up as long as it does not answer.
+      if (e instanceof GeowrightError && !(e instanceof UnresponsiveError)) await this._attachFailureScreenshot(`map screenshot — ${what}`, undefined, last ? [{ ...last, kind: 'target', label: fmt(at) }] : []);
       throw e;
     }
   }
 
-  private _pointAtOnce(at: LngLat, opts: ActionOptions, what: string, seen: (client: { x: number; y: number }) => void): Promise<{ x: number; y: number }> {
-    return this._retry<{ x: number; y: number }>(`${what} ${fmt(at)}`, opts.timeout ?? this.timeout, async () => {
-      const r = await this._pointNow(at, opts, seen);
+  private _pointAtOnce(at: LngLat, opts: ActionOptions, what: string, seen: (client: { x: number; y: number }) => void, deadline?: number): Promise<{ x: number; y: number }> {
+    const timeout = opts.timeout ?? this.timeout;
+    return this._retry<{ x: number; y: number }>(`${what} ${fmt(at)}`, timeout, async (by) => {
+      const r = await this._pointNow(at, opts, seen, by);
       if ('outside' in r && opts.autoPan) {
         await this._call('revealWorld', at);
-        await this._call('waitForIdle', 2000);
+        await this._callBy(by, 'waitForIdle', 2000);
         return { retry: 'panned to location' };
       }
       return r;
-    });
+    }, deadline ?? deadlineOf(timeout));
   }
 
-  /** @internal ONE look, no waiting and no panning: the client pixel of a location if an action could use it right now. */
-  async _pointNow(at: LngLat, opts: ActionOptions, seen?: (client: { x: number; y: number }) => void): Promise<{ value: { x: number; y: number } } | { retry: string; outside?: true }> {
-    const r = await this._call<{ client: { x: number; y: number }; inside: boolean; hidden: boolean; covered: boolean; moving: boolean }>('clientPoint', at);
+  /**
+   * @internal ONE look, no waiting and no panning: the client pixel of a location if an action could use it right now.
+   * `deadline`: the look is abandoned then (it has no side effects).
+   */
+  async _pointNow(at: LngLat, opts: ActionOptions, seen?: (client: { x: number; y: number }) => void, deadline = Infinity): Promise<{ value: { x: number; y: number } } | { retry: string; outside?: true }> {
+    const r = await this._callBy<{ client: { x: number; y: number }; inside: boolean; hidden: boolean; covered: boolean; moving: boolean }>(deadline, 'clientPoint', at);
     seen?.(r.client);
     if (r.moving) return { retry: 'map is moving' };
     if (!r.inside) return { retry: `location is outside the viewport${!opts.autoPan ? ' (pass { autoPan: true } to move the camera)' : ''}`, outside: true };
@@ -679,8 +721,9 @@ export class MapHandle {
    */
   async touchDragAt(from: LngLat, to: LngLat, o: { steps?: number } & ActionOptions = {}): Promise<void> {
     await step(`map.touchDragAt(${fmt(from)} -> ${fmt(to)})`, async () => {
-      const a = await this._pointAt(from, o, 'map.touchDragAt(from)');
-      const b = await this._pointAt(to, { ...o, autoPan: false }, 'map.touchDragAt(to)');
+      const deadline = deadlineOf(o.timeout ?? this.timeout); // one timeout for the whole gesture
+      const a = await this._pointAt(from, o, 'map.touchDragAt(from)', deadline);
+      const b = await this._pointAt(to, { ...o, autoPan: false }, 'map.touchDragAt(to)', deadline);
       await this._twoFingers(o.steps ?? 12, (t) => [{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }]);
     });
   }
@@ -700,7 +743,11 @@ export class MapHandle {
     if (browser && browser.browserType().name() !== 'chromium') {
       throw new GeowrightError('touch gestures need Chromium: Playwright has no touch-move or multi-touch API (touchscreen.tap only), this uses CDP Input.dispatchTouchEvent');
     }
-    const cdp = await (this.cdp ??= this.page.context().newCDPSession(this.page));
+    // A session that could not be made is not cached: the next gesture tries again. (It ends with the page.)
+    const cdp = await (this.cdp ??= this.page.context().newCDPSession(this.page).catch((e: Error) => {
+      this.cdp = undefined;
+      throw e;
+    }));
     const points = (t: number) => at(t).map((p, id) => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, id }));
     await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0) });
     for (let i = 1; i <= steps; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(i / steps) });
@@ -717,9 +764,13 @@ export class MapHandle {
     press: (key: string) =>
       step(`map.keyboard.press(${key})`, async () => {
         const canvas = await this.page.evaluateHandle((id) => (window as any).__geowright_maps?.[id]?.getCanvas?.() as HTMLElement | undefined, this.mapId);
-        const el = canvas.asElement();
-        if (!el) throw new GeowrightError(`map.keyboard.press: no map registered as "${this.mapId}"`);
-        await el.focus();
+        try {
+          const el = canvas.asElement();
+          if (!el) throw new GeowrightError(`map.keyboard.press: no map registered as "${this.mapId}"`);
+          await el.focus();
+        } finally {
+          await canvas.dispose().catch(() => {});
+        }
         await this.page.keyboard.press(key);
       }),
   };
@@ -741,8 +792,9 @@ export class MapHandle {
     const gesture = opts.gesture ?? 'click-move-click';
     const steps = opts.steps ?? 8;
     await step(`map.draw.${kind}(${fmt(from)} -> ${fmt(to)}, ${gesture})`, async () => {
-      const a = await this._pointAt(from, opts, `map.draw.${kind} start`);
-      const b = await this._pointAt(to, opts, `map.draw.${kind} end`);
+      const deadline = deadlineOf(opts.timeout ?? this.timeout); // one timeout for the whole shape
+      const a = await this._pointAt(from, opts, `map.draw.${kind} start`, deadline);
+      const b = await this._pointAt(to, opts, `map.draw.${kind} end`, deadline);
       await this.page.mouse.move(a.x, a.y, { steps: 3 });
       if (gesture === 'drag') {
         await this.page.mouse.down();
@@ -761,11 +813,12 @@ export class MapHandle {
     const delay = opts.vertexDelay ?? 0;
     await step(`map.draw.${kind}(${vertices.length} vertices, finish: ${finish})`, async () => {
       const pts: { x: number; y: number }[] = [];
-      for (const v of vertices) pts.push(await this._pointAt(v, opts, `map.draw.${kind} vertex`));
+      const deadline = deadlineOf(opts.timeout ?? this.timeout); // one timeout for the whole shape
+      for (const v of vertices) pts.push(await this._pointAt(v, opts, `map.draw.${kind} vertex`, deadline));
       for (const p of pts) {
         await this.page.mouse.move(p.x, p.y, { steps: 5 });
         await this.page.mouse.click(p.x, p.y);
-        if (delay) await this.page.waitForTimeout(delay);
+        if (delay) await this.page.waitForTimeout(delay); // the caller's own pause (a draw tool that debounces clicks), never a wait of ours
       }
       const last = pts[pts.length - 1];
       const first = pts[0];
@@ -804,16 +857,25 @@ export class FeatureHandle {
     act: (p: { x: number; y: number }, aim: Aim, token?: string) => Promise<{ retry: string } | void>,
     /** Moving targets: arm the click-time check BEFORE the pixel is computed — every round trip after it is lateness. */
     armFirst?: () => Promise<string>,
+    /** The deadline of the whole action, when it has more steps than this one (dragTo: its destination first, ). */
+    sharedDeadline?: number,
   ): Promise<void> {
     const timeout = opts.timeout ?? this.map.timeout;
     let panned = false;
     const aim = new Aim(); // moving targets: how far ahead to point, learnt from misses across the attempts
+    // Nothing that follows a failure may wait for a page that stopped answering: the check armed before it is
+    // disarmed without waiting for the answer (the page runs it when it gets to it; its verdict is not needed).
+    const release = (token: string | undefined) => void (token && this.map._disarm(token));
     try {
       await this.map._retry<true>(what, timeout, async (deadline) => {
-        const token = await armFirst?.();
+        const arming = armFirst?.();
+        const token = arming && (await this.map._answerBy(deadline, 'arm', arming).catch((e) => {
+          if (e instanceof DeadlineError) arming.then(release, () => {}); // armed after all, later: disarm it then
+          throw e;
+        }));
         // Looking for the pixel has no side effects and may be abandoned at the deadline; real input (below) never is.
-        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), this.pointOpts(opts, aim.leadMs)).catch(async (e) => {
-          if (token) await this.map._disarm(token);
+        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), this.pointOpts(opts, aim.leadMs)).catch((e) => {
+          release(token);
           throw e;
         });
         if (r.ok) aim.velocity = r.velocity;
@@ -826,7 +888,7 @@ export class FeatureHandle {
                 : await this.map._call<boolean>('reveal', toWire(this.query));
             if (revealed) {
               panned = true;
-              await this.map._call('waitForIdle', 2000);
+              await this.map._callBy(deadline, 'waitForIdle', 2000);
               return { retry: 'auto-panned to feature' };
             }
           }
@@ -838,12 +900,15 @@ export class FeatureHandle {
           await attach(`pixel — ${what}`, `client (${r.client.x}, ${r.client.y}) · canvas (${r.surface.x}, ${r.surface.y})${r.feature.world ? ` · ${JSON.stringify(r.feature.world)}` : ''}\n${r.why}`);
         }
         return outcome ?? { value: true };
-      });
+      }, sharedDeadline);
     } catch (e) {
       if (!(e instanceof GeowrightError)) throw e;
-      const explain = await this.map._explain(this.query);
+      // The page is not answering: what is on the map, and a screenshot of it, would wait for it.
+      if (e instanceof UnresponsiveError) throw new UnresponsiveError(`${e.message}\n\n(What is on the map was not inspected: the page was not answering.)`);
+      const by = Date.now() + DIAGNOSTIC_GRACE_MS; // one grace for both
+      const explain = await this.map._explain(this.query, by);
       await attach(`map state — ${what}`, explain);
-      await this.map._attachFailureScreenshot(`map screenshot — ${what}`, this.query, [], this.pointOpts(opts));
+      await this.map._attachFailureScreenshot(`map screenshot — ${what}`, this.query, [], this.pointOpts(opts), by);
       throw new GeowrightError(`${e.message}\n\nWhat is on the map:\n${indent(explain)}`);
     }
   }
@@ -924,13 +989,14 @@ export class FeatureHandle {
       // The destination first (it may wait for the map, up to the timeout), THEN the source: the press follows the
       // source's verification at once. Resolved after it, a long wait here let the target move before the press.
       const dest = { ...opts, autoPan: false, force: true };
-      await this.map._pointAt(to, dest, `${what} destination`);
+      const deadline = deadlineOf(opts.timeout ?? this.map.timeout); // one timeout for both
+      await this.map._pointAt(to, dest, `${what} destination`, deadline);
       await this._withActionPoint(what, opts, async (a) => {
         // one round trip, no waiting: the camera may have moved since, so the destination pixel is read afresh
         const b = await this.map._pointNow(to, dest);
         if ('retry' in b) return { retry: `destination: ${b.retry}` };
         await this.map._drag(a, b.value, opts.steps, opts.modifiers);
-      });
+      }, undefined, deadline);
     });
   }
 
@@ -956,8 +1022,8 @@ export class FeatureHandle {
 
   /** The feature's full geometry as the MAP holds it (source data; falls back to rendered pieces). */
   async geometry(opts: { timeout?: number } = {}): Promise<Geometry> {
-    return this.map._retry<Geometry>(`${this}.geometry()`, opts.timeout ?? this.map.timeout, async () => {
-      const r = await this.map._call<{ ok: true; geometry: Geometry } | { ok: false; message: string }>('geometry', toWire(this.query));
+    return this.map._retry<Geometry>(`${this}.geometry()`, opts.timeout ?? this.map.timeout, async (deadline) => {
+      const r = await this.map._callBy<{ ok: true; geometry: Geometry } | { ok: false; message: string }>(deadline, 'geometry', toWire(this.query));
       return r.ok ? { value: r.geometry } : { retry: r.message };
     });
   }
@@ -978,8 +1044,8 @@ export class FeatureHandle {
 
   /** The resolved feature (auto-waits until exactly one matches). */
   async info(opts: { timeout?: number } = {}): Promise<FeatureSummary> {
-    return this.map._retry<FeatureSummary>(`${this}.info()`, opts.timeout ?? this.map.timeout, async () => {
-      const found = await this.map._find(this.query);
+    return this.map._retry<FeatureSummary>(`${this}.info()`, opts.timeout ?? this.map.timeout, async (deadline) => {
+      const found = (await this.map._callBy<WireSummary[]>(deadline, 'find', toWire(this.query))).map(fromWire);
       if (found.length === 1) return { value: found[0] };
       return { retry: found.length === 0 ? 'no rendered feature matches' : `strict mode violation: ${found.length} features match` };
     });
@@ -1021,7 +1087,7 @@ interface Poll {
  * toHaveView has always had for a map that never came to rest. A throw is an inconclusive poll.
  */
 async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number, deadline: number) => Promise<Poll>, backoff: number[] = POLL): Promise<{ pass: boolean; inconclusive?: string }> {
-  const deadline = Date.now() + timeout;
+  const deadline = deadlineOf(timeout);
   let last: Poll = { verdict: undefined, why: 'never checked' };
   for (let i = 0; ; i++) {
     try {
@@ -1067,7 +1133,17 @@ export interface ViewExpectation {
   pitch?: number;
 }
 
-export const expect = baseExpect.extend({
+/** A matcher as `expect.extend` takes it. */
+type Matcher = (this: ExpectMatcherState, receiver: any, ...args: any[]) => Promise<MatcherReturnType>;
+
+/** What a failure message calls the features a query looks for. */
+const kindOf = (q: FeatureQuery) => (q.visible === 'any' ? 'rendered' : q.visible === false ? 'invisible' : 'visible');
+
+/** Bearing and pitch: degrees, compared as angles (MapLibre reports a bearing of 270 as -90). */
+const ANGLE_TOLERANCE = 0.1;
+const angleApart = (a: number, b: number) => Math.abs(((((a - b) % 360) + 540) % 360) - 180);
+
+const matchers = {
   /**
    * At least one feature a user can SEE matches (`{ visible: 'any' }` for MapLibre's looser notion of
    * "rendered", which includes opacity-0 features). Retries; `.not` waits for none.
@@ -1098,7 +1174,7 @@ export const expect = baseExpect.extend({
       actual: found,
       message: () =>
         `expect(map).${this.isNot ? 'not.' : ''}toHaveFeature(${show(query)})\n\n` +
-        `Expected: ${this.isNot ? 'no' : 'at least one'} rendered feature matching, within ${timeout}ms\n` +
+        `Expected: ${this.isNot ? 'no' : 'at least one'} ${kindOf(query)} feature matching, within ${timeout}ms\n` +
         `Received: ${inconclusive ? undecided(inconclusive) : `${found.length} match(es)`}\n` +
         (this.isNot ? found.slice(0, 5).map((f) => `  - ${fmtFeature(f)}`).join('\n') + '\n' : '') +
         `\nWhat is on the map:\n${indent(explain)}`,
@@ -1140,17 +1216,6 @@ export const expect = baseExpect.extend({
   },
 
   /**
-   * The feature can actually be SEEN, not merely "rendered" (MapLibre's queryRenderedFeatures also
-   * returns opacity-0 / transparent / zero-size features). Two checks, both must hold:
-   *  1. paint: the layer's paint properties, evaluated for this feature, draw something
-   *  2. pixels (default on; `{ pixels: false }` to skip): the canvas pixels at the feature's action
-   *     point change when its layer is not drawn. Catches transparent icons and same-colour-as-
-   *     background; needs an unoccluded point, so an occluded feature is not visible either.
-   * The pixel probe re-renders the map three times and briefly toggles the layer's visibility
-   * within one task (nothing is composited, but 'styledata' fires) — it runs once, after the cheap
-   * paint check has passed, not on every poll.
-   */
-  /**
    * For layers that have no features to ask about — raster, image, canvas, video, heatmap, hillshade:
    * does `layer` contribute PIXELS at a location? (The canvas pixels there change when the layer is not
    * drawn: same same-task redraw + readPixels probe as toBeVisibleOnMap, public API only.) Retries.
@@ -1177,7 +1242,13 @@ export const expect = baseExpect.extend({
       [250, 500, 1000, 2000],
     );
     if (inconclusive) why = undecided(inconclusive);
-    if (pass === this.isNot) await received._attachFailureScreenshot('map screenshot — toHaveLayerPixels', undefined, [{ ...(await received.clientPoint(options.at).catch(() => ({ x: 0, y: 0 }))), kind: 'target', label: layer }]);
+    if (pass === this.isNot) {
+      // One bounded look for where to draw the mark: clientPoint() would wait (a full action timeout) for a location
+      // that is off-screen or on the far side of the globe — after this assertion's own timeout.
+      const by = Date.now() + DIAGNOSTIC_GRACE_MS;
+      const mark = await received._callBy<{ client: { x: number; y: number } }>(by, 'clientPoint', options.at).then((r): DebugMark[] => [{ ...r.client, kind: 'target', label: layer }], () => []);
+      await received._attachFailureScreenshot('map screenshot — toHaveLayerPixels', undefined, mark, {}, by);
+    }
     return {
       pass,
       name: 'toHaveLayerPixels',
@@ -1185,6 +1256,17 @@ export const expect = baseExpect.extend({
     };
   },
 
+  /**
+   * The feature can actually be SEEN, not merely "rendered" (MapLibre's queryRenderedFeatures also
+   * returns opacity-0 / transparent / zero-size features). Two checks, both must hold:
+   *  1. paint: the layer's paint properties, evaluated for this feature, draw something
+   *  2. pixels (default on; `{ pixels: false }` to skip): the canvas pixels at the feature's action
+   *     point change when its layer is not drawn. Catches transparent icons and same-colour-as-
+   *     background; needs an unoccluded point, so an occluded feature is not visible either.
+   * The pixel probe re-renders the map three times and briefly toggles the layer's visibility
+   * within one task (nothing is composited, but 'styledata' fires) — it runs once, after the cheap
+   * paint check has passed, not on every poll.
+   */
   async toBeVisibleOnMap(received: FeatureHandle, options?: { timeout?: number; pixels?: boolean }) {
     if (!(received instanceof FeatureHandle)) throw new Error('toBeVisibleOnMap: receiver must be map.feature(...)');
     const timeout = options?.timeout ?? this.timeout;
@@ -1269,6 +1351,9 @@ ${indent(explain)}`,
       // compared (no feature matches, or several do) — "not that geometry" cannot be concluded.
       return verdict.ok || verdict.actual !== undefined ? { verdict: verdict.ok } : { verdict: undefined, why: verdict.reason };
     });
+    const explain = pass === this.isNot ? await map._explain(received.query) : '';
+    if (explain) await attach('map state — toHaveGeometry', explain);
+    if (explain) await map._attachFailureScreenshot('map screenshot — toHaveGeometry', received.query);
     return {
       pass,
       name: 'toHaveGeometry',
@@ -1278,7 +1363,7 @@ ${indent(explain)}`,
         `expect(${received}).${this.isNot ? 'not.' : ''}toHaveGeometry(…, { tolerancePx: ${tolerancePx} })\n\n` +
         `Expected: ${JSON.stringify(expected)}\n` +
         `Received: ${inconclusive ? undecided(inconclusive) : verdict.ok ? 'matching geometry' : verdict.reason}\n` +
-        `Geometry on the map (${verdict.from ?? 'n/a'}): ${JSON.stringify(verdict.actual)}`,
+        `Geometry on the map (${verdict.from ?? 'n/a'}): ${JSON.stringify(verdict.actual)}\n\nWhat is on the map:\n${indent(explain)}`,
     };
   },
 
@@ -1320,7 +1405,7 @@ ${indent(explain)}`,
     const zt = options?.zoomTolerance ?? 0.01;
     const dt = options?.degreesTolerance ?? 0.0005;
     const near = (a: number, b: number, tol: number) => Math.abs(a - b) <= tol;
-    const deadline = Date.now() + timeout;
+    const deadline = deadlineOf(timeout);
     let view: Awaited<ReturnType<MapHandle['viewState']>> | undefined;
     let pass = false;
     let settled = false;
@@ -1332,8 +1417,8 @@ ${indent(explain)}`,
         pass =
           settled &&
           (expected.zoom === undefined || near(view.zoom, expected.zoom, zt)) &&
-          (expected.bearing === undefined || near(view.bearing, expected.bearing, 0.1)) &&
-          (expected.pitch === undefined || near(view.pitch, expected.pitch, 0.1)) &&
+          (expected.bearing === undefined || angleApart(view.bearing, expected.bearing) <= ANGLE_TOLERANCE) &&
+          (expected.pitch === undefined || near(view.pitch, expected.pitch, ANGLE_TOLERANCE)) &&
           (expected.center === undefined || (near(view.center.lng, expected.center.lng, dt) && near(view.center.lat, expected.center.lat, dt)));
         // A verdict needs the map AT REST, in both polarities. `.not.toHaveView(start)` used to be
         // satisfied by a map that was merely still animating away from `start` — so the next line of
@@ -1355,11 +1440,20 @@ ${indent(explain)}`,
       actual,
       message: () =>
         `expect(map).${this.isNot ? 'not.' : ''}toHaveView(${JSON.stringify(expected)})\n\n` +
-        `Expected: ${JSON.stringify(expected)} (±${zt} zoom, ±${dt}°), map at rest, within ${timeout}ms\n` +
+        `Expected: ${JSON.stringify(expected)} (±${zt} zoom, ±${dt}° centre, ±${ANGLE_TOLERANCE}° bearing and pitch), map at rest, within ${timeout}ms\n` +
         `Received: ${settled ? JSON.stringify(actual) : `the map never came to rest within ${timeout}ms (last seen: ${JSON.stringify(actual)})`}`,
     };
   },
-});
+} satisfies Record<string, Matcher>;
+
+/** The matchers geowright adds to Playwright's `expect` — e.g. to type an `expect` merged with others (`mergeExpects`). */
+export type GeowrightMatchers = typeof matchers;
+
+/**
+ * Playwright's `expect`, plus the map matchers. Typed from '@playwright/test' (the package a user installs), never from
+ * the `playwright` package behind it, which pnpm and Yarn PnP do not make resolvable from here.
+ */
+export const expect: Expect<GeowrightMatchers> = baseExpect.extend(matchers);
 
 /* ------------------------------------------------------------------ misc */
 
@@ -1369,6 +1463,9 @@ export class GeowrightError extends Error {
     this.name = 'GeowrightError';
   }
 }
+
+/** A timeout at which the page was not answering: nothing that follows it may wait for the page. */
+class UnresponsiveError extends GeowrightError {}
 
 export function geowright(page: Page, opts?: GeowrightOptions): MapHandle {
   return new MapHandle(page, opts);

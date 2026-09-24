@@ -140,7 +140,7 @@ and `lngLat` have no such check and refuse the option). The reasoning and the me
 ```text
 expect(map).toHaveFeature({"layer":"alerts","where":{"severity":"critical"}})
 
-Expected: at least one rendered feature matching, within 7000ms
+Expected: at least one visible feature matching, within 7000ms
 Received: 0 match(es)
 
 What is on the map:
@@ -217,7 +217,9 @@ await map.draw.cancel();                                                  // ...
 
 `import { geowright, expect, GeowrightError } from 'geowright'` · `import { routeVectorTiles } from 'geowright/tiles'` · app side, types only: `/// <reference types="geowright/app" />` declares `window.__geowright_maps` (`Record<string, unknown>`)
 
-**`geowright(page, options?) → MapHandle`** — `mapId` ('main') · `timeout` (10 000 ms, actions/waits; assertions use Playwright's expect timeout) · `ignoreLayers` · `mirror` (boolean | `{ max }`) · `failureScreenshots` (true)
+Types, from `'geowright'`: every type a signature names — `MapHandle` `FeatureHandle` `FeatureSetHandle` `FeatureQuery` `FeatureSummary` `LngLat` `Pt` `Geometry` `GeometryExpectation` `WhereOp` `WhereValue` `LayerInfo` `SnapshotOptions` `GeowrightOptions` `ActionOptions` `ActionPointOptions` `SteadyActionOptions` `DrawOptions` `TwoPointDrawOptions` `OverlayWhere` `Modifier` `ViewExpectation`, and `GeowrightMatchers` (the matchers, e.g. for `mergeExpects`). `expect` is typed from `@playwright/test` alone.
+
+**`geowright(page, options?) → MapHandle`** — `mapId` ('main') · `timeout` (actions: a third of the test's timeout, at least 10 000 ms, so `test.slow()` scales it; `waitForIdle()`: two thirds of it; an explicit value applies to both. Matchers use Playwright's expect timeout: set `expect: { timeout }`. As in Playwright, `timeout: 0` means no timeout) · `ignoreLayers` · `mirror` (boolean | `{ max }`) · `failureScreenshots` (true)
 
 | MapHandle | |
 |---|---|
@@ -252,7 +254,7 @@ Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visib
 | `expect(map).toHaveLayerPixels(layerId, { at, radiusPx? = 24 })` | a layer WITHOUT features (raster, image, canvas, video, heatmap, hillshade) contributes pixels around a location |
 | `expect(map.feature(q)).toHaveGeometry(expected, { tolerancePx? = 2 })` | GeoJSON geometry · vertex list · `{ circle: { center, edge } }` |
 | `expect(map).toHavePopup({ at?, feature?, text?, tolerancePx? })` | a popup is open and anchored there |
-| `expect(map).toHaveView({ center?, zoom?, bearing?, pitch? }, { zoomTolerance?, degreesTolerance? })` | camera, with the map at rest |
+| `expect(map).toHaveView({ center?, zoom?, bearing?, pitch? }, { zoomTolerance? = 0.01, degreesTolerance? = 0.0005 })` | camera, with the map at rest. `degreesTolerance` is for the centre; bearing and pitch match within 0.1°, a bearing as an angle (270 = -90) |
 
 A matcher that cannot reach a verdict fails **whichever way it is written**, and says why: the map is not registered or
 was removed, a named layer does not exist, several features match where one is required, the map has not settled (a
@@ -309,7 +311,7 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   when the press arrives.
 - **Pixel-only layers never occlude.** Occlusion comes from the map's hit test, which returns features only: an opaque
   raster, image, video, canvas, heatmap or hillshade layer drawn above a feature does not stop an action on it.
-- The injected script is ~135 KB (it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
+- The injected script is about 380 KB, not minified (78 KB gzipped; it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
 
 The full list, with costs measured on a dense map: [DESIGN — Costs and known limitations](docs/DESIGN.md#costs-and-known-limitations).
 

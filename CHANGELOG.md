@@ -50,8 +50,14 @@ as written (it adds types only).
   action records the pixel it used.
 - `waitForIdle()`, and when the map never becomes idle, why: an animated source, a source re-set in a loop, continuous
   repainting, tiles still loading, a moving camera, or a dead MapLibre web worker. Timeouts follow the test's own
-  timeout.
+  timeout (actions a third of it, at least 10 s; `waitForIdle()` two thirds; matchers use Playwright's expect timeout).
+  An action's timeout is wall-clock, its failure report included, even on a page too busy to answer, and an action
+  with several points (a drag, a shape) has one timeout for all of them. As in Playwright, `timeout: 0` means no timeout.
 - DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element.
+- **Typings**: `expect` is typed from `@playwright/test` alone (so it keeps its matcher types under pnpm and Yarn PnP),
+  every type a public signature names can be imported from `'geowright'` (`LayerInfo`, `SnapshotOptions`, `WhereValue`,
+  `ActionPointOptions`, `Pt`, and `GeowrightMatchers` for merging `expect`s), and `types` / `typesVersions` let
+  resolvers that do not read `exports` find `geowright`, `geowright/tiles` and `geowright/app`.
 - **Vector tiles without a tile server**: `routeVectorTiles()` / `vectorTileHandler()` (`geowright/tiles`) cut real MVT
   tiles from GeoJSON inside `page.route`.
 - **Browser agents** (Playwright MCP): a text snapshot of the map with clickable pixels and evaluated colours, and an
