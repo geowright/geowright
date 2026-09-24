@@ -1,6 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
 import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
-import type { Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
+import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
 import type { InternalCanvasAdapter, ProbeResult, StyleCause } from './types-internal';
 
 /** A source that is not loaded right now: its type, whether its GeoJSON is inline (nothing to download), and how long
@@ -69,12 +69,12 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     };
   }
 
-  project(w: LngLat): Pt {
+  project(w: LngLat): PixelPoint {
     const p = this.map.project([w.lng, w.lat]);
     return { x: p.x, y: p.y };
   }
 
-  unproject(pt: Pt): LngLat {
+  unproject(pt: PixelPoint): LngLat {
     const ll = this.map.unproject([pt.x, pt.y]);
     return { lng: ll.lng, lat: ll.lat };
   }
@@ -108,7 +108,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     return shift ? (c) => ({ lng: c[0] + shift, lat: c[1] }) : undefined;
   }
 
-  queryFeatures(q: { layers?: string[]; at?: Pt }): RenderedFeature[] {
+  queryFeatures(q: { layers?: string[]; at?: PixelPoint }): RenderedFeature[] {
     // queryRenderedFeatures throws for layer ids that do not exist; an unknown layer is a
     // legitimate "nothing there (yet)" for a retrying assertion, so filter them out.
     const layers = q.layers?.filter((id) => this.map.getLayer(id));
@@ -382,15 +382,15 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
    * pixels. The scale is measured along the screen's horizontal, which pitch does not foreshorten.
    * Public API only (project/unproject); perspective makes it approximate, the hit test makes it safe.
    */
-  lift(f: RenderedFeature, at: Pt): number {
+  lift(f: RenderedFeature, at: PixelPoint): number {
     return this.liftOf(extrusionHeight(this.map, f), at);
   }
 
-  liftBase(f: RenderedFeature, at: Pt): number {
+  liftBase(f: RenderedFeature, at: PixelPoint): number {
     return this.liftOf(extrusionBase(this.map, f), at);
   }
 
-  private liftOf(height: number, at: Pt): number {
+  private liftOf(height: number, at: PixelPoint): number {
     const pitch = this.map.getPitch();
     if (!pitch) return 0;
     if (!height) return 0;
@@ -455,13 +455,13 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
    * without the layer can be composited (a one-frame flicker), and it takes as long as four frames take: within
    * `budgetMs` (the caller's remaining time), or inconclusive — "not yet", never "no pixels".
    */
-  pixelContribution(layer: string, at: Pt, radiusPx = 2): number | undefined | Promise<number | undefined> {
+  pixelContribution(layer: string, at: PixelPoint, radiusPx = 2): number | undefined | Promise<number | undefined> {
     const r = this.probePixels(layer, at, radiusPx, 2000);
     const diff = (p: ProbeResult) => ('diff' in p ? p.diff : undefined);
     return r instanceof Promise ? r.then(diff) : diff(r);
   }
 
-  probePixels(layer: string, at: Pt, radiusPx = 2, budgetMs = 2000): ProbeResult | Promise<ProbeResult> {
+  probePixels(layer: string, at: PixelPoint, radiusPx = 2, budgetMs = 2000): ProbeResult | Promise<ProbeResult> {
     const canvas = this.map.getCanvas();
     const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as WebGLRenderingContext | null;
     if (!gl) return { unavailable: 'no WebGL context to read from' };
@@ -555,7 +555,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         const r = el.getBoundingClientRect();
         const rect = { x: r.left - origin.left, y: r.top - origin.top, width: r.width, height: r.height };
         const side = [...el.classList].find((c) => c.startsWith(`${prefix}-${kind}-anchor-`))?.slice(`${prefix}-${kind}-anchor-`.length);
-        let anchor: Pt | undefined;
+        let anchor: PixelPoint | undefined;
         if (side && kind === 'popup') {
           anchor = {
             x: side.includes('left') ? rect.x : side.includes('right') ? rect.x + rect.width : rect.x + rect.width / 2,

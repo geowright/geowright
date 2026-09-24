@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { Engine } from '../../src/inpage/engine';
-import type { CanvasAdapter, RenderedFeature, Pt, Visibility } from '../../src/inpage/types';
+import type { CanvasAdapter, RenderedFeature, PixelPoint, Visibility } from '../../src/inpage/types';
 
 /**
  * Engine.find() against a FAKE adapter (no DOM, no MapLibre). Covers the grouping/matching logic
@@ -18,7 +18,7 @@ function makeAdapter(features: RenderedFeature[]): CanvasAdapter<World> {
     surface: () => ({ clientWidth: 800, clientHeight: 600, getBoundingClientRect: () => RECT }) as any,
     getViewState: () => ({}),
     project: (world) => ({ x: world.lng, y: world.lat }),
-    unproject: (pt: Pt) => ({ lng: pt.x, lat: pt.y }),
+    unproject: (pt: PixelPoint) => ({ lng: pt.x, lat: pt.y }),
     worldFromCoord: (coord) => ({ lng: coord[0], lat: coord[1] }),
     queryFeatures: (q) => features.filter((f) => !q.layers || q.layers.includes(f.layer)),
     listLayers: () => [],

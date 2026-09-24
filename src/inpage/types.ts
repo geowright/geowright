@@ -12,7 +12,7 @@
  */
 
 /** CSS pixels relative to the surface element's top-left corner. */
-export interface Pt {
+export interface PixelPoint {
   x: number;
   y: number;
 }
@@ -59,18 +59,18 @@ export interface LayerInfo {
 
 export interface CanvasAdapter<W = unknown> {
   readonly kind: string;
-  /** Element that receives pointer input; origin of `Pt`. */
+  /** Element that receives pointer input; origin of `PixelPoint`. */
   surface(): HTMLElement;
   getViewState(): Record<string, unknown>;
-  project(world: W): Pt;
-  unproject(pt: Pt): W;
+  project(world: W): PixelPoint;
+  unproject(pt: PixelPoint): W;
   /** World position of a raw coordinate tuple from a feature geometry. */
   worldFromCoord(coord: number[]): W;
   /**
    * Features currently RENDERED, topmost first. With `at`, only features under that pixel
    * (this is the hit test). Without, everything in the viewport.
    */
-  queryFeatures(q: { layers?: string[]; at?: Pt }): RenderedFeature[];
+  queryFeatures(q: { layers?: string[]; at?: PixelPoint }): RenderedFeature[];
   /**
    * Features known to the library's data model for a layer, rendered or not (off-screen,
    * hidden layer). Used for diagnostics and auto-pan. Optional: not every library can answer.
@@ -106,9 +106,9 @@ export interface CanvasAdapter<W = unknown> {
    * roof and the walls, not the footprint on the ground (which may even be outside the viewport while
    * the building towers into it). An estimate is enough: candidates are verified by the hit test.
    */
-  lift?(f: RenderedFeature, at: Pt): number;
+  lift?(f: RenderedFeature, at: PixelPoint): number;
   /** Optional, with `lift`: the same for the BOTTOM of the drawn volume, when it does not start on the ground. */
-  liftBase?(f: RenderedFeature, at: Pt): number;
+  liftBase?(f: RenderedFeature, at: PixelPoint): number;
   /**
    * Optional: if the surface repeats its content horizontally (a zoomed-out web-mercator map shows the
    * world several times), the period in pixels. The same feature drawn in two copies is ONE feature.
@@ -129,7 +129,7 @@ export interface CanvasAdapter<W = unknown> {
    * drawn? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
    * May be async: a library that cannot render synchronously has to wait for real frames.
    */
-  pixelContribution?(layer: string, at: Pt, radiusPx?: number): number | undefined | Promise<number | undefined>;
+  pixelContribution?(layer: string, at: PixelPoint, radiusPx?: number): number | undefined | Promise<number | undefined>;
   /**
    * Optional: DOM things the library positions over the surface (MapLibre: Marker, Popup). They are
    * ordinary elements — tests act on them with ordinary locators — but WHERE they sit is map state.
@@ -191,9 +191,9 @@ export interface FeatureSummary {
   properties: Record<string, unknown>;
   geometryType: string;
   /** Representative pixel on the feature, relative to the surface (canvas). Undefined if off-screen. */
-  pixel?: Pt;
+  pixel?: PixelPoint;
   /** Same pixel in client (viewport) coordinates — what page.mouse wants. */
-  client?: Pt;
+  client?: PixelPoint;
   /** World coordinate under that pixel (for maps: { lng, lat }). */
   world?: unknown;
   /** False when the style paints nothing for this feature ("rendered" but a user cannot see it). */
@@ -215,7 +215,7 @@ export type ActionPointFailure =
 
 export type ActionPointResult =
   /** `why`: which candidate pixel was chosen and what was skipped before it — for traces. */
-  | { ok: true; client: Pt; surface: Pt; feature: FeatureSummary; why: string; /** with `moving`: px per ms, measured over two frames */ velocity?: Pt }
+  | { ok: true; client: PixelPoint; surface: PixelPoint; feature: FeatureSummary; why: string; /** with `moving`: px per ms, measured over two frames */ velocity?: PixelPoint }
   | { ok: false; reason: ActionPointFailure; message: string };
 
 export interface ClickVerdict {
@@ -225,7 +225,7 @@ export interface ClickVerdict {
   ok: boolean;
   reason?: string;
   /** On a miss, when the target could be located at that instant: where it was, relative to the pointer (px). */
-  offset?: Pt;
+  offset?: PixelPoint;
 }
 
 export interface ActionPointOptions {
@@ -271,7 +271,7 @@ export interface EntityView {
   geometryType: string;
   properties: Record<string, unknown>;
   /** Clickable surface pixel where the entity is the topmost hit and no DOM covers it. */
-  pixel?: Pt;
+  pixel?: PixelPoint;
   /** Why there is no clean pixel (covered-by:..., covered-by-dom:..., or out of view). */
   blocked?: string;
   /** False when the entity was counted but not hit-tested (over `max`). */
@@ -304,7 +304,7 @@ export interface Overlay {
   /** Bounding box, surface-relative CSS pixels. */
   rect: { x: number; y: number; width: number; height: number };
   /** The pixel the overlay points at (popup tip; marker anchor if it can be known), surface-relative. */
-  anchor?: Pt;
+  anchor?: PixelPoint;
   text: string;
 }
 

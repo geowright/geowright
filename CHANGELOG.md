@@ -20,7 +20,7 @@ as written (it adds types only).
   one is required, the camera is moving (`toHavePopup`). A removed or 0×0 map is an error for `features(q).count()`
   and `all()`, never an empty map.
 - **Query** by `layer`, `layerType`, `source` (for layer ids a wrapper generates), `id`, `where` (equality, RegExp,
-  `eq ne gt gte lt lte in matches exists`; any other value, such as an array or an unknown operator, is an error),
+  `eq ne gt gte lt lte in matches exists`; any other value, such as an array, an unknown operator or an operator object with none in it, is an error),
   `at` a location (one on the far side of the globe or behind a mountain matches nothing). By default, queries match only what a user can SEE. The
   style's paint properties are evaluated for each feature, as the renderer draws them (a zoom-and-data expression at
   the tile zoom): opacity 0, a transparent colour and zero size do not count
@@ -58,7 +58,7 @@ as written (it adds types only).
   inside the map's container, also when a web component hosts the map in its shadow root.
 - **Typings**: `expect` is typed from `@playwright/test` alone (so it keeps its matcher types under pnpm and Yarn PnP),
   every type a public signature names can be imported from `'geowright'` (`LayerInfo`, `SnapshotOptions`, `WhereValue`,
-  `ActionPointOptions`, `Pt`, and `GeowrightMatchers` for merging `expect`s), and `types` / `typesVersions` let
+  `ActionPointOptions`, `PixelPoint`, and `GeowrightMatchers` for merging `expect`s), and `types` / `typesVersions` let
   resolvers that do not read `exports` find `geowright`, `geowright/tiles` and `geowright/app`.
 - **Vector tiles without a tile server**: `routeVectorTiles()` / `vectorTileHandler()` (`geowright/tiles`) cut real MVT
   tiles from GeoJSON inside `page.route`, at any zoom: above `maxZoom` (default 14) a tile is cut at that detail, so a

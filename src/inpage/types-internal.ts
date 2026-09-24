@@ -4,7 +4,7 @@
  * published typings (tsconfig.build.json) and this file is not: nothing under `src/playwright` and nothing in
  * `types.ts` may import it (tests/unit/published-types.unit.spec.ts checks that).
  */
-import type { CanvasAdapter, Overlay, Pt, RenderedFeature } from './types';
+import type { CanvasAdapter, Overlay, PixelPoint, RenderedFeature } from './types';
 
 /**
  * One step of how a style expression arrived at its value: which branch it took. Plain, JSON-safe data — the
@@ -93,7 +93,7 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    * Optional, the pixel probe with its full answer (see `ProbeResult`) and a time budget for renderers that must wait
    * for real frames. When present it is used instead of `pixelContribution`.
    */
-  probePixels?(layer: string, at: Pt, radiusPx: number, budgetMs: number): ProbeResult | Promise<ProbeResult>;
+  probePixels?(layer: string, at: PixelPoint, radiusPx: number, budgetMs: number): ProbeResult | Promise<ProbeResult>;
   /** Optional, with `overlays`: the element an overlay stands for, looked up the way `overlays()` found it. */
   overlayElement?(o: Overlay): Element | undefined;
 }

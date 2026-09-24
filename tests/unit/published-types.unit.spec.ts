@@ -83,7 +83,7 @@ test('published typings: `expect` typed from @playwright/test, the signature typ
     const exported = new Set([...index.matchAll(/export (?:type )?\{([^}]*)\}/g)].flatMap((m) => m[1].split(',').map((s) => s.trim())));
     for (const m of index.matchAll(/export (?:declare )?(?:interface|type|class|const|function) (\w+)/g)) exported.add(m[1]);
     expect(names.filter((n) => !exported.has(n)), 'named in a public signature, not importable from geowright').toEqual([]);
-    for (const t of ['LayerInfo', 'SnapshotOptions', 'WhereValue', 'ActionPointOptions', 'Pt', 'GeowrightMatchers']) expect([...exported]).toContain(t);
+    for (const t of ['LayerInfo', 'SnapshotOptions', 'WhereValue', 'ActionPointOptions', 'PixelPoint', 'GeowrightMatchers']) expect([...exported]).toContain(t);
   } finally {
     rmSync(out, { recursive: true, force: true });
   }
@@ -118,10 +118,10 @@ test('`expect` from geowright keeps its type where only @playwright/test is reso
     writeFileSync(
       join(dir, 'spec.ts'),
       [
-        `import { expect, geowright, type LayerInfo, type SnapshotOptions, type WhereValue, type ActionPointOptions, type Pt } from 'geowright';`,
+        `import { expect, geowright, type LayerInfo, type SnapshotOptions, type WhereValue, type ActionPointOptions, type PixelPoint } from 'geowright';`,
         `declare const map: ReturnType<typeof geowright>;`,
         `export const ok: Promise<void> = expect(map).toHaveFeature({ layer: 'alerts' });`,
-        `export const types: [LayerInfo?, SnapshotOptions?, WhereValue?, ActionPointOptions?, Pt?] = [];`,
+        `export const types: [LayerInfo?, SnapshotOptions?, WhereValue?, ActionPointOptions?, PixelPoint?] = [];`,
         `export const notAny: number = expect; // must NOT compile: expect is not any`,
         '',
       ].join('\n'),

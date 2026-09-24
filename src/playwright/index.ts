@@ -15,14 +15,14 @@ import type {
   LayerInfo,
   LngLat,
   Overlay,
-  Pt,
+  PixelPoint,
   SnapshotOptions,
   WhereOp,
   WhereValue,
 } from '../inpage/types.js'; // explicit extension: the published .d.ts must resolve under moduleResolution nodenext
 
 // Every type a public signature names is importable from 'geowright'.
-export type { ActionPointOptions, Geometry, GeometryExpectation, LayerInfo, LngLat, Pt, SnapshotOptions, WhereOp, WhereValue };
+export type { ActionPointOptions, Geometry, GeometryExpectation, LayerInfo, LngLat, PixelPoint, SnapshotOptions, WhereOp, WhereValue };
 
 /** Query as written in tests: like the wire format, but `where` values may also be a RegExp. */
 export interface FeatureQuery extends Omit<WireQuery, 'where'> {
