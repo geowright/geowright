@@ -15,6 +15,10 @@ PW=$(node -p "require('./node_modules/@playwright/test/package.json').version")
 IMAGE="mcr.microsoft.com/playwright:v${PW}-noble"
 OUT="$PWD/test-results-linux"
 rm -rf "$OUT" && mkdir -p "$OUT"
+# The verdict names a commit: the one checked out, with no changes to tracked files, BEFORE the copy is made. (Read after
+# a ~10-minute run, HEAD may be a commit made meanwhile in this checkout, whose code never ran.)
+RAN_ON=$(git rev-parse HEAD)
+RAN_CLEAN=0; [ -n "$(git status --porcelain --untracked-files=no)" ] || RAN_CLEAN=1
 
 # (COPYFILE_DISABLE / --no-mac-metadata: macOS tar otherwise adds an AppleDouble `._name` twin for every file with
 #  extended attributes, and Playwright on Linux then tries to run `._act.spec.ts`)
@@ -41,7 +45,12 @@ git ls-files -z --cached --others --exclude-standard | COPYFILE_DISABLE=1 tar --
     exit $code
   ' bash "$@"
 
-# A full green run on a clean tree leaves a verdict for that commit (git-ignored): release tooling asks for it.
-if [ "$#" -eq 0 ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
-  mkdir -p .scratch/verdicts && date -u +%Y-%m-%dT%H:%M:%SZ > ".scratch/verdicts/linux-$(git rev-parse HEAD).ok"
+# A full green run on a clean tree leaves a verdict for that commit (git-ignored): release tooling asks for it. Only if
+# the checkout is still exactly what was copied: same commit, still no changes to tracked files.
+if [ "$#" -eq 0 ] && [ "$RAN_CLEAN" -eq 1 ]; then
+  if [ "$(git rev-parse HEAD)" = "$RAN_ON" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+    mkdir -p .scratch/verdicts && date -u +%Y-%m-%dT%H:%M:%SZ > ".scratch/verdicts/linux-$RAN_ON.ok"
+  else
+    echo "linux-suite: green, but the checkout changed during the run (HEAD or tracked files): no verdict written for ${RAN_ON}" >&2
+  fi
 fi
