@@ -13,7 +13,7 @@ import type {
   FeatureQuery,
   FeatureSummary,
   Geometry,
-  Pt,
+  PixelPoint,
   RenderedFeature,
 } from './types';
 import type { InternalCanvasAdapter, StyleBranch, StyleCause } from './types-internal';
@@ -160,7 +160,7 @@ export class Engine<W = unknown> {
    * where it is drawn. One copy per PART (anchored at its first coordinate), never per coordinate: a part that crosses
    * the meridian opposite the view centre must not be torn in two.
    */
-  private projector(part: Part): (c: number[]) => Pt {
+  private projector(part: Part): (c: number[]) => PixelPoint {
     const anchor = part.kind === 'point' ? part.coord : part.kind === 'line' ? part.coords[0] : part.rings[0][0];
     const toWorld = (anchor && this.adapter.nearestCopy?.(anchor)) || ((c: number[]) => this.adapter.worldFromCoord(c));
     return (c) => this.adapter.project(toWorld(c));
@@ -473,13 +473,13 @@ export class Engine<W = unknown> {
    *    from the polygon edge (a cheap pole-of-inaccessibility). Never the centroid: for a
    *    concave polygon the centroid can be outside.
    */
-  private candidates(pieces: RenderedFeature[], size: { w: number; h: number }, stats?: { outside: number }): Pt[] {
-    const inView = (p: Pt) => p.x >= 2 && p.y >= 2 && p.x <= size.w - 2 && p.y <= size.h - 2;
-    const out: Pt[] = [];
+  private candidates(pieces: RenderedFeature[], size: { w: number; h: number }, stats?: { outside: number }): PixelPoint[] {
+    const inView = (p: PixelPoint) => p.x >= 2 && p.y >= 2 && p.x <= size.w - 2 && p.y <= size.h - 2;
+    const out: PixelPoint[] = [];
     // Polygon candidates of ALL parts and pieces are ranked together (deepest interior first): a country
     // is a hundred islands and tile pieces, and the good pixel is in the mainland, not in whichever
     // piece happens to come first. `tier` keeps an extrusion's roof before its walls before its footprint.
-    const poly: { p: Pt; d: number; tier: number }[] = [];
+    const poly: { p: PixelPoint; d: number; tier: number }[] = [];
     for (const piece of pieces) {
       const g = piece.geometry;
       for (const part of explode(g)) {
@@ -533,7 +533,7 @@ export class Engine<W = unknown> {
    * not drawn? Catches what paint evaluation cannot (transparent icon image, colour identical to
    * what is underneath). Layer-level differential at a pixel that hit-tests to the feature.
    */
-  async pixelProbe(q: FeatureQuery, opts: Pick<ActionPointOptions, 'ignoreLayers'> & { budgetMs?: number } = {}): Promise<{ ok: true; diff: number | undefined; inconclusive?: string; surface: Pt; layer: string } | { ok: false; message: string }> {
+  async pixelProbe(q: FeatureQuery, opts: Pick<ActionPointOptions, 'ignoreLayers'> & { budgetMs?: number } = {}): Promise<{ ok: true; diff: number | undefined; inconclusive?: string; surface: PixelPoint; layer: string } | { ok: false; message: string }> {
     const budgetMs = opts.budgetMs ?? 2000;
     const r = this.actionPointOnce(q, { ignoreLayers: opts.ignoreLayers }); // layers the caller says never occlude do not here either
     if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
@@ -583,7 +583,7 @@ export class Engine<W = unknown> {
   overlaysAt(kind: Overlay['kind'], o: { at?: unknown; feature?: FeatureQuery; tolerancePx?: number } = {}): (Overlay & { distance?: number })[] {
     const tol = o.tolerancePx ?? 8;
     let list: (Overlay & { distance?: number })[] = (this.adapter.overlays?.() ?? []).filter((v) => v.kind === kind);
-    const toBox = (p: Pt, r: Overlay['rect']) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.width)), Math.max(r.y - p.y, 0, p.y - (r.y + r.height)));
+    const toBox = (p: PixelPoint, r: Overlay['rect']) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.width)), Math.max(r.y - p.y, 0, p.y - (r.y + r.height)));
     if (o.at && this.hiddenAt(o.at)) return [];
     if (o.at) {
       const p = this.adapter.project(o.at as W);
@@ -643,10 +643,10 @@ export class Engine<W = unknown> {
     if (A.length !== E.length) return { ok: false, reason: `${A.length} part(s), expected ${E.length}${clipped}`, ...base };
     for (let i = 0; i < E.length; i++) {
       const a = A[i], e = E[i];
-      const seqs: [Pt[], Pt[], boolean][] =
+      const seqs: [PixelPoint[], PixelPoint[], boolean][] =
         a.kind === 'point' && e.kind === 'point' ? [[[px(a.coord)], [px(e.coord)], false]]
         : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(px), e.coords.map(px), false]]
-        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(px), openRing(e.rings[k]).map(px), true] as [Pt[], Pt[], boolean]) : [])
+        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(px), openRing(e.rings[k]).map(px), true] as [PixelPoint[], PixelPoint[], boolean]) : [])
         : [];
       if (!seqs.length) return { ok: false, reason: `part ${i}: ring count or kind differs${clipped}`, ...base };
       for (const [act, exp, cyclic] of seqs) {
@@ -780,7 +780,7 @@ export class Engine<W = unknown> {
    * Is the target at this surface pixel, on top? Undefined: yes. `target`: the feature resolved when the check was armed;
    * without one (a moving target, or none could be resolved then), the features the query resolves to at this instant.
    */
-  private verifyAt(at: Pt, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature } | undefined {
+  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature } | undefined {
     let candidates: RenderedFeature[][];
     try {
       candidates = target ? [target] : [...this.group(q).values()];
@@ -799,7 +799,7 @@ export class Engine<W = unknown> {
   }
 
   /** Where the (moving) target is drawn right now, relative to where the pointer arrived. Runs inside an event handler: no scrolling. */
-  private offsetFrom(pointer: Pt, q: FeatureQuery, opts: ActionPointOptions): Pt | undefined {
+  private offsetFrom(pointer: PixelPoint, q: FeatureQuery, opts: ActionPointOptions): PixelPoint | undefined {
     const now = this.actionPointOnce(q, { ...opts, force: true }, false);
     return now.ok ? { x: now.surface.x - pointer.x, y: now.surface.y - pointer.y } : undefined;
   }
@@ -968,10 +968,10 @@ export class Engine<W = unknown> {
   }
 
   /** The expensive part, done only for entities that will actually be shown: verified hit tests. */
-  private locate(e: Collected, ignoreDom?: (el: Element) => boolean): { pixel?: Pt; coveredPixel?: Pt; blocked?: string } {
+  private locate(e: Collected, ignoreDom?: (el: Element) => boolean): { pixel?: PixelPoint; coveredPixel?: PixelPoint; blocked?: string } {
     const surface = this.adapter.surface();
     const frame = clientFrame(surface);
-    let coveredPixel: Pt | undefined;
+    let coveredPixel: PixelPoint | undefined;
     // Candidates come from the GEOMETRY; what is hit-tested is what is DRAWN. They differ for a label placed
     // along a line, an icon with an offset, or a symbol hidden by collision at the pixels we tried.
     let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
@@ -1327,7 +1327,7 @@ interface Collected {
   key: string;
   owner: string;
   byLayer: Map<string, RenderedFeature[]>;
-  cands?: Pt[];
+  cands?: PixelPoint[];
   /** Distance of its best candidate pixel from the viewport centre (Infinity: nothing in view). */
   d: number;
 }
@@ -1357,16 +1357,16 @@ export function clientFrame(el: HTMLElement): ClientFrame {
   return { left: r.left + (el.clientLeft || 0) * sx, top: r.top + (el.clientTop || 0) * sy, sx, sy };
 }
 
-export function toClient(f: ClientFrame, p: Pt): Pt {
+export function toClient(f: ClientFrame, p: PixelPoint): PixelPoint {
   return { x: f.left + p.x * f.sx, y: f.top + p.y * f.sy };
 }
 
-export function toSurface(f: ClientFrame, c: Pt): Pt {
+export function toSurface(f: ClientFrame, c: PixelPoint): PixelPoint {
   return { x: (c.x - f.left) / f.sx, y: (c.y - f.top) / f.sy };
 }
 
 /** Candidates as WHOLE client pixels (converted back to surface pixels): the nearest one first, then the four around it; no duplicates. */
-export function wholePixels(cands: Pt[], frame: ClientFrame): Pt[] {
+export function wholePixels(cands: PixelPoint[], frame: ClientFrame): PixelPoint[] {
   const tried = new Set<string>();
   return cands.flatMap((raw) => {
     const { x: fx, y: fy } = toClient(frame, raw);
@@ -1393,7 +1393,7 @@ export function explode(g: Geometry): Part[] {
  * and clickable — so offer a few pixels around it too. They are verified by the hit test like any
  * other candidate, so a ring pixel that misses a small symbol is simply skipped.
  */
-export function pointCandidates(c: Pt): Pt[] {
+export function pointCandidates(c: PixelPoint): PixelPoint[] {
   const out = [c];
   for (const r of [3, 6, 10]) {
     for (let k = 0; k < 8; k++) out.push({ x: c.x + r * Math.cos((k * Math.PI) / 4), y: c.y + r * Math.sin((k * Math.PI) / 4) });
@@ -1404,7 +1404,7 @@ export function pointCandidates(c: Pt): Pt[] {
 const openRing = (ring: number[][]) => (ring.length > 1 && ring[0][0] === ring[ring.length - 1][0] && ring[0][1] === ring[ring.length - 1][1] ? ring.slice(0, -1) : ring);
 
 /** Largest vertex-to-vertex pixel distance under the best alignment. Rings may start anywhere and wind either way. */
-export function sequenceDistance(a: Pt[], b: Pt[], cyclic: boolean): number {
+export function sequenceDistance(a: PixelPoint[], b: PixelPoint[], cyclic: boolean): number {
   const n = a.length;
   const worstFor = (shift: number, reversed: boolean) => {
     let worst = 0;
@@ -1420,11 +1420,11 @@ export function sequenceDistance(a: Pt[], b: Pt[], cyclic: boolean): number {
   return best;
 }
 
-export function lineCandidates(pts: Pt[]): Pt[] {
+export function lineCandidates(pts: PixelPoint[]): PixelPoint[] {
   // In order ALONG the line: v0, m0, v1, m1, ..., so "index distance from the middle" means what it says.
   // (Originally this was [midpoints..., vertices...], whose middle index is always the FIRST vertex:
   // lines were clicked at their start. Found by the unit tests.)
-  const c: Pt[] = [];
+  const c: PixelPoint[] = [];
   for (let i = 0; i < pts.length; i++) {
     c.push(pts[i]);
     if (i < pts.length - 1) c.push({ x: (pts[i].x + pts[i + 1].x) / 2, y: (pts[i].y + pts[i + 1].y) / 2 });
@@ -1433,12 +1433,12 @@ export function lineCandidates(pts: Pt[]): Pt[] {
   return c.map((p, i) => ({ p, d: Math.abs(i - mid) })).sort((a, b) => a.d - b.d).map((e) => e.p);
 }
 
-export function polygonCandidates(rings: Pt[][], size: { w: number; h: number }): Pt[] {
+export function polygonCandidates(rings: PixelPoint[][], size: { w: number; h: number }): PixelPoint[] {
   return scoredPolygonCandidates(rings, size).sort((a, b) => b.d - a.d).map((s) => s.p);
 }
 
 /** Interior grid points with their distance from the edge (unsorted). The grid is as fine as the shape is big: 12x12 at most, 3x3 for a speck. */
-export function scoredPolygonCandidates(rings: Pt[][], size: { w: number; h: number }): { p: Pt; d: number }[] {
+export function scoredPolygonCandidates(rings: PixelPoint[][], size: { w: number; h: number }): { p: PixelPoint; d: number }[] {
   const xs = rings[0].map((p) => p.x);
   const ys = rings[0].map((p) => p.y);
   const x0 = Math.max(0, Math.min(...xs)), x1 = Math.min(size.w, Math.max(...xs));
@@ -1446,7 +1446,7 @@ export function scoredPolygonCandidates(rings: Pt[][], size: { w: number; h: num
   if (x1 <= x0 || y1 <= y0) return [];
   // A 12x12 grid over a 6px island is 144 candidates (and later 144 hit tests) for nothing.
   const N = Math.max(3, Math.min(12, Math.ceil(Math.max(x1 - x0, y1 - y0) / 5)));
-  const scored: { p: Pt; d: number }[] = [];
+  const scored: { p: PixelPoint; d: number }[] = [];
   for (let i = 0; i < N; i++) {
     for (let j = 0; j < N; j++) {
       const p = { x: x0 + ((i + 0.5) / N) * (x1 - x0), y: y0 + ((j + 0.5) / N) * (y1 - y0) };
@@ -1457,7 +1457,7 @@ export function scoredPolygonCandidates(rings: Pt[][], size: { w: number; h: num
   return scored;
 }
 
-export function inPolygon(p: Pt, rings: Pt[][]): boolean {
+export function inPolygon(p: PixelPoint, rings: PixelPoint[][]): boolean {
   let inside = false;
   for (const ring of rings) {
     for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
@@ -1468,7 +1468,7 @@ export function inPolygon(p: Pt, rings: Pt[][]): boolean {
   return inside;
 }
 
-export function distToRing(p: Pt, ring: Pt[]): number {
+export function distToRing(p: PixelPoint, ring: PixelPoint[]): number {
   let best = Infinity;
   for (let i = 0; i < ring.length - 1; i++) {
     const a = ring[i], b = ring[i + 1];
@@ -1575,6 +1575,9 @@ export function checkWhere(want: unknown): void {
   if (Array.isArray(want)) throw new Error(`geowright: unknown where operator: an array (to match one of several values use { in: [${want.map((v) => JSON.stringify(v)).join(', ')}] }); valid operators: ${WHERE_OPS.join(', ')}`);
   const unknown = Object.keys(want).filter((k) => !WHERE_OPS.includes(k));
   if (unknown.length) throw new Error(`geowright: unknown where operator ${unknown.map((k) => `"${k}"`).join(', ')}; valid: ${WHERE_OPS.join(', ')} (a scalar value means eq)`);
+
+  // {} (or { flags } alone) names no condition: it would match every feature.
+  if (!Object.keys(want).some((k) => k !== 'flags')) throw new Error(`geowright: a where operator object has no operator in it (${JSON.stringify(want)}); valid: ${WHERE_OPS.join(', ')} (a scalar value means eq)`);
 }
 
 export function testWhere(actual: unknown, want: unknown): boolean {
@@ -1610,11 +1613,11 @@ function stableProperties(properties: Record<string, unknown>): string {
     return Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   });
 }
-const round = (p: Pt): Pt => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
+const round = (p: PixelPoint): PixelPoint => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const fail = (reason: Exclude<ActionPointResult, { ok: true }>['reason'], message: string): ActionPointResult => ({ ok: false, reason, message });
 
-export function describe(f: { layer: string; id?: string | number; properties: Record<string, unknown>; geometryType?: string; pixel?: Pt; visible?: boolean; invisibleBecause?: string }): string {
+export function describe(f: { layer: string; id?: string | number; properties: Record<string, unknown>; geometryType?: string; pixel?: PixelPoint; visible?: boolean; invisibleBecause?: string }): string {
   const props = JSON.stringify(f.properties);
   return (
     `${f.layer}${f.id !== undefined ? `#${f.id}` : ''} ${props.length > 120 ? props.slice(0, 117) + '…' : props}${f.pixel ? ` @(${f.pixel.x},${f.pixel.y})` : ''}` +

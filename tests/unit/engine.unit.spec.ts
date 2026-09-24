@@ -15,7 +15,7 @@ import {
   wholePixels,
 } from '../../src/inpage/engine';
 import { buttonLabel } from '../../src/inpage/mirror';
-import type { Geometry, Pt } from '../../src/inpage/types';
+import type { Geometry, PixelPoint } from '../../src/inpage/types';
 
 /**
  * Pure-function unit tests for src/inpage/engine.ts. No DOM, no browser: these run in plain Node
@@ -92,6 +92,9 @@ test.describe('testWhere', () => {
     expect(() => testWhere({ city: 'X' }, { city: 'X' })).toThrow(/unknown where operator "city"/);
     expect(() => testWhere(5, { gte: 1, below: 4 })).toThrow(/unknown where operator "below"/);
     expect(() => testWhere(undefined, ['a'])).toThrow(/unknown where operator/); // thrown whatever the feature holds
+    // an operator object with no operator in it would match everything
+    expect(() => testWhere('park', {})).toThrow(/where operator object has no operator/);
+    expect(() => testWhere('park', { flags: 'i' })).toThrow(/where operator object has no operator/);
   });
 });
 
@@ -126,7 +129,7 @@ test.describe('pointCandidates', () => {
     const out = pointCandidates(c);
     expect(out).toHaveLength(25);
     expect(out[0]).toEqual(c);
-    const dist = (p: Pt) => Math.hypot(p.x - c.x, p.y - c.y);
+    const dist = (p: PixelPoint) => Math.hypot(p.x - c.x, p.y - c.y);
     const ring1 = out.slice(1, 9).map(dist);
     const ring2 = out.slice(9, 17).map(dist);
     const ring3 = out.slice(17, 25).map(dist);
@@ -168,7 +171,7 @@ test.describe('lineCandidates', () => {
 test.describe('polygonCandidates / inPolygon / distToRing', () => {
   // A U-shape (two prongs joined by a bottom bar) opening at y=0: its bbox centre (50,50) falls in
   // the notch between the prongs, OUTSIDE the shape — the case the centroid-based approach would fail.
-  const uShape: Pt[] = [
+  const uShape: PixelPoint[] = [
     { x: 0, y: 0 }, { x: 30, y: 0 }, { x: 30, y: 80 }, { x: 70, y: 80 },
     { x: 70, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }, { x: 0, y: 0 },
   ];
@@ -191,7 +194,7 @@ test.describe('polygonCandidates / inPolygon / distToRing', () => {
   });
 
   test('candidates are clipped to the surface size', () => {
-    const big: Pt[] = [{ x: -50, y: -50 }, { x: 250, y: -50 }, { x: 250, y: 250 }, { x: -50, y: 250 }, { x: -50, y: -50 }];
+    const big: PixelPoint[] = [{ x: -50, y: -50 }, { x: 250, y: -50 }, { x: 250, y: 250 }, { x: -50, y: 250 }, { x: -50, y: -50 }];
     const cands = polygonCandidates([big], size);
     expect(cands.length).toBeGreaterThan(0);
     for (const p of cands) {
@@ -203,20 +206,20 @@ test.describe('polygonCandidates / inPolygon / distToRing', () => {
   });
 
   test('a polygon fully outside the size yields []', () => {
-    const far: Pt[] = [{ x: 300, y: 300 }, { x: 400, y: 300 }, { x: 400, y: 400 }, { x: 300, y: 400 }, { x: 300, y: 300 }];
+    const far: PixelPoint[] = [{ x: 300, y: 300 }, { x: 400, y: 300 }, { x: 400, y: 400 }, { x: 300, y: 400 }, { x: 300, y: 300 }];
     expect(polygonCandidates([far], size)).toEqual([]);
   });
 
   test('holes are respected: no candidate falls inside the hole', () => {
-    const outer: Pt[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }, { x: 0, y: 0 }];
-    const hole: Pt[] = [{ x: 40, y: 40 }, { x: 60, y: 40 }, { x: 60, y: 60 }, { x: 40, y: 60 }, { x: 40, y: 40 }];
+    const outer: PixelPoint[] = [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 100 }, { x: 0, y: 100 }, { x: 0, y: 0 }];
+    const hole: PixelPoint[] = [{ x: 40, y: 40 }, { x: 60, y: 40 }, { x: 60, y: 60 }, { x: 40, y: 60 }, { x: 40, y: 40 }];
     const cands = polygonCandidates([outer, hole], { w: 100, h: 100 });
     expect(cands.length).toBeGreaterThan(0);
     for (const p of cands) expect(p.x > 40 && p.x < 60 && p.y > 40 && p.y < 60).toBe(false);
   });
 
   test('inPolygon / distToRing direct cases', () => {
-    const square: Pt[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }];
+    const square: PixelPoint[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }];
     expect(inPolygon({ x: 5, y: 5 }, [square])).toBe(true);
     expect(inPolygon({ x: 15, y: 5 }, [square])).toBe(false);
     expect(distToRing({ x: 5, y: 0 }, square)).toBe(0); // on the top edge
@@ -225,7 +228,7 @@ test.describe('polygonCandidates / inPolygon / distToRing', () => {
 });
 
 test.describe('sequenceDistance', () => {
-  const square: Pt[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
+  const square: PixelPoint[] = [{ x: 0, y: 0 }, { x: 10, y: 0 }, { x: 10, y: 10 }, { x: 0, y: 10 }];
 
   test('identical sequences are 0, cyclic or not', () => {
     expect(sequenceDistance(square, square, true)).toBe(0);
@@ -233,24 +236,24 @@ test.describe('sequenceDistance', () => {
   });
 
   test('cyclic matches a rotated start vertex', () => {
-    const rotated: Pt[] = [{ x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }, { x: 10, y: 0 }];
+    const rotated: PixelPoint[] = [{ x: 10, y: 10 }, { x: 0, y: 10 }, { x: 0, y: 0 }, { x: 10, y: 0 }];
     expect(sequenceDistance(square, rotated, true)).toBe(0);
   });
 
   test('cyclic matches reversed winding', () => {
-    const reversed: Pt[] = [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 10, y: 10 }, { x: 10, y: 0 }];
+    const reversed: PixelPoint[] = [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 10, y: 10 }, { x: 10, y: 0 }];
     expect(sequenceDistance(square, reversed, true)).toBe(0);
   });
 
   test('non-cyclic does NOT forgive reversed winding', () => {
-    const reversed: Pt[] = [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 10, y: 10 }, { x: 10, y: 0 }];
+    const reversed: PixelPoint[] = [{ x: 0, y: 0 }, { x: 0, y: 10 }, { x: 10, y: 10 }, { x: 10, y: 0 }];
     const worst = sequenceDistance(square, reversed, false);
     expect(worst).toBeCloseTo(Math.hypot(10, 10)); // vertices 1 and 3 are swapped diagonally
   });
 
   test('returns the worst (max) vertex distance, not an average', () => {
-    const a: Pt[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
-    const b: Pt[] = [{ x: 3, y: 4 }, { x: 0, y: 0 }];
+    const a: PixelPoint[] = [{ x: 0, y: 0 }, { x: 0, y: 0 }];
+    const b: PixelPoint[] = [{ x: 3, y: 4 }, { x: 0, y: 0 }];
     expect(sequenceDistance(a, b, false)).toBe(5);
   });
 });
