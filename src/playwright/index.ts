@@ -1085,7 +1085,8 @@ export const expect = baseExpect.extend({
       found = r.found;
       if (r.missingLayer) return { verdict: undefined, why: r.missingLayer };
       if (found.length > 0) return { verdict: true };
-      return s.settled ? { verdict: false } : { verdict: undefined, why: notSettled(s.why) };
+      // Only absence needs a settled map: for a positive assertion, nothing found is simply "not yet".
+      return s.settled || !this.isNot ? { verdict: false } : { verdict: undefined, why: notSettled(s.why) };
     });
     const explain = pass === this.isNot ? await map._explain(query) : '';
     if (explain) await attach('map state — toHaveFeature', explain);
@@ -1202,7 +1203,7 @@ export const expect = baseExpect.extend({
         // Several matches: "is THE feature visible?" has no answer (strictness) — in either polarity.
         if (found.length > 1) return { verdict: undefined, why: (why = `strict mode violation: ${found.length} features match`) };
         // Not visible — absent, painted invisibly, or its pixels show nothing: a verdict only on a settled map.
-        const invisible = (reason: string): Poll => ((why = reason), s.settled ? { verdict: false } : { verdict: undefined, why: `${notSettled(s.why)}; last seen: ${reason}` });
+        const invisible = (reason: string): Poll => ((why = reason), s.settled || !this.isNot ? { verdict: false } : { verdict: undefined, why: `${notSettled(s.why)}; last seen: ${reason}` });
         if (found.length === 0) return invisible('no rendered feature matches');
         if (!found[0].visible) return invisible(`paint: ${found[0].invisibleBecause}`);
         if (options?.pixels !== false) {

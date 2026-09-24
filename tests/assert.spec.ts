@@ -208,4 +208,17 @@ test.describe('a negative verdict waits for the map to settle', () => {
       expect(e, `${name} passed although the feature appeared 300 ms later`).not.toBeNull();
     });
   }
+
+  // Only absence needs a settled map: a POSITIVE assertion that finds nothing on a loading map simply has not found it
+  // yet, and says so — not "no verdict … absence could not be concluded".
+  for (const [name, assertion] of Object.entries({
+    toHaveFeature: (map: MapHandle, timeout: number) => expect(map).toHaveFeature({ layer: 'slow' }, { timeout }),
+    toBeVisibleOnMap: (map: MapHandle, timeout: number) => expect(map.feature({ layer: 'slow' })).toBeVisibleOnMap({ timeout }),
+  })) {
+    test(`a positive ${name} on a still-loading source fails as "not found", not as "no verdict"`, async ({ map, page }) => {
+      await late(page, 'slow', 5000);
+      const e = await rejects(assertion(map, 1000));
+      expect(e?.message).not.toMatch(/no verdict/);
+    });
+  }
 });
