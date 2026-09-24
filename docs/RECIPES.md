@@ -16,7 +16,7 @@ your `package.json`, recognises react-map-gl, `@vis.gl/react-maplibre`, svelte-m
 the hook in the form that wrapper needs. It never overwrites a file without `--force`. Where the project has no
 `playwright.config.*` it writes a complete one (flags wired in, `baseURL`, `webServer`) with two lines marked CHECK: where
 your app is served and how it is started. An existing config is never edited, not even with `--force`: `init` prints the
-three lines to add.
+two lines to add to it.
 
 ## The one line, per wrapper
 

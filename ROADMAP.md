@@ -12,8 +12,8 @@ Stages are in order, not on dates. The maintainer orders the work; an item moves
 - A long-form guide on geowright.dev: testing canvas maps — why pixel coordinates, screenshot diffs and
   `map.fire()` each fail, and what to do instead.
 - Listed where MapLibre users look for tools (the MapLibre ecosystem lists and docs).
-- "Bring your app": a clear path for users to submit an app that does not work, which becomes a vendored
-  wild app and a fix.
+- **Done:** "Bring your app": a clear path for users to submit an app that does not work, which becomes a vendored
+  wild app and a fix ([wild/README.md](wild/README.md#bring-your-app)).
 - **Done:** failures that explain invisibility: when a feature is painted invisibly, say which style property and
   which expression branch made it so, at which zoom.
 

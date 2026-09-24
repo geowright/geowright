@@ -20,7 +20,7 @@ import { makeSprite } from './png';
 export const POI_CLASSES = ['restaurant', 'cafe', 'bar', 'museum', 'school', 'hospital', 'bank', 'shop', 'theatre', 'music', 'bicycle', 'bus', 'park', 'library', 'hotel', 'fuel'];
 
 /**
- * DENSE by default (an earlier change): label density measured to be comparable to the real OpenFreeMap "bright" style at the
+ * DENSE by default: label density measured to be comparable to the real OpenFreeMap "bright" style at the
  * zooms the wild apps look at (tests/wild/basemap-density.spec.ts has the numbers and the measurement). Around the
  * generated city core (street grid, 400 buildings with house numbers, ~400 ranked POIs) lies a generated REGION:
  * suburbs, neighbourhoods, villages and towns every few km out to ±30 km, arterial roads with names and route refs

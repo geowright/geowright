@@ -30,6 +30,20 @@ test.describe('drawing', () => {
     });
   });
 
+  test('vertexDelay pauses after every vertex (for a draw tool that debounces clicks)', async ({ map, page }) => {
+    await page.getByTestId('draw-polygon').click();
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__downs = [];
+      window.addEventListener('mousedown', () => w.__downs.push(performance.now()), true);
+    });
+    await map.draw.polygon(SQUARE, { finish: 'click-first', vertexDelay: 300 });
+    await expect(page.getByTestId('draw-count')).toHaveText('1');
+    const downs: number[] = await page.evaluate(() => (window as any).__downs);
+    expect(downs, 'four vertices and the closing click on the first').toHaveLength(5);
+    for (let i = 1; i < downs.length; i++) expect(downs[i] - downs[i - 1], `pause after vertex ${i}`).toBeGreaterThanOrEqual(290);
+  });
+
   test('select a drawn polygon and drag one vertex', async ({ map, page }) => {
     await page.getByTestId('draw-polygon').click();
     await map.draw.polygon(SQUARE, { finish: 'click-first' });

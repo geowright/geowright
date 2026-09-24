@@ -13,6 +13,26 @@ test.describe('input', () => {
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '3');
   });
 
+  test('the middle button and the Control, Alt and Meta modifiers reach the page as real mouse events', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__downs = [];
+      window.addEventListener('mousedown', (e) => w.__downs.push({ button: e.button, ctrl: e.ctrlKey, alt: e.altKey, meta: e.metaKey, shift: e.shiftKey }), true);
+    });
+    const none = { button: 0, ctrl: false, alt: false, meta: false, shift: false };
+    await map.feature({ layer: 'alerts', id: 3 }).click({ button: 'middle' });
+    for (const modifier of ['Control', 'Alt', 'Meta'] as const) {
+      await map.feature({ layer: 'alerts', id: 3 }).click({ modifiers: [modifier] });
+      await page.keyboard.press('Escape'); // whatever the click opened (a popup; Control+click is a context menu on macOS)
+    }
+    expect(await page.evaluate(() => (window as any).__downs)).toEqual([
+      { ...none, button: 1 },
+      { ...none, ctrl: true },
+      { ...none, alt: true },
+      { ...none, meta: true },
+    ]);
+  });
+
   test('hover drives the app hover state (real mousemove)', async ({ map, page }) => {
     await map.feature({ layer: 'alerts', where: { name: 'Road closure' } }).hover();
     await expect(page.getByTestId('hover-info')).toHaveText('Road closure');

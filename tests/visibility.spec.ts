@@ -150,7 +150,7 @@ test.describe('visibility', () => {
     expect(snap).toMatch(/#601 Polygon .*NOT-VISIBLE\(fill-opacity evaluates to 0\)/);
   });
 
-  // B10: every probe hides and re-shows the layer (MapLibre then re-prepares it). A `.not` waiting on a visible feature
+  // every probe hides and re-shows the layer (MapLibre then re-prepares it). A `.not` waiting on a visible feature
   // used to probe on every poll (about twice a second); the result is now reused while nothing observable changed.
   test('a waiting .not.toBeVisibleOnMap does not re-probe on every poll', async ({ map, page }) => {
     await page.evaluate(() => {

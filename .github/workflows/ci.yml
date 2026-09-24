@@ -76,7 +76,7 @@ jobs:
           path: test-results/
           retention-days: 5
 
-  # The version matrix (Mapbox GL JS 1.13, MapLibre 2-6): one small page, ~60 tests, a few minutes.
+  # The version matrix (Mapbox GL JS 1.13, MapLibre 2-6): one small page, ~85 tests, a few minutes.
   # Its own job and its own Playwright config, so it can never eat into the suite's time limit.
   compat:
     runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubuntu-latest"]') }}

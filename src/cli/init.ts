@@ -72,6 +72,36 @@ export function detect(pkgJson: { dependencies?: Record<string, string>; devDepe
   return { wrappers, mapLibrary, playwright: '@playwright/test' in deps, typescript: 'typescript' in deps };
 }
 
+/** The two lines an existing playwright.config needs (printed by init, and in the comment of geowright.webgl). */
+export const configLines = (dir: string) => [
+  `import { WEBGL_SOFTWARE_FLAGS } from './${dir}/geowright.webgl.js';`,
+  `projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: WEBGL_SOFTWARE_FLAGS } } }],`,
+];
+
+/** A path as the user can paste it into a POSIX shell. */
+export const shellPath = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
+
+/**
+ * The command line of `geowright init`: `--dir X` / `--dir=X`, `--url X` / `--url=X`, `--force`. A value that is
+ * missing or is another flag (`--dir --force`), and an unknown option, are errors rather than guesses.
+ */
+export function parseInitArgs(args: string[]): Pick<InitOptions, 'dir' | 'url' | 'force'> {
+  const out: Pick<InitOptions, 'dir' | 'url' | 'force'> = {};
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === '--force') {
+      out.force = true;
+      continue;
+    }
+    const m = /^--(dir|url)(?:=(.*))?$/.exec(a);
+    if (!m) throw new Error(`geowright init: unknown option ${a} (usage: geowright init [--dir tests] [--url /] [--force])`);
+    const value = m[2] ?? args[++i];
+    if (value === undefined || value === '' || value.startsWith('--')) throw new Error(`geowright init: --${m[1]} needs a value, e.g. --${m[1]} ${m[1] === 'dir' ? 'e2e' : '/'}`);
+    out[m[1] as 'dir' | 'url'] = value;
+  }
+  return out;
+}
+
 export const FILES = (ext: 'ts' | 'js', url: string) => ({
   [`geowright.fixture.${ext}`]: `import { test as base } from '@playwright/test';
 import { geowright${ext === 'ts' ? ', type MapHandle' : ''} } from 'geowright';
@@ -96,8 +126,7 @@ export const test = base.extend${ext === 'ts' ? '<{ map: MapHandle }>' : ''}({
  * Headless Chromium has no GPU: these flags give deterministic software WebGL (SwiftShader) — the same set
  * MapLibre GL JS uses in its own CI. In playwright.config:
  *
- *   import { WEBGL_SOFTWARE_FLAGS } from './${'${dir}'}/geowright.webgl';
- *   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: WEBGL_SOFTWARE_FLAGS } } }],
+ *   ${'${configLines}'}
  */
 export const WEBGL_SOFTWARE_FLAGS = [
   '--disable-gpu',
@@ -159,10 +188,16 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
   const log = o.log ?? console.log;
   const pkgPath = join(o.cwd, 'package.json');
   if (!existsSync(pkgPath)) throw new Error(`geowright init: no package.json in ${o.cwd} — run it in the root of the app's project`);
-  const pkgJson = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  let pkgJson;
+  try {
+    pkgJson = JSON.parse(readFileSync(pkgPath, 'utf8'));
+  } catch (e) {
+    throw new Error(`geowright init: ${pkgPath} is not valid JSON (${(e as Error).message}) — fix it and run init again`);
+  }
   const detection = detect(pkgJson);
   const ext = detection.typescript || existsSync(join(o.cwd, 'tsconfig.json')) ? 'ts' : 'js';
-  const dir = o.dir ?? (existsSync(join(o.cwd, 'e2e')) ? 'e2e' : 'tests');
+  // `./e2e/` and `e2e` are the same directory; the form matters in the import path written into the config
+  const dir = o.dir?.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '') || (existsSync(join(o.cwd, 'e2e')) ? 'e2e' : 'tests');
   const written: string[] = [], skipped: string[] = [];
   for (const [name, body] of Object.entries(FILES(ext, o.url ?? '/'))) {
     const file = join(o.cwd, dir, name);
@@ -171,7 +206,7 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
       continue;
     }
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, body.replace('${dir}', dir));
+    writeFileSync(file, body.replace('${configLines}', configLines(dir).join('\n *   ')));
     written.push(relative(o.cwd, file));
   }
   let config: string | undefined;
@@ -204,9 +239,12 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
   if (!detection.mapLibrary) log('\n   note: neither maplibre-gl nor mapbox-gl is a dependency of this package. geowright supports MapLibre GL JS 2–6 and Mapbox GL JS 1.13.');
   log('');
   if (config) log(`2. There was no Playwright config: wrote ${config} with the headless-WebGL launch flags in it.\n   CHECK its two marked lines: where your app is served, and how it is started.`);
-  else log(`2. Headless WebGL needs launch flags: see ${dir}/geowright.webgl.${ext} (three lines for YOUR playwright.config; init never edits it).`);
+  else {
+    log(`2. Headless WebGL needs launch flags. Add these two lines to YOUR playwright.config (init never edits it):`);
+    for (const line of configLines(dir)) log(`     ${line}`);
+  }
   if (!detection.playwright) log('   @playwright/test is not installed here yet:  npm i -D @playwright/test geowright && npx playwright install chromium');
   log('');
-  log(`3. npx playwright test ${dir}/map.spec.${ext}   — prints what is on your map; write assertions from that.`);
+  log(`3. npx playwright test ${shellPath(`${dir}/map.spec.${ext}`)}   — prints what is on your map; write assertions from that.`);
   return { written, skipped, detection, config };
 }

@@ -1,5 +1,5 @@
 /**
- * Adapter-seam additions that are INTERNAL until 1.0 (decision on an earlier issue): the engine and the MapLibre adapter use them,
+ * Adapter-seam additions that are INTERNAL until 1.0: the engine and the MapLibre adapter use them,
  * but they are not public API. They live in this file, not in `types.ts`, because `types.ts` is compiled into the
  * published typings (tsconfig.build.json) and this file is not: nothing under `src/playwright` and nothing in
  * `types.ts` may import it (tests/unit/published-types.unit.spec.ts checks that).

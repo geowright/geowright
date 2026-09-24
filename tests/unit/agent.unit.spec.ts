@@ -8,11 +8,11 @@ import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { runInNewContext } from 'node:vm';
 
-/** agent/: the scripts that let an LLM agent drive Playwright MCP (G8, G9 of an earlier issue). No network: a fake MCP server on loopback. */
+/** agent/: the scripts that let an LLM agent drive Playwright MCP. No network: a fake MCP server on loopback. */
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const run = promisify(execFile);
 
-test('mcp-call.mjs works in a fresh clone, where the git-ignored agent/runs/ does not exist yet (G8)', async () => {
+test('mcp-call.mjs works in a fresh clone, where the git-ignored agent/runs/ does not exist yet', async () => {
   const clone = test.info().outputPath('clone');
   mkdirSync(join(clone, 'agent'), { recursive: true });
   cpSync(join(ROOT, 'agent/mcp-call.mjs'), join(clone, 'agent/mcp-call.mjs'));
@@ -38,7 +38,7 @@ test('mcp-call.mjs works in a fresh clone, where the git-ignored agent/runs/ doe
   }
 });
 
-test('the control arm hides the app\'s hook, the with-map arm does not (G9)', () => {
+test('the control arm hides the app\'s hook, the with-map arm does not', () => {
   const args = (arm: string): string[] => JSON.parse(readFileSync(join(ROOT, `agent/mcp.${arm}.json`), 'utf8')).mcpServers.playwright.args;
   const scripts = (arm: string) => args(arm).flatMap((a, i, all) => (all[i - 1] === '--init-script' ? [a] : []));
   expect(scripts('control')).toEqual(['agent/hide-hook.init.js']);
@@ -51,4 +51,17 @@ test('the control arm hides the app\'s hook, the with-map arm does not (G9)', ()
   runInNewContext(readFileSync(join(ROOT, 'agent/hide-hook.init.js'), 'utf8'), page);
   runInNewContext('const map = { a: "map" }; (window.__geowright_maps ??= {}).main = map;', page);
   expect(runInNewContext('window.__geowright_maps', page)).toBeUndefined();
+});
+
+test('README "Agents": what it tells a package user to pass ships in the package, and its Chromium flags are the ones the repo runs with', () => {
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const section = readme.slice(readme.indexOf('## Agents'), readme.indexOf('\n## ', readme.indexOf('## Agents') + 1));
+  const pkg = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')) as { files: string[] };
+  const shipped = [...section.matchAll(/node_modules\/geowright\/([\w./-]+[\w])/g)].map((m) => m[1]);
+  expect(new Set(shipped)).toEqual(new Set(['dist/inpage.js', 'dist/inpage-agent.js', 'agent/MAP_SKILL.md']));
+  for (const f of shipped) expect(pkg.files.some((p) => p === f || f.startsWith(`${p}/`)), `${f} is in package.json "files"`).toBe(true);
+  const json = /```json\n([\s\S]*?)```/.exec(section)![1];
+  const repo = JSON.parse(readFileSync(join(ROOT, 'agent/playwright-mcp.config.json'), 'utf8'));
+  expect(JSON.parse(json).browser.launchOptions.args).toEqual(repo.browser.launchOptions.args);
+  expect(section, 'repo-only commands belong under "Developing geowright"').not.toMatch(/npx esbuild|npm run build:inpage|agent\/playwright-mcp\.config\.json|agent\/init-page\.ts/);
 });

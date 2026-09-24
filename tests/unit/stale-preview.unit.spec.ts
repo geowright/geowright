@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { stalePreview } from '../stale-preview';
 
 /**
- * The stale-preview trap (AGENTS.md, D10 of an earlier issue): a reused `vite preview` serves whatever demo/dist it was started on.
+ * The stale-preview trap (AGENTS.md): a reused `vite preview` serves whatever demo/dist it was started on.
  * tests/global-setup.ts refuses the run when the served build is not this checkout's, or demo/ changed after it.
  */
 const URL = 'http://localhost:4673';

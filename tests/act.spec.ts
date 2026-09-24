@@ -57,6 +57,20 @@ test.describe('act gap', () => {
     await expect(page.getByTestId('popup')).toBeVisible();
   });
 
+  test('ignoreLayers per map: every action of that handle looks through those layers', async ({ map, page }) => {
+    await page.getByTestId('alert-name').fill('Covering 106');
+    await page.getByTestId('alert-lng').fill('34.800');
+    await page.getByTestId('alert-lat').fill('32.060');
+    await page.getByTestId('alert-submit').click();
+    await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Covering 106' } });
+    const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout: 800 }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('occluded');
+
+    const lenient = geowright(page, { mapId: map.mapId, ignoreLayers: ['alerts'] });
+    await lenient.feature({ layer: 'parcels', id: 106 }).click({ timeout: 5000 }); // no per-action option
+    await expect(page.getByTestId('popup')).toBeVisible();
+  });
+
   test('off-screen feature: clear error by default, opt-in autoPan', async ({ map, page }) => {
     const far = map.feature({ layer: 'alerts', id: 4 });
     const err = await far.click({ timeout: 800 }).then(() => null, (e: Error) => e);
@@ -235,7 +249,7 @@ test.describe('act gap', () => {
     expect(back.lat).toBeCloseTo(two.lat, 4);
   });
 
-  // A15: a map-level ignoreLayers that lists the target's own layer made the target impossible to act on.
+  // a map-level ignoreLayers that lists the target's own layer made the target impossible to act on.
   test("ignoreLayers never hides the target's own layer", async ({ map, page }) => {
     const ignoring = geowright(page, { mapId: map.mapId, ignoreLayers: ['alerts'] }); // the map fixture has loaded the page
     await ignoring.feature({ layer: 'alerts', id: 1 }).click({ timeout: 3000 });
@@ -284,10 +298,10 @@ test.describe('act gap', () => {
     expect(snap).not.toContain('OUTSIDE the viewport');
   });
 
-  // 66, a known limit: occlusion is decided from the map's hit test, which never returns pixel-only layers (raster, image,
+  // A known limit: occlusion is decided from the map's hit test, which never returns pixel-only layers (raster, image,
   // video, canvas, heatmap, hillshade). An opaque one drawn above a feature does not stop click(). Documented in DESIGN
   // "Costs and known limitations" and README Limits; this test turns green when the limit is lifted.
-  test.fail('an opaque image layer drawn above a feature occludes it (, known limit)', async ({ map, page }) => {
+  test.fail('an opaque image layer drawn above a feature occludes it (known limit)', async ({ map, page }) => {
     await page.evaluate(() => {
       const m = (window as any).__geowright_maps.main;
       const c = document.createElement('canvas'); c.width = c.height = 4;

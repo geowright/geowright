@@ -87,7 +87,7 @@ const api = {
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
   overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
   /**
-   * map.marker() / map.popup(): match AND pin in one call, so the pinned element is the one that matched ( C15: in
+   * map.marker() / map.popup(): match AND pin in one call, so the pinned element is the one that matched (in
    * two round trips an overlay inserted in between re-pointed a document index). With exactly one match its element is
    * kept in `window.__geowright_pins` under a token, for the Playwright side's pin selector engine. `docIndex`: its
    * position among the document's matches, for the order-bound fallback (-1 inside a shadow root).
@@ -109,7 +109,7 @@ const api = {
   pixelProbe: async (mapId: string, q: any, opts?: any) => (await engine(mapId).learnIdentity(q), engine(mapId).pixelProbe(q, opts)),
   /**
    * Pixel-only layers (raster, image, canvas, video, heatmap, hillshade): how much do the pixels at a location change when
-   * the layer is not drawn? `ok: false` = no verdict could be reached (the matchers: inconclusive, ); a hidden layer
+   * the layer is not drawn? `ok: false` = no verdict could be reached (the matchers: inconclusive); a hidden layer
    * is a verdict — 0.
    */
   layerPixels: async (mapId: string, layer: string, world: any, radiusPx = 24, budgetMs = 2000) => {

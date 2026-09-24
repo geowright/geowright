@@ -90,7 +90,7 @@ test.describe('vectorTileHandler', () => {
     expect(await serve(`http://localhost/vt/buildings/16/${x}/${y}.pbf`)).toEqual({ status: 200, bytes: 0 });
   });
 
-  test('retina and double-extension tile URLs are understood (C26)', async () => {
+  test('retina and double-extension tile URLs are understood', async () => {
     const { x, y } = tileOf(34.716, 32.1035, 12);
     for (const tail of ['.pbf', '@2x.pbf', '.vector.pbf', '.mvt?key=abc', '']) {
       const r = await serve(`http://localhost/vt/buildings/12/${x}/${y}${tail}`);

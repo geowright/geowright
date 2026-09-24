@@ -403,7 +403,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     const c = this.map.getCenter();
     const a = this.map.project([c.lng, c.lat]), b = this.map.project([c.lng + 360, c.lat]);
     // The period is a horizontal pixel distance only on an unrotated map; rotated, the next copy is also up or down
-    // and folding x alone would pair the wrong pieces (B14). No folding then: a copy counts as another piece.
+    // and folding x alone would pair the wrong pieces. No folding then: a copy counts as another piece.
     if (Math.abs(b.y - a.y) > 0.5) return undefined;
     const w = b.x - a.x;
     return w > 0 && w < this.map.getCanvas().clientWidth * 2 ? w : undefined; // only when a second copy can be on screen
@@ -442,7 +442,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
    * composited (no flicker). Costs four renders (~50ms each on SwiftShader), fires 'styledata'
    * and makes MapLibre reload the layer's source afterwards — a probe, not something to run per poll.
    *
-   * The control read ( B6): the "with" and "without" reads are compared, and pixels that change BY THEMSELVES (a
+   * The control read: the "with" and "without" reads are compared, and pixels that change BY THEMSELVES (a
    * fade, an animation under the feature, a camera that never stops) would pass for the layer's contribution. So the
    * layer-on pixels are read twice, and hiding the layer must change them by clearly more than they change by
    * themselves (signal against noise); otherwise there is no verdict yet: inconclusive. Not a control after the
@@ -453,7 +453,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
    * Without redraw() (Mapbox GL JS v1) the same reads happen inside the public 'render' event, which
    * fires in the task that drew the frame: triggerRepaint(), read on 'render'. Four REAL frames — the one
    * without the layer can be composited (a one-frame flicker), and it takes as long as four frames take: within
-   * `budgetMs` (the caller's remaining time), or inconclusive — "not yet", never "no pixels" ( B7).
+   * `budgetMs` (the caller's remaining time), or inconclusive — "not yet", never "no pixels".
    */
   pixelContribution(layer: string, at: Pt, radiusPx = 2): number | undefined | Promise<number | undefined> {
     const r = this.probePixels(layer, at, radiusPx, 2000);
@@ -488,7 +488,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         : { inconclusive: `the pixels there changed by ${control} between two reads with the layer drawn, and hiding the layer changed them by ${diff}, not clearly more than that — something is animating or still fading in there` };
     // Put back what the app had: since MapLibre 5.16 visibility may be an EXPRESSION on global state, and writing back
     // the constant "visible" replaced it (and turned on a layer the app had hidden). Read right before hiding, and put
-    // back only if it is still the probe's own "none" ( B8: the app may have set something else in between).
+    // back only if it is still the probe's own "none" (the app may have set something else in between).
     let restore: unknown;
     const hide = () => {
       restore = this.map.getLayoutProperty(layer, 'visibility') ?? 'visible';
@@ -550,7 +550,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     const prefix = container.classList.contains('maplibregl-map') ? 'maplibregl' : 'mapboxgl';
     for (const [kind, selector] of [['marker', `.${prefix}-marker`], ['popup', `.${prefix}-popup`]] as const) {
       // Scoped to the container, not the document: a map inside a web component's shadow root is invisible to a
-      // document-wide query ( B9), and another map's overlays are not this one's.
+      // document-wide query, and another map's overlays are not this one's.
       container.querySelectorAll(selector).forEach((el, index) => {
         const r = el.getBoundingClientRect();
         const rect = { x: r.left - origin.left, y: r.top - origin.top, width: r.width, height: r.height };

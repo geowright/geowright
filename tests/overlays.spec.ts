@@ -90,7 +90,7 @@ test.describe('DOM markers and popups', () => {
     await expect(page.getByTestId('popup')).toHaveCount(0);
   });
 
-  // B9: a web component (Lit, Stencil) hosts the map inside its shadow root. A document-wide query does not see
+  // a web component (Lit, Stencil) hosts the map inside its shadow root. A document-wide query does not see
   // into it: no marker or popup was ever found, and `.not.toHavePopup()` always passed.
   test('markers and popups inside a shadow root are found', async ({ map, page }) => {
     await page.getByTestId('toggle-markers').check();
@@ -114,7 +114,7 @@ test.describe('DOM markers and popups', () => {
     await expect(map).toHavePopup({ at: { lng: 34.84, lat: 32.12 }, text: 'Depot HQ', tolerancePx: 20 });
   });
 
-  // C15: the match and the pin were two round trips. A marker inserted in between (markers still loading, another
+  // the match and the pin were two round trips. A marker inserted in between (markers still loading, another
   // script) shifted the document index, and the Locator was pinned to a different marker. Simulated: every look at the
   // markers schedules another script's marker insertion at the front, for the next task.
   test('the Locator is pinned to the marker that matched, even when markers are inserted during the lookup', async ({ map, page }) => {
