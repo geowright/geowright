@@ -12,7 +12,9 @@ import {
   fmtProps,
   compass,
   describe as describeFeature,
+  wholePixels,
 } from '../../src/inpage/engine';
+import { buttonLabel } from '../../src/inpage/mirror';
 import type { Geometry, Pt } from '../../src/inpage/types';
 
 /**
@@ -81,6 +83,15 @@ test.describe('testWhere', () => {
     expect(testWhere(5, { gte: 1, lte: 4 })).toBe(false);
     expect(testWhere('active', { exists: true, ne: 'archived' })).toBe(true);
     expect(testWhere('archived', { exists: true, ne: 'archived' })).toBe(false);
+  });
+
+  test('a value that is neither a scalar nor an operator object is an error, not "matches everything"', () => {
+    // meant as "in", as a nested match, as a misspelt operator: each used to match EVERY feature
+    expect(() => testWhere('park', ['park', 'garden'])).toThrow('unknown where operator: an array (to match one of several values use { in: ["park", "garden"] })');
+    expect(() => testWhere('park', { equals: 'park' })).toThrow(/unknown where operator "equals"; valid: eq, ne, gt, gte, lt, lte, in, matches, flags, exists/);
+    expect(() => testWhere({ city: 'X' }, { city: 'X' })).toThrow(/unknown where operator "city"/);
+    expect(() => testWhere(5, { gte: 1, below: 4 })).toThrow(/unknown where operator "below"/);
+    expect(() => testWhere(undefined, ['a'])).toThrow(/unknown where operator/); // thrown whatever the feature holds
   });
 });
 
@@ -336,7 +347,33 @@ test.describe('nested property values (found on a react-map-gl app: counties wit
     expect(fmtProps({ flows: Object.fromEntries(Array.from({ length: 30 }, (_, i) => [String(i), i])) }, 6)).toMatch(/^flows=\{"0":0,.{20,40}…$/);
   });
 
+  test('the accessibility mirror labels them as JSON, not "[object Object]"', () => {
+    const label = buttonLabel({ layer: 'counties', id: 7, geometryType: 'Polygon', properties: { name: 'Seward', flows: { '18': -36 }, centroid: [-100.85, 37.19] } });
+    expect(label).toBe('counties 7 (Polygon) name=Seward, flows={"18":-36}, centroid=[-100.85,37.19]');
+  });
+
   test('histogram ignores them', () => {
     expect(histogram([{ a: { x: 1 }, kind: 'k' }, { a: { x: 2 }, kind: 'k' }], 2)).toBe('Summary of all 2 — kind: k×2');
+  });
+});
+
+test.describe('wholePixels', () => {
+  test('snaps each candidate to the whole client pixel nearest to it first, then the four around it; surface-relative', () => {
+    const rect = { left: 10.25, top: 20.5, sx: 1, sy: 1 };
+    // client (110.65, 70.9): nearest (111, 71), then floor/ceil combinations; given back relative to the surface
+    const out = wholePixels([{ x: 100.4, y: 50.4 }], rect);
+    expect(out.map((p) => [p.x + rect.left, p.y + rect.top])).toEqual([[111, 71], [110, 70], [111, 70], [110, 71]]);
+  });
+
+  test('a candidate already on a whole client pixel gives just that pixel', () => {
+    const out = wholePixels([{ x: 5, y: 6 }], { left: 0, top: 0, sx: 1, sy: 1 });
+    expect(out).toEqual([{ x: 5, y: 6 }]);
+  });
+
+  test('no pixel is tried twice across candidates, and the order of candidates is kept', () => {
+    const out = wholePixels([{ x: 10.2, y: 10.2 }, { x: 10.4, y: 10.4 }, { x: 30, y: 30 }], { left: 0, top: 0, sx: 1, sy: 1 });
+    const keys = out.map((p) => `${p.x},${p.y}`);
+    expect(new Set(keys).size).toBe(keys.length);
+    expect(keys).toEqual(['10,10', '11,10', '10,11', '11,11', '30,30']);
   });
 });

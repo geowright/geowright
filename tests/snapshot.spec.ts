@@ -23,6 +23,26 @@ test.describe('map snapshot (agent layer)', () => {
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
   });
 
+  test('string-id features that are drawn are not also counted as "not drawn individually"', async ({ map, page }) => {
+    // terra-draw gives its features UUID ids; MapLibre renders them with a coerced (numeric) id
+    await page.getByTestId('draw-polygon').click();
+    await map.draw.polygon([{ lng: 34.825, lat: 32.04 }, { lng: 34.85, lat: 32.04 }, { lng: 34.85, lat: 32.055 }, { lng: 34.825, lat: 32.055 }], { finish: 'click-first' });
+    await expect(page.getByTestId('draw-count')).toHaveText('1');
+    await expect(map.features({ layer: 'td-polygon' })).toHaveFeatureCount(1);
+    const source = (await map.layers()).find((l) => l.id === 'td-polygon')!.source!;
+    const snap = await map.snapshot();
+    expect(snap).toMatch(/\[td-polygon\] 1 fill entity/);
+    expect(snap).not.toContain(`[source ${source}] 1 feature(s) are inside the view but not drawn individually`);
+    expect(snap).toContain('[source stations] 28 feature(s) are inside the view but not drawn individually'); // the true ones stay
+  });
+
+  test('filter.at lists only the entities drawn at that location', async ({ map }) => {
+    const at = await map.feature({ layer: 'alerts', id: 1 }).lngLat();
+    const snap = await map.snapshot({ filter: { layer: 'alerts', at } });
+    expect(snap).toMatch(/\[alerts\] 1 circle entity/);
+    expect(snap).toMatch(/#1 Point @\(\d+,\d+\) .*name="Gas leak"/);
+  });
+
   test('is bounded: per-layer cap with a summary of the remainder', async ({ map }) => {
     const snap = await map.snapshot({ perLayer: 2 });
     expect(snap).toMatch(/\[parcels\] 6 fill entities/);

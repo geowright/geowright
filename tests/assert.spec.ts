@@ -87,6 +87,17 @@ test.describe('assert gap', () => {
     await expect(map).not.toHaveFeature({ layer: 'alerts', where: { nonexistent: { exists: true } } });
   });
 
+  test('where: an array or an unknown operator is no verdict, not "matches everything"', async ({ map }) => {
+    for (const where of [{ severity: ['high', 'medium'] }, { severity: { equals: 'high' } }] as any[]) {
+      for (const not of [false, true]) {
+        const m = not ? expect(map).not : expect(map);
+        const e = await m.toHaveFeature({ layer: 'alerts', where }, { timeout: 500 }).then(() => null, (e: Error) => e);
+        expect(e, `${not ? '.not.' : ''}toHaveFeature passed with where ${JSON.stringify(where)}`).not.toBeNull();
+        expect(e?.message).toMatch(/no verdict: .*unknown where operator/);
+      }
+    }
+  });
+
   test('text labels (symbol layers, fixture glyphs) are assertable', async ({ map }) => {
     await expect(map).toHaveFeature({ layer: 'alerts-labels', where: { name: 'Gas leak' } });
     await expect(map.features({ layer: 'alerts-labels' })).toHaveFeatureCount(3);

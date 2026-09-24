@@ -82,4 +82,25 @@ test.describe('camera: globe projection', () => {
     expect(Math.abs(lng - 20)).toBeLessThan(0.4); // one pixel is ~0.2° at zoom 1.8
     expect(Math.abs(lat - 40)).toBeLessThan(0.4);
   });
+
+  test('far side of the globe: a query `at` it matches nothing, not what is drawn on the near side', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('hemi', { type: 'geojson', data: { type: 'Feature', properties: { name: 'near side' }, geometry: { type: 'Polygon', coordinates: [[[-60, -70], [120, -70], [120, 75], [-60, 75], [-60, -70]]] } } });
+      m.addLayer({ id: 'hemi', type: 'fill', source: 'hemi', paint: { 'fill-color': '#0a0', 'fill-opacity': 0.4 } }, 'alerts');
+    });
+    await page.getByTestId('camera-preset').selectOption('globe-2');
+    await expect(map).toHaveView({ zoom: 1.8 });
+    const far = { lng: -145, lat: -32 };
+    const near = { lng: 20, lat: 10 };
+    await expect(map.features({ layer: 'hemi', at: near })).toHaveFeatureCount(1); // the polygon is there, on the near side
+    expect(await map.features({ layer: 'hemi', at: far }).count(), 'a far-side `at` matched the near-side polygon drawn at that pixel').toBe(0);
+    // the matchers say why, and a pixel assertion at the far side reaches no verdict (either polarity fails)
+    const e1 = await expect(map).toHaveFeature({ layer: 'hemi', at: far }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    expect(e1?.message).toMatch(/not on the visible map surface/);
+    const e2 = await expect(map).toHaveLayerPixels('hemi', { at: far, timeout: 500 }).then(() => null, (e: Error) => e);
+    expect(e2?.message).toMatch(/no verdict: .*not on the visible map surface/);
+    const e3 = await expect(map).not.toHaveLayerPixels('hemi', { at: far, timeout: 500 }).then(() => null, (e: Error) => e);
+    expect(e3?.message).toMatch(/no verdict: .*not on the visible map surface/);
+  });
 });

@@ -20,7 +20,8 @@ as written (it adds types only).
   one is required, the camera is moving (`toHavePopup`). A removed or 0×0 map is an error for `features(q).count()`
   and `all()`, never an empty map.
 - **Query** by `layer`, `layerType`, `source` (for layer ids a wrapper generates), `id`, `where` (equality, RegExp,
-  `eq ne gt gte lt lte in matches exists`), `at` a location. By default, queries match only what a user can SEE. The
+  `eq ne gt gte lt lte in matches exists`; any other value, such as an array or an unknown operator, is an error),
+  `at` a location (one on the far side of the globe or behind a mountain matches nothing). By default, queries match only what a user can SEE. The
   style's paint properties are evaluated for each feature: opacity 0, a transparent colour and zero size do not count
   as visible. A layer's `visibility` (including a `visibility` expression, MapLibre 5.16+), `minzoom` and `maxzoom`
   are respected. `visible: 'any'` opts out. Features need no ids: identity is id + properties, and look-alikes are
