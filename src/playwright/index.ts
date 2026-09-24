@@ -143,6 +143,23 @@ export interface ActionOptions extends ActionPointOptions {
   autoPan?: boolean | LngLat;
 }
 
+/**
+ * Options of `dragTo`, `dragBy` and `lngLat`: every action option except `moving`. A drag's press and the answer of
+ * `lngLat()` have no check at the instant the real event arrives, so on a target that never stops they would act on a
+ * predicted, never-verified pixel. `{ moving: 'allow' }` is refused here — by the type, and at run time.
+ */
+export type SteadyActionOptions = Omit<ActionOptions, 'moving'> & { moving?: never };
+
+function refuseMoving(method: string, opts: { moving?: unknown }): void {
+  if (opts.moving !== undefined) {
+    throw new GeowrightError(
+      `${method}() does not take { moving: '${String(opts.moving)}' }: a ${method === 'lngLat' ? 'lngLat() answer' : 'drag'} has no check at the instant the real event arrives, ` +
+        `so on a moving target it would act on a predicted, never-verified pixel. Wait until the target is still (the default), ` +
+        `or use click() / tap() / hover(), which verify a moving target when the input arrives.`,
+    );
+  }
+}
+
 export interface DrawOptions {
   timeout?: number;
   /**
@@ -172,15 +189,15 @@ export interface TwoPointDrawOptions {
 
 const POLL = [0, 30, 60, 100, 100, 200, 300, 500];
 
+/** A side-effect-free round trip into the page outlived the action's deadline. */
+class DeadlineError extends Error {}
+
 /**
  * Aiming at a moving target. The pointer arrives some ms after the pixel was computed; how many is not
  * knowable in advance (it is the page's frame time plus the input pipeline), but every miss measures it:
  * the target was `offset` px from the pointer, moving at `velocity` px/ms, so the pointer was late by
  * offset·v/|v|² ms. Closed loop on a scalar; direction comes fresh from the page on every attempt.
  */
-/** A side-effect-free round trip into the page outlived the action's deadline. */
-class DeadlineError extends Error {}
-
 class Aim {
   leadMs = 0;
   velocity?: { x: number; y: number };
@@ -256,6 +273,12 @@ export class MapHandle {
   /** @internal */
   async _find(q: FeatureQuery): Promise<FeatureSummary[]> {
     return (await this._call<WireSummary[]>('find', toWire(q))).map(fromWire);
+  }
+
+  /** @internal `_find`, plus the reason when the query names a layer the style does not have (the matchers: no verdict). */
+  async _findChecked(q: FeatureQuery): Promise<{ found: FeatureSummary[]; missingLayer?: string }> {
+    const r = await this._call<{ found: WireSummary[]; missingLayer?: string }>('findChecked', toWire(q));
+    return { found: r.found.map(fromWire), missingLayer: r.missingLayer };
   }
 
   /** @internal */
@@ -342,6 +365,19 @@ export class MapHandle {
       return await Promise.race([call, late]);
     } finally {
       clearTimeout(timer);
+    }
+  }
+
+  /**
+   * @internal Ends a click-time (hover-time) check and returns what it saw. `undefined`: the check is gone with the page
+   * it was armed in — the input navigated, so the round trip failed or reached a fresh page. Real input left, so it is
+   * taken as DELIVERED, as Playwright takes a click that navigates: it must never be sent again.
+   */
+  async _disarm(token: string): Promise<ClickVerdict | undefined> {
+    try {
+      return (await this._call<ClickVerdict | null>('disarmClick', token)) ?? undefined;
+    } catch {
+      return undefined;
     }
   }
 
@@ -571,19 +607,25 @@ export class MapHandle {
 
   private _pointAtOnce(at: LngLat, opts: ActionOptions, what: string, seen: (client: { x: number; y: number }) => void): Promise<{ x: number; y: number }> {
     return this._retry<{ x: number; y: number }>(`${what} ${fmt(at)}`, opts.timeout ?? this.timeout, async () => {
-      const r = await this._call<{ client: { x: number; y: number }; inside: boolean; hidden: boolean; covered: boolean; moving: boolean }>('clientPoint', at);
-      seen(r.client);
-      if (r.moving) return { retry: 'map is moving' };
-      if (!r.inside) {
-        if (!opts.autoPan) return { retry: 'location is outside the viewport (pass { autoPan: true } to move the camera)' };
+      const r = await this._pointNow(at, opts, seen);
+      if ('outside' in r && opts.autoPan) {
         await this._call('revealWorld', at);
         await this._call('waitForIdle', 2000);
         return { retry: 'panned to location' };
       }
-      if (r.hidden) return { retry: 'location is not on the visible map surface (far side of the globe, beyond the horizon, or behind the camera): its pixel shows something else' };
-      if (r.covered && !opts.force) return { retry: 'location is covered by a DOM element (popup, control, overlay)' };
-      return { value: r.client };
+      return r;
     });
+  }
+
+  /** @internal ONE look, no waiting and no panning: the client pixel of a location if an action could use it right now. */
+  async _pointNow(at: LngLat, opts: ActionOptions, seen?: (client: { x: number; y: number }) => void): Promise<{ value: { x: number; y: number } } | { retry: string; outside?: true }> {
+    const r = await this._call<{ client: { x: number; y: number }; inside: boolean; hidden: boolean; covered: boolean; moving: boolean }>('clientPoint', at);
+    seen?.(r.client);
+    if (r.moving) return { retry: 'map is moving' };
+    if (!r.inside) return { retry: `location is outside the viewport${!opts.autoPan ? ' (pass { autoPan: true } to move the camera)' : ''}`, outside: true };
+    if (r.hidden) return { retry: 'location is not on the visible map surface (far side of the globe, beyond the horizon, or behind the camera): its pixel shows something else' };
+    if (r.covered && !opts.force) return { retry: 'location is covered by a DOM element (popup, control, overlay)' };
+    return { value: r.client };
   }
 
   /* ---- touch (mobile map apps) ---- */
@@ -771,12 +813,12 @@ export class FeatureHandle {
         const token = await armFirst?.();
         // Looking for the pixel has no side effects and may be abandoned at the deadline; real input (below) never is.
         const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), this.pointOpts(opts, aim.leadMs)).catch(async (e) => {
-          if (token) await this.map._call('disarmClick', token).catch(() => {});
+          if (token) await this.map._disarm(token);
           throw e;
         });
         if (r.ok) aim.velocity = r.velocity;
         if (!r.ok) {
-          if (token) await this.map._call('disarmClick', token);
+          if (token) await this.map._disarm(token);
           if (opts.autoPan && !panned && (r.reason === 'not-found' || r.reason === 'offscreen')) {
             const revealed =
               typeof opts.autoPan === 'object'
@@ -812,13 +854,15 @@ export class FeatureHandle {
       this._withActionPoint(what, opts, async (p, aim, armed) => {
         // Arm an in-page check that re-runs the hit test at the instant the REAL event arrives.
         const token = armed ?? (await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)));
-        let verdict: ClickVerdict;
+        let verdict: ClickVerdict | undefined;
         try {
           if (opts.moving !== 'allow') await this.map.page.mouse.move(p.x, p.y); // (mouse.click moves too; for a moving target the extra round trip is lateness)
           await withModifiers(this.map.page, opts.modifiers, () => this.map.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount }));
         } finally {
-          verdict = await this.map._call<ClickVerdict>('disarmClick', token);
+          verdict = await this.map._disarm(token);
         }
+        // Retried ONLY when the check positively says the click was swallowed, or that nothing reached the page at all.
+        if (!verdict) return; // the page it was armed in is gone: the click navigated — delivered, never sent again
         if (!verdict.fired) return { retry: 'the click never reached the page (is something outside the document covering it?)' };
         if (!verdict.ok) return { retry: `click was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
       }, opts.moving === 'allow' ? () => this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)) : undefined),
@@ -840,12 +884,13 @@ export class FeatureHandle {
     await step(what, () =>
       this._withActionPoint(what, opts, async (p, aim, armed) => {
         const token = armed!;
-        let verdict: ClickVerdict;
+        let verdict: ClickVerdict | undefined;
         try {
           await this.map.page.mouse.move(p.x, p.y);
         } finally {
-          verdict = await this.map._call<ClickVerdict>('disarmClick', token);
+          verdict = await this.map._disarm(token);
         }
+        if (!verdict) return; // the page it was armed in is gone: delivered
         if (!verdict.fired) return { retry: 'the pointer never reached the page' };
         if (!verdict.ok) return { retry: `hover missed the moving target: ${verdict.reason}${aim.learn(verdict)}` };
       }, () => this.map._call<string>('armHover', this.wire(opts), this.pointOpts(opts))),
@@ -858,27 +903,35 @@ export class FeatureHandle {
     await step(what, () =>
       this._withActionPoint(what, opts, async (p, aim) => {
         const token = await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts));
-        let verdict: ClickVerdict;
+        let verdict: ClickVerdict | undefined;
         try {
           await this.map.page.touchscreen.tap(p.x, p.y);
         } finally {
-          verdict = await this.map._call<ClickVerdict>('disarmClick', token);
+          verdict = await this.map._disarm(token);
         }
+        if (!verdict) return; // the page it was armed in is gone: the tap navigated — delivered, never sent again
         if (!verdict.fired) return { retry: 'the tap never reached the page' };
         if (!verdict.ok) return { retry: `tap was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
       }),
     );
   }
 
-  /** Drag this feature (e.g. a vertex handle) to a location with real mouse input. */
-  async dragTo(to: LngLat, opts: ActionOptions & { steps?: number } = {}): Promise<void> {
+  /** Drag this feature (e.g. a vertex handle) to a location with real mouse input. Takes no `moving` (see SteadyActionOptions). */
+  async dragTo(to: LngLat, opts: SteadyActionOptions & { steps?: number } = {}): Promise<void> {
+    refuseMoving('dragTo', opts);
     const what = `${this}.dragTo(${fmt(to)})`;
-    await step(what, () =>
-      this._withActionPoint(what, opts, async (a) => {
-        const b = await this.map._pointAt(to, { ...opts, autoPan: false, force: true }, `${what} destination`);
-        await this.map._drag(a, b, opts.steps, opts.modifiers);
-      }),
-    );
+    await step(what, async () => {
+      // The destination first (it may wait for the map, up to the timeout), THEN the source: the press follows the
+      // source's verification at once. Resolved after it, a long wait here let the target move before the press.
+      const dest = { ...opts, autoPan: false, force: true };
+      await this.map._pointAt(to, dest, `${what} destination`);
+      await this._withActionPoint(what, opts, async (a) => {
+        // one round trip, no waiting: the camera may have moved since, so the destination pixel is read afresh
+        const b = await this.map._pointNow(to, dest);
+        if ('retry' in b) return { retry: `destination: ${b.retry}` };
+        await this.map._drag(a, b.value, opts.steps, opts.modifiers);
+      });
+    });
   }
 
   /**
@@ -887,13 +940,16 @@ export class FeatureHandle {
    * recognise a drag only after a pixel threshold (terra-draw: 8px) move the shape by that much
    * less — for users too. Assert the result with a tolerance, or drag a vertex (absolute) instead.
    */
-  async dragBy(delta: { dLng: number; dLat: number }, opts: ActionOptions & { steps?: number } = {}): Promise<void> {
+  async dragBy(delta: { dLng: number; dLat: number }, opts: SteadyActionOptions & { steps?: number } = {}): Promise<void> {
+    refuseMoving('dragBy', opts);
     const what = `${this}.dragBy(${+delta.dLng.toFixed(5)}, ${+delta.dLat.toFixed(5)})`;
     await step(what, () =>
       this._withActionPoint(what, opts, async (a) => {
         const from = await this.map.lngLatAt(a);
-        const b = await this.map._pointAt({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true }, `${what} destination`);
-        await this.map._drag(a, b, opts.steps, opts.modifiers);
+        // no waiting between the verified source and the press: a destination that is not reachable NOW is a retry
+        const b = await this.map._pointNow({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true });
+        if ('retry' in b) return { retry: `destination: ${b.retry}` };
+        await this.map._drag(a, b.value, opts.steps, opts.modifiers);
       }),
     );
   }
@@ -912,7 +968,8 @@ export class FeatureHandle {
    * (`info().lngLat` is cheaper but only the best GEOMETRIC candidate: on a feature that is mostly
    * covered by another one it can be a covered pixel.)
    */
-  async lngLat(opts: ActionOptions = {}): Promise<LngLat> {
+  async lngLat(opts: SteadyActionOptions = {}): Promise<LngLat> {
+    refuseMoving('lngLat', opts);
     const what = `${this}.lngLat()`;
     let at: LngLat | undefined;
     await this._withActionPoint(what, opts, async (p) => void (at = await this.map.lngLatAt(p)));
@@ -948,35 +1005,60 @@ export class FeatureSetHandle {
 
 /* ------------------------------------------------------------------ assertions */
 
-async function pollFeatures(
-  map: MapHandle,
-  query: FeatureQuery,
-  timeout: number,
-  isNot: boolean,
-  predicate: (found: FeatureSummary[]) => boolean,
-): Promise<{ pass: boolean; found: FeatureSummary[]; error?: string }> {
+/**
+ * One poll of a retrying matcher: the condition holds (true), does not (false) — or no verdict could be reached
+ * (undefined, with why): the map could not be queried, a named layer does not exist, the query is ambiguous where one
+ * feature is required, the map had not settled (, ). "Could not look" is never "absent".
+ */
+interface Poll {
+  verdict: boolean | undefined;
+  why?: string;
+}
+
+/**
+ * Polls until a CONCLUSIVE result satisfies the assertion (in its polarity) or the deadline. If the last poll was
+ * inconclusive, the assertion fails whichever way it was written (pass = isNot) and `inconclusive` says why — the rule
+ * toHaveView has always had for a map that never came to rest. A throw is an inconclusive poll.
+ */
+async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number, deadline: number) => Promise<Poll>, backoff: number[] = POLL): Promise<{ pass: boolean; inconclusive?: string }> {
   const deadline = Date.now() + timeout;
-  let found: FeatureSummary[] = [];
-  let pass = false;
-  let error: string | undefined;
+  let last: Poll = { verdict: undefined, why: 'never checked' };
   for (let i = 0; ; i++) {
     try {
-      // Let the map settle first so a half-loaded frame is never the basis of a verdict —
-      // this matters most for `.not`, which would otherwise pass on a map that has not caught up.
-      await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
-      found = await map._find(query);
-      pass = predicate(found);
-      error = undefined;
-      if (pass !== isNot) break;
+      last = await attempt(i, deadline);
     } catch (e) {
-      error = (e as Error).message.split('\n')[0];
+      last = { verdict: undefined, why: (e as Error).message.split('\n')[0] };
     }
-    const wait = POLL[Math.min(i, POLL.length - 1)];
+    if (last.verdict !== undefined && last.verdict !== isNot) break;
+    const wait = backoff[Math.min(i, backoff.length - 1)];
     if (Date.now() + wait >= deadline) break;
     await new Promise((r) => setTimeout(r, wait));
   }
-  return { pass, found, error };
+  return last.verdict === undefined ? { pass: isNot, inconclusive: last.why ?? 'no verdict' } : { pass: last.verdict };
 }
+
+/**
+ * whether the map has SETTLED enough for a verdict of absence (a `.not`, a count): it became idle within a bounded
+ * wait, or it was diagnosed as a map that never becomes idle (an animation, a setData loop), where waiting cannot help.
+ * A half-loaded map is not evidence that something is absent. Presence needs no settling: a found feature is there.
+ * The wait grows (0.5 → 1 → 2 s) only while an absence verdict is what the assertion waits for — enough frames for a
+ * slow page to be recognised as never idle — and resolves as soon as the map is idle, so a settled map costs nothing.
+ */
+class Settle {
+  private never = false;
+  async wait(map: MapHandle, i: number, deadline: number, grow: boolean): Promise<{ settled: boolean; why?: string }> {
+    const cap = this.never || !grow ? 500 : [500, 1000, 2000][Math.min(i, 2)];
+    const r = await map._call<{ idle: boolean; never: boolean; why?: string }>('settle', Math.max(50, Math.min(cap, deadline - Date.now())));
+    if (r.never) this.never = true;
+    return { settled: r.idle || r.never, why: r.why };
+  }
+}
+
+const notSettled = (why?: string) => `the map had not settled — it was still loading, moving or repainting${why ? ` (${why})` : ''} — so absence could not be concluded`;
+
+/** For a failure message: what "could not decide" was about, and what to do about a missing layer. */
+const undecided = (why: string) =>
+  `no verdict: ${why}${/(does|do) not exist\. Layers:/.test(why) ? '\n(to assert that a layer was removed, check map.layers())' : ''}`;
 
 export interface ViewExpectation {
   center?: LngLat;
@@ -994,7 +1076,17 @@ export const expect = baseExpect.extend({
     if (!(map instanceof MapHandle)) throw new Error('toHaveFeature: receiver must be a MapHandle — expect(map).toHaveFeature(...)');
     const timeout = options?.timeout ?? this.timeout;
     if (options?.visible !== undefined) query = { ...query, visible: options.visible };
-    const { pass, found, error } = await pollFeatures(map, query, timeout, this.isNot, (f) => f.length > 0);
+    let found: FeatureSummary[] = [];
+    const settle = new Settle();
+    const { pass, inconclusive } = await pollVerdict(timeout, this.isNot, async (i, deadline) => {
+      found = [];
+      const s = await settle.wait(map, i, deadline, this.isNot);
+      const r = await map._findChecked(query);
+      found = r.found;
+      if (r.missingLayer) return { verdict: undefined, why: r.missingLayer };
+      if (found.length > 0) return { verdict: true };
+      return s.settled ? { verdict: false } : { verdict: undefined, why: notSettled(s.why) };
+    });
     const explain = pass === this.isNot ? await map._explain(query) : '';
     if (explain) await attach('map state — toHaveFeature', explain);
     if (explain) await map._attachFailureScreenshot('map screenshot — toHaveFeature', query);
@@ -1006,7 +1098,7 @@ export const expect = baseExpect.extend({
       message: () =>
         `expect(map).${this.isNot ? 'not.' : ''}toHaveFeature(${show(query)})\n\n` +
         `Expected: ${this.isNot ? 'no' : 'at least one'} rendered feature matching, within ${timeout}ms\n` +
-        `Received: ${found.length} match(es)${error ? `  (last error: ${error})` : ''}\n` +
+        `Received: ${inconclusive ? undecided(inconclusive) : `${found.length} match(es)`}\n` +
         (this.isNot ? found.slice(0, 5).map((f) => `  - ${fmtFeature(f)}`).join('\n') + '\n' : '') +
         `\nWhat is on the map:\n${indent(explain)}`,
     };
@@ -1019,7 +1111,17 @@ export const expect = baseExpect.extend({
   async toHaveFeatureCount(received: FeatureSetHandle, expected: number, options?: { timeout?: number }) {
     if (!(received instanceof FeatureSetHandle)) throw new Error('toHaveFeatureCount: receiver must be map.features(...)');
     const timeout = options?.timeout ?? this.timeout;
-    const { pass, found, error } = await pollFeatures(received.map, received.query, timeout, this.isNot, (f) => f.length === expected);
+    let found: FeatureSummary[] = [];
+    const settle = new Settle();
+    // A count is a verdict about what is NOT there too (the rest): it needs a settled map in both polarities.
+    const { pass, inconclusive } = await pollVerdict(timeout, this.isNot, async (i, deadline) => {
+      found = [];
+      const s = await settle.wait(received.map, i, deadline, true);
+      const r = await received.map._findChecked(received.query);
+      found = r.found;
+      if (r.missingLayer) return { verdict: undefined, why: r.missingLayer };
+      return s.settled ? { verdict: found.length === expected } : { verdict: undefined, why: notSettled(s.why) };
+    });
     const explain = pass === this.isNot ? await received.map._explain(received.query) : '';
     if (explain) await attach('map state — toHaveFeatureCount', explain);
     if (explain) await received.map._attachFailureScreenshot('map screenshot — toHaveFeatureCount', received.query);
@@ -1030,7 +1132,7 @@ export const expect = baseExpect.extend({
       actual: found.length,
       message: () =>
         `expect(${received}).${this.isNot ? 'not.' : ''}toHaveFeatureCount(${expected})\n\n` +
-        `Expected: ${this.isNot ? 'not ' : ''}${expected}\nReceived: ${found.length}${error ? `  (last error: ${error})` : ''}\n` +
+        `Expected: ${this.isNot ? 'not ' : ''}${expected}\nReceived: ${inconclusive ? `${undecided(inconclusive)}\nLast seen: ${found.length}` : found.length}\n` +
         found.slice(0, 8).map((f) => `  - ${fmtFeature(f)}`).join('\n') +
         `\n\nWhat is on the map:\n${indent(explain)}`,
     };
@@ -1054,24 +1156,26 @@ export const expect = baseExpect.extend({
    */
   async toHaveLayerPixels(received: MapHandle, layer: string, options: { at: LngLat; radiusPx?: number; timeout?: number }) {
     if (!(received instanceof MapHandle)) throw new Error('toHaveLayerPixels: receiver must be a geowright map handle');
-    const deadline = Date.now() + (options.timeout ?? this.timeout);
-    let pass = false;
     let why = 'never checked';
-    for (let i = 0; ; i++) {
-      try {
-        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number } } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24);
-        pass = r.ok && r.diff > 0;
-        why = !r.ok ? r.message : r.diff > 0 ? `pixels differ by ${r.diff} with and without the layer` : `hiding the layer changes nothing within ${options.radiusPx ?? 24}px of (${Math.round(r.surface.x)},${Math.round(r.surface.y)})`;
-        if (pass !== this.isNot) break;
-      } catch (e) {
-        why = (e as Error).message.split('\n')[0];
-      }
+    const settle = new Settle();
+    const { pass, inconclusive } = await pollVerdict(
+      options.timeout ?? this.timeout,
+      this.isNot,
+      async (i, deadline) => {
+        // Absence needs a settled map: a raster whose tiles are still loading contributes nothing YET. A positive
+        // assertion waits for pixels to appear and needs no settling — nor the cost of it on an animated source.
+        const s: { settled: boolean; why?: string } = this.isNot ? await settle.wait(received, i, deadline, true) : { settled: true };
+        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number }; hidden?: boolean } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24);
+        if (!r.ok) return { verdict: undefined, why: (why = r.message) };
+        why = r.hidden ? `layer "${layer}" is hidden (its visibility is "none")` : r.diff > 0 ? `pixels differ by ${r.diff} with and without the layer` : `hiding the layer changes nothing within ${options.radiusPx ?? 24}px of (${Math.round(r.surface.x)},${Math.round(r.surface.y)})`;
+        if (r.diff > 0) return { verdict: true };
+        return s.settled ? { verdict: false } : { verdict: undefined, why: `${notSettled(s.why)}; last probe: ${why}` };
+      },
       // Each probe hides and re-shows the layer, after which MapLibre reloads its source: back off, so that a
       // slow machine gets to finish that before the next probe knocks it over again.
-      const wait = [250, 500, 1000, 2000][Math.min(i, 3)];
-      if (Date.now() + wait >= deadline) break;
-      await new Promise((r) => setTimeout(r, wait));
-    }
+      [250, 500, 1000, 2000],
+    );
+    if (inconclusive) why = undecided(inconclusive);
     if (pass === this.isNot) await received._attachFailureScreenshot('map screenshot — toHaveLayerPixels', undefined, [{ ...(await received.clientPoint(options.at).catch(() => ({ x: 0, y: 0 }))), kind: 'target', label: layer }]);
     return {
       pass,
@@ -1085,41 +1189,36 @@ export const expect = baseExpect.extend({
     const timeout = options?.timeout ?? this.timeout;
     const map = received.map;
     const query: FeatureQuery = { ...received.query, visible: 'any' }; // look at it even if invisible: that is the question
-    const deadline = Date.now() + timeout;
-    let pass = false;
     let why = 'never checked';
-    for (let i = 0; ; i++) {
-      try {
-        await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
-        const found = await map._find(query);
-        // The verdict is assigned ONCE, after every check has run: a probe that throws must not leave the paint
-        // check's "visible" standing (it did until the version matrix ran this against a map without redraw()).
-        pass = false;
-        let ok = found.length === 1 && found[0].visible;
-        why = found.length === 0 ? 'no rendered feature matches' : found.length > 1 ? `strict mode violation: ${found.length} features match` : found[0].visible ? '' : `paint: ${found[0].invisibleBecause}`;
-        if (ok && options?.pixels !== false) {
+    const settle = new Settle();
+    const { pass, inconclusive } = await pollVerdict(
+      timeout,
+      this.isNot,
+      async (i, deadline) => {
+        const s = await settle.wait(map, i, deadline, this.isNot);
+        const r = await map._findChecked(query);
+        const found = r.found;
+        if (r.missingLayer) return { verdict: undefined, why: (why = r.missingLayer) };
+        // Several matches: "is THE feature visible?" has no answer (strictness) — in either polarity.
+        if (found.length > 1) return { verdict: undefined, why: (why = `strict mode violation: ${found.length} features match`) };
+        // Not visible — absent, painted invisibly, or its pixels show nothing: a verdict only on a settled map.
+        const invisible = (reason: string): Poll => ((why = reason), s.settled ? { verdict: false } : { verdict: undefined, why: `${notSettled(s.why)}; last seen: ${reason}` });
+        if (found.length === 0) return invisible('no rendered feature matches');
+        if (!found[0].visible) return invisible(`paint: ${found[0].invisibleBecause}`);
+        if (options?.pixels !== false) {
           const probe = await map._call<{ ok: true; diff?: number; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query));
-          if (!probe.ok) {
-            ok = false;
-            why = `pixels: no clean point to probe — ${probe.message}`;
-          } else if (probe.diff === 0) {
-            ok = false;
-            why = `pixels: hiding layer "${probe.layer}" changes nothing at (${probe.surface.x},${probe.surface.y}) — it paints nothing a user could see there`;
-          } else if (probe.diff === undefined && options?.pixels === true) {
-            ok = false;
-            why = 'pixels: this map cannot be probed (no WebGL context to read from, or no frame was rendered — a hidden tab?); { pixels: true } asked for ground truth';
+          if (!probe.ok) return invisible(`pixels: no clean point to probe — ${probe.message}`);
+          if (probe.diff === 0) return invisible(`pixels: hiding layer "${probe.layer}" changes nothing at (${probe.surface.x},${probe.surface.y}) — it paints nothing a user could see there`);
+          if (probe.diff === undefined && options?.pixels === true) {
+            return { verdict: undefined, why: (why = 'pixels: this map cannot be probed (no WebGL context to read from, or no frame was rendered — a hidden tab?); { pixels: true } asked for ground truth') };
           }
         }
-        pass = ok;
-        if (pass !== this.isNot) break;
-      } catch (e) {
-        pass = false;
-        why = (e as Error).message.split('\n')[0];
-      }
-      const wait = POLL[Math.min(i + 2, POLL.length - 1)];
-      if (Date.now() + wait >= deadline) break;
-      await new Promise((r) => setTimeout(r, wait));
-    }
+        why = '';
+        return { verdict: true };
+      },
+      POLL.slice(2),
+    );
+    if (inconclusive) why = undecided(inconclusive);
     const explain = pass === this.isNot ? await map._explain(query) : '';
     if (explain) await attach('map state — toBeVisibleOnMap', explain);
     if (explain) await map._attachFailureScreenshot('map screenshot — toBeVisibleOnMap', query);
@@ -1132,7 +1231,7 @@ export const expect = baseExpect.extend({
 ` +
         `Expected: ${this.isNot ? 'not visible (absent, or painted invisibly)' : 'exactly one matching feature, visible to a user'}, within ${timeout}ms
 ` +
-        `Received: ${pass ? 'visible' : why}
+        `Received: ${pass && !inconclusive ? 'visible' : why}
 
 What is on the map:
 ${indent(explain)}`,
@@ -1150,39 +1249,34 @@ ${indent(explain)}`,
     const timeout = options?.timeout ?? this.timeout;
     const tolerancePx = options?.tolerancePx ?? 2;
     const map = received.map;
-    const deadline = Date.now() + timeout;
     let verdict: GeometryVerdict = { ok: false, reason: 'never checked' };
-    for (let i = 0; ; i++) {
-      try {
-        await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
-        let exp = expected as GeometryExpectation;
-        if (Array.isArray(expected)) {
-          // Found on a wild app: [[lng, lat], …] here ended as "Invalid LngLat object: (NaN, NaN)" from inside the page.
-          if (expected.some((v) => typeof v?.lng !== 'number' || typeof v?.lat !== 'number')) {
-            throw new GeowrightError('toHaveGeometry: a vertex list must be [{ lng, lat }, …]. For raw coordinates pass a GeoJSON geometry: { type: "Polygon", coordinates: [[[lng, lat], …]] }');
-          }
-          const coords = expected.map((v) => [v.lng, v.lat]);
-          const found = await map._find(received.query);
-          exp = found[0]?.geometryType === 'Polygon' ? { type: 'Polygon', coordinates: [coords] } : { type: 'LineString', coordinates: coords };
+    const { pass, inconclusive } = await pollVerdict(timeout, this.isNot, async (_i, deadline) => {
+      verdict = { ok: false, reason: 'never checked' };
+      await map._call('waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
+      let exp = expected as GeometryExpectation;
+      if (Array.isArray(expected)) {
+        // Found on a wild app: [[lng, lat], …] here ended as "Invalid LngLat object: (NaN, NaN)" from inside the page.
+        if (expected.some((v) => typeof v?.lng !== 'number' || typeof v?.lat !== 'number')) {
+          throw new GeowrightError('toHaveGeometry: a vertex list must be [{ lng, lat }, …]. For raw coordinates pass a GeoJSON geometry: { type: "Polygon", coordinates: [[[lng, lat], …]] }');
         }
-        verdict = await map._call<GeometryVerdict>('compareGeometry', toWire(received.query), exp, tolerancePx);
-        if (verdict.ok !== this.isNot) break;
-      } catch (e) {
-        verdict = { ok: false, reason: (e as Error).message.split('\n')[0] };
+        const coords = expected.map((v) => [v.lng, v.lat]);
+        const found = await map._find(received.query);
+        exp = found[0]?.geometryType === 'Polygon' ? { type: 'Polygon', coordinates: [coords] } : { type: 'LineString', coordinates: coords };
       }
-      const wait = POLL[Math.min(i, POLL.length - 1)];
-      if (Date.now() + wait >= deadline) break;
-      await new Promise((r) => setTimeout(r, wait));
-    }
+      verdict = await map._call<GeometryVerdict>('compareGeometry', toWire(received.query), exp, tolerancePx);
+      // Every comparison that was actually made carries the geometry it was made against; without one, nothing was
+      // compared (no feature matches, or several do) — "not that geometry" cannot be concluded.
+      return verdict.ok || verdict.actual !== undefined ? { verdict: verdict.ok } : { verdict: undefined, why: verdict.reason };
+    });
     return {
-      pass: verdict.ok,
+      pass,
       name: 'toHaveGeometry',
       expected,
       actual: verdict.actual,
       message: () =>
         `expect(${received}).${this.isNot ? 'not.' : ''}toHaveGeometry(…, { tolerancePx: ${tolerancePx} })\n\n` +
         `Expected: ${JSON.stringify(expected)}\n` +
-        `Received: ${verdict.ok ? 'matching geometry' : verdict.reason}\n` +
+        `Received: ${inconclusive ? undecided(inconclusive) : verdict.ok ? 'matching geometry' : verdict.reason}\n` +
         `Geometry on the map (${verdict.from ?? 'n/a'}): ${JSON.stringify(verdict.actual)}`,
     };
   },
@@ -1196,31 +1290,25 @@ ${indent(explain)}`,
     if (!(map instanceof MapHandle)) throw new Error('toHavePopup: receiver must be a MapHandle');
     const timeout = options?.timeout ?? this.timeout;
     const { text, ...loc } = where;
-    const deadline = Date.now() + timeout;
     let matching: Overlay[] = [];
     let all: Overlay[] = [];
-    let pass = false;
-    for (let i = 0; ; i++) {
-      try {
-        const moving = await map._call<boolean>('isMoving');
-        all = await map._overlays('popup', {});
-        matching = (await map._overlays('popup', loc)).filter((p) => text === undefined || (typeof text === 'string' ? p.text.includes(text) : text.test(p.text)));
-        pass = !moving && matching.length > 0;
-        if (pass !== this.isNot) break;
-      } catch {
-        /* map not registered yet: retry */
-      }
-      const wait = POLL[Math.min(i, POLL.length - 1)];
-      if (Date.now() + wait >= deadline) break;
-      await new Promise((r) => setTimeout(r, wait));
-    }
+    const { pass, inconclusive } = await pollVerdict(timeout, this.isNot, async () => {
+      const moving = await map._call<boolean>('isMoving');
+      all = await map._overlays('popup', {});
+      matching = (await map._overlays('popup', loc)).filter((p) => text === undefined || (typeof text === 'string' ? p.text.includes(text) : text.test(p.text)));
+      // Where a popup is anchored is only known once the camera stops — in either polarity: `.not` used to
+      // pass on a moving map with the popup open.
+      if (moving) return { verdict: undefined, why: 'the map was moving (whether a popup is anchored there is decided once the camera stops)' };
+      return { verdict: matching.length > 0 };
+    });
     return {
       pass,
       name: 'toHavePopup',
       message: () =>
         `expect(map).${this.isNot ? 'not.' : ''}toHavePopup(${show(where as FeatureQuery)})\n\n` +
         `Expected: ${this.isNot ? 'no' : 'a'} popup ${loc.at ? `anchored within ${loc.tolerancePx ?? 8}px of ${fmt(loc.at)}` : ''}${loc.feature ? ` pointing at ${show(loc.feature)}` : ''}${text !== undefined ? ` with text ${text}` : ''}, within ${timeout}ms\n` +
-        `Received: ${matching.length} matching; popups on the map: ${all.length ? all.map((p) => `"${p.text.slice(0, 60)}" anchored @(${Math.round(p.anchor?.x ?? p.rect.x)},${Math.round(p.anchor?.y ?? p.rect.y)})`).join('; ') : 'none'}`,
+        (inconclusive ? `Received: ${undecided(inconclusive)}\n` : '') +
+        `${inconclusive ? 'Last seen' : 'Received'}: ${matching.length} matching; popups on the map: ${all.length ? all.map((p) => `"${p.text.slice(0, 60)}" anchored @(${Math.round(p.anchor?.x ?? p.rect.x)},${Math.round(p.anchor?.y ?? p.rect.y)})`).join('; ') : 'none'}`,
     };
   },
 

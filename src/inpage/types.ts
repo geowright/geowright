@@ -77,7 +77,7 @@ export interface CanvasAdapter<W = unknown> {
    */
   queryData?(layer: string): Promise<RenderedFeature[] | null>;
   listLayers(): LayerInfo[];
-  /** True when nothing is animating, loading, or pending a repaint. Cheap, synchronous. */
+  /** True while the view is moving (a camera animation or a user gesture in progress). Cheap, synchronous. */
   isMoving(): boolean;
   /** Resolves true once fully settled, false on timeout. Must not hang if already idle. */
   waitForIdle(timeoutMs: number): Promise<boolean>;
@@ -235,10 +235,12 @@ export interface ActionPointOptions {
   ignoreLayers?: string[];
   /**
    * 'allow': act on a target that never stops moving (an animated feature, a camera that keeps panning).
-   * The "map is not moving" and "same pixel two frames in a row" checks are skipped; the pixel is taken from
-   * the freshest rendered frame, and the ONLY guard is the verification at the instant the real event
-   * arrives: if the target is no longer under the pointer by then, the input is swallowed (click, tap) or
-   * discarded (hover) and the action tries again. It can take several attempts; it never acts on the wrong thing.
+   * For `click`, `rightClick`, `dblclick`, `tap` and `hover` only. The "map is not moving" and "same pixel two
+   * frames in a row" checks are skipped; the pixel is taken from the freshest rendered frame, and the ONLY guard
+   * is the verification at the instant the real event arrives: if the target is no longer under the pointer by
+   * then, a click or tap is swallowed before the app sees it, and a hover — which cannot be taken back — is
+   * detected as a miss; either way the action tries again. It can take several attempts; a click or tap never
+   * lands on the wrong thing. `dragTo`, `dragBy` and `lngLat` have no such check and refuse the option.
    */
   moving?: 'allow';
   /** @internal with `moving`: aim this many ms ahead along the target's measured velocity (learnt from misses). */

@@ -41,12 +41,15 @@ test('@internal members are stripped from the emitted typings; the public API is
     execFileSync(process.execPath, [tsc, '-p', join(ROOT, 'tsconfig.build.json'), '--outDir', out], { cwd: ROOT, encoding: 'utf8' });
     const index = readFileSync(join(out, 'playwright/index.d.ts'), 'utf8');
     const types = readFileSync(join(out, 'inpage/types.d.ts'), 'utf8');
-    const stripped = ['_find', '_explain', '_attachFailureScreenshot', '_callBy', '_call', '_retry', '_overlays', '_drag', '_pointAt', '_withActionPoint'];
+    const stripped = ['_find', '_explain', '_attachFailureScreenshot', '_callBy', '_call', '_retry', '_overlays', '_drag', '_pointAt', '_pointNow', '_withActionPoint', '_findChecked', '_disarm'];
     expect(stripped.filter((m) => new RegExp(`^\\s+(async )?${m}\\b`, 'm').test(index))).toEqual([]);
     expect(types).not.toMatch(/\bleadMs\b/);
     expect(index).not.toMatch(/\bleadMs\b/); // nor via a private helper class a stripped member used to reference
     // the public API is untouched
     for (const pub of ['export declare function geowright', 'waitForIdle(', 'snapshot(', 'toBeVisibleOnMap']) expect(index).toContain(pub);
+    // the published typings refuse `moving` on dragTo / dragBy / lngLat (tests/moving.spec.ts has the @ts-expect-error uses)
+    expect(index).toMatch(/type SteadyActionOptions = Omit<ActionOptions, 'moving'> & \{\s*moving\?: never;?\s*\}/);
+    for (const m of ['dragTo', 'dragBy', 'lngLat']) expect(index).toMatch(new RegExp(`${m}\\([^)]*opts\\?: SteadyActionOptions`));
   } finally {
     rmSync(out, { recursive: true, force: true });
   }

@@ -1,7 +1,7 @@
-import { Engine, topElementAt } from './engine';
+import { Engine, topElementAt, type ArmedCheck } from './engine';
 import { MapLibreAdapter } from './maplibre-adapter';
 import { startMirror } from './mirror';
-import type { CanvasAdapter } from './types';
+import type { CanvasAdapter, ClickVerdict, FeatureSummary } from './types';
 
 /**
  * In-page entry. Injected by the Playwright side (never shipped in the app bundle).
@@ -40,29 +40,86 @@ function engine(mapId: string): Engine<any> {
   return e;
 }
 
+/**
+ * Armed click-time / hover-time checks, by token. Module-level, NOT per Engine: an app that re-creates its map (a click
+ * handler that re-mounts the map component, a route change) gets a new Engine on the next call, and a check kept by the
+ * old one used to be unreachable — the click read as "never reached the page" and was sent again, while the old
+ * listeners stayed on the window.
+ */
+const armed = new Map<string, ArmedCheck>();
+function arm(check: ArmedCheck): string {
+  const token = Math.random().toString(36).slice(2);
+  armed.set(token, check);
+  return token;
+}
+
 const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
   idleDiagnosis: (mapId: string) => engine(mapId).adapter.idleDiagnosis?.(),
   find: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).find(q)),
+  /**
+   * For the retrying matchers: `find`, plus whether the query names a layer the style does not have. A feature query on
+   * a missing layer answers "nothing" — a typo (`alert` for `alerts`) would make every negative assertion pass.
+   */
+  findChecked: async (mapId: string, q: any): Promise<{ found: FeatureSummary[]; missingLayer?: string }> => {
+    const e = engine(mapId);
+    await e.learnIdentity(q);
+    const found = e.find(q);
+    const named: string[] = q.layer === undefined ? [] : Array.isArray(q.layer) ? q.layer : [q.layer];
+    if (!named.length) return { found };
+    const ids = e.adapter.listLayers().map((l) => l.id);
+    const missing = named.filter((id) => !ids.includes(id));
+    if (!missing.length) return { found };
+    const list = ids.length > 40 ? `${ids.slice(0, 40).join(', ')}, … (${ids.length - 40} more)` : ids.join(', ') || '(none: is the style loaded?)';
+    return { found, missingLayer: `${missing.length > 1 ? 'layers' : 'layer'} ${missing.map((id) => `"${id}"`).join(', ')} ${missing.length > 1 ? 'do' : 'does'} not exist. Layers: ${list}` };
+  },
+  /**
+   * A bounded wait for idle that says whether a verdict may be taken now: `idle`, or `never` — the map was diagnosed as
+   * one that never becomes idle (an animated source, a source re-set in a loop, continuous repainting), where waiting
+   * longer cannot help. Anything else (loading, a moving camera, a slow page) is not settled.
+   */
+  settle: async (mapId: string, timeoutMs: number): Promise<{ idle: boolean; never: boolean; why?: string }> => {
+    const a = engine(mapId).adapter;
+    if (await a.waitForIdle(timeoutMs)) return { idle: true, never: false };
+    return { idle: false, never: a.neverIdle?.() ?? false, why: a.idleDiagnosis?.() };
+  },
   actionPoint: async (mapId: string, q: any, opts: any) => (await engine(mapId).learnIdentity(q), engine(mapId).actionPoint(q, opts)),
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
   overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
   geometry: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).geometry(q)),
   compareGeometry: async (mapId: string, q: any, expected: any, tolerancePx: number) => (await engine(mapId).learnIdentity(q), engine(mapId).compareGeometry(q, expected, tolerancePx)),
   pixelProbe: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).pixelProbe(q)),
-  /** Pixel-only layers (raster, image, canvas, video, heatmap, hillshade): how much do the pixels at a location change when the layer is not drawn? */
+  /**
+   * Pixel-only layers (raster, image, canvas, video, heatmap, hillshade): how much do the pixels at a location change when
+   * the layer is not drawn? `ok: false` = no verdict could be reached (the matchers: inconclusive, ); a hidden layer
+   * is a verdict — 0.
+   */
   layerPixels: async (mapId: string, layer: string, world: any, radiusPx = 24) => {
     const a = engine(mapId).adapter;
-    if (!a.listLayers().some((l) => l.id === layer)) return { ok: false as const, message: `layer "${layer}" does not exist. Layers: ${a.listLayers().map((l) => l.id).join(', ')}` };
-    const p = a.project(world);
+    const info = a.listLayers().find((l) => l.id === layer);
+    if (!info) return { ok: false as const, message: `layer "${layer}" does not exist. Layers: ${a.listLayers().map((l) => l.id).join(', ')}` };
     const el = a.surface();
+    if (el.isConnected === false || el.clientWidth < 1 || el.clientHeight < 1) return { ok: false as const, message: el.isConnected === false ? 'map canvas is detached from the document; the map was removed or its container was detached' : `map canvas is ${el.clientWidth}x${el.clientHeight}` };
+    const p = a.project(world);
     if (p.x < 0 || p.y < 0 || p.x > el.clientWidth || p.y > el.clientHeight) return { ok: false as const, message: 'that location is outside the viewport' };
+    if (!info.visible) return { ok: true as const, diff: 0, surface: p, hidden: true };
     const diff = await a.pixelContribution?.(layer, p, radiusPx); // an AREA: imagery is often transparent at any one pixel
-    return diff === undefined ? { ok: false as const, message: `layer "${layer}" is hidden (visibility: none), or this map cannot be probed` } : { ok: true as const, diff, surface: p };
+    return diff === undefined ? { ok: false as const, message: `this map cannot be probed (no WebGL context to read from, or no frame was rendered — a hidden tab?)` } : { ok: true as const, diff, surface: p };
   },
-  armClick: (mapId: string, q: any, opts: any) => engine(mapId).armClick(q, opts),
-  armHover: (mapId: string, q: any, opts: any) => engine(mapId).armHover(q, opts),
-  disarmClick: (mapId: string, token: string) => engine(mapId).disarmClick(token),
+  armClick: (mapId: string, q: any, opts: any) => arm(engine(mapId).armClick(q, opts)),
+  armHover: (mapId: string, q: any, opts: any) => arm(engine(mapId).armHover(q, opts)),
+  /**
+   * Removes the check's listeners and returns what it saw — whichever Engine armed it (the map may have been re-created
+   * since: the click this check let through can be what re-created it). `null`: no such check in this page. The page was
+   * replaced (a navigation), so the input left and was delivered; the caller must not send it again.
+   */
+  disarmClick: (_mapId: string, token: string): ClickVerdict | null => {
+    const a = armed.get(token);
+    if (!a) return null;
+    armed.delete(token);
+    a.dispose();
+    return a.verdict;
+  },
   entities: (mapId: string, opts?: any) => engine(mapId).entities(opts),
   /** Agent sessions only: mirror features into the accessibility tree as real, clickable buttons. */
   hasMirror: (mapId: string) => !!(window as any).__geowright_mirrors?.[mapId],

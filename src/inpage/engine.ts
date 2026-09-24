@@ -18,6 +18,12 @@ import type {
 } from './types';
 import type { InternalCanvasAdapter, StyleBranch, StyleCause } from './types-internal';
 
+/** A click-time (or hover-time) check listening in the page: its verdict so far, and how to remove its listeners. */
+export interface ArmedCheck {
+  verdict: ClickVerdict;
+  dispose: () => void;
+}
+
 /** Library-agnostic logic. Knows nothing about MapLibre; only the adapter seam. */
 export class Engine<W = unknown> {
   constructor(readonly adapter: InternalCanvasAdapter<W>) {}
@@ -113,9 +119,9 @@ export class Engine<W = unknown> {
   private single = new Set<string>();
 
   async learnIdentity(q: FeatureQuery): Promise<void> {
-    // A registered map may have been removed while Playwright was waiting. MapLibre's
-    // feature query then throws inside getProjection instead of returning no features.
-    if (this.adapter.surface().isConnected === false) return;
+    // A registered map may have been removed (or hidden to 0×0) while Playwright was waiting: nothing to learn from it.
+    // Not an error HERE — the query that follows reports it (group() refuses such a surface, actionPoint explains it).
+    if (this.surfaceProblem()) return;
     if (!this.adapter.queryData) return;
     const at = q.at ? this.adapter.project(q.at as W) : undefined;
     const byKey = new Map<string, RenderedFeature[]>();
@@ -177,8 +183,22 @@ export class Engine<W = unknown> {
     return this.entityKey(h) === this.entityKey(pieces[0]) && (h.id !== undefined || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
   }
 
-  /** Rendered features matching the query, grouped into logical features (pieces merged). */
+  /**
+   * Why the surface cannot be looked at, if it cannot: removed / detached, or 0×0. MapLibre answers a feature query on
+   * a removed map with NOTHING (remove() deletes the style) rather than an error, so without this a removed map read
+   * as an empty one and every negative assertion passed on it. A 0×0 surface answers from its last frame.
+   */
+  private surfaceProblem(): string | undefined {
+    if (this.adapter.surface().isConnected === false) return 'map canvas is detached from the document; the map was removed or its container was detached';
+    const size = this.surfaceSize();
+    if (size.w < 1 || size.h < 1) return `map canvas is ${size.w}x${size.h}; show or size the map container and call map.resize() before acting`;
+    return undefined;
+  }
+
+  /** Rendered features matching the query, grouped into logical features (pieces merged). Throws when the surface cannot be looked at. */
   private group(q: FeatureQuery): Map<string, RenderedFeature[]> {
+    const problem = this.surfaceProblem();
+    if (problem) throw new Error(`geowright: ${problem}`);
     const at = q.at ? this.adapter.project(q.at as W) : undefined;
     const groups = new Map<string, RenderedFeature[]>();
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
@@ -328,14 +348,10 @@ export class Engine<W = unknown> {
   }
 
   private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions): ActionPointResult {
-    if (this.adapter.surface().isConnected === false) {
-      return fail('offscreen', 'map canvas is detached from the document; the map was removed or its container was detached');
-    }
-    this.scrollIntoView();
+    if (this.adapter.surface().isConnected !== false) this.scrollIntoView();
+    const problem = this.surfaceProblem();
+    if (problem) return fail('offscreen', problem);
     const size = this.surfaceSize();
-    if (size.w < 1 || size.h < 1) {
-      return fail('offscreen', `map canvas is ${size.w}x${size.h}; show or size the map container and call map.resize() before acting`);
-    }
     const groups = [...this.group(q).values()];
     if (groups.length === 0) {
       // Say WHY when the only match is painted invisibly — "not found" would send people hunting.
@@ -602,16 +618,15 @@ export class Engine<W = unknown> {
 
   /* ---------------- click-time verification ---------------- */
 
-  private armed = new Map<string, { verdict: ClickVerdict; dispose: () => void }>();
-
   /**
    * Closes the race between "point computed" and "real click arrives": the app may have moved the
    * map or drawn something on top in between. Same idea as Playwright's hit-target interception:
    * a capture-phase listener re-runs the hit test at the exact pixel of the real pointerdown, and if
    * the target is no longer what is there, the whole click is swallowed so the caller can retry.
+   * The caller keeps the returned check (index.ts: a registry that outlives this Engine — the app may
+   * re-create its map in the very click handler this check lets through) and must dispose of it.
    */
-  armClick(q: FeatureQuery, opts: ActionPointOptions = {}): string {
-    const token = Math.random().toString(36).slice(2);
+  armClick(q: FeatureQuery, opts: ActionPointOptions = {}): ArmedCheck {
     const verdict: ClickVerdict = { fired: false, ok: false };
     const ignore = new Set(opts.ignoreLayers ?? []);
     let blocking = false;
@@ -652,14 +667,13 @@ export class Engine<W = unknown> {
     const rest = ['pointerup', 'mouseup', 'click', 'dblclick', 'contextmenu', 'auxclick'];
     downs.forEach((t) => window.addEventListener(t, onDown, true));
     rest.forEach((t) => window.addEventListener(t, onRest, true));
-    this.armed.set(token, {
+    return {
       verdict,
       dispose: () => {
         downs.forEach((t) => window.removeEventListener(t, onDown, true));
         rest.forEach((t) => window.removeEventListener(t, onRest, true));
       },
-    });
-    return token;
+    };
   }
 
   /**
@@ -667,8 +681,7 @@ export class Engine<W = unknown> {
    * mousemove? Nothing is swallowed — a pointer that arrives late has merely hovered whatever is there, as a
    * person's would — but the caller learns that it missed and tries again.
    */
-  armHover(q: FeatureQuery, opts: ActionPointOptions = {}): string {
-    const token = Math.random().toString(36).slice(2);
+  armHover(q: FeatureQuery, opts: ActionPointOptions = {}): ArmedCheck {
     const verdict: ClickVerdict = { fired: false, ok: false };
     const ignore = new Set(opts.ignoreLayers ?? []);
     const onMove = (e: Event) => {
@@ -692,22 +705,13 @@ export class Engine<W = unknown> {
       else (verdict.ok = true), (verdict.reason = undefined);
     };
     window.addEventListener('mousemove', onMove, true);
-    this.armed.set(token, { verdict, dispose: () => window.removeEventListener('mousemove', onMove, true) });
-    return token;
+    return { verdict, dispose: () => window.removeEventListener('mousemove', onMove, true) };
   }
 
   /** Where the (moving) target is drawn right now, relative to where the pointer arrived. */
   private offsetFrom(pointer: Pt, q: FeatureQuery, opts: ActionPointOptions): Pt | undefined {
     const now = this.actionPointOnce(q, { ...opts, force: true });
     return now.ok ? { x: now.surface.x - pointer.x, y: now.surface.y - pointer.y } : undefined;
-  }
-
-  disarmClick(token: string): ClickVerdict {
-    const a = this.armed.get(token);
-    if (!a) return { fired: false, ok: false, reason: 'unknown token' };
-    a.dispose();
-    this.armed.delete(token);
-    return a.verdict;
   }
 
   /* ---------------- diagnostics ---------------- */

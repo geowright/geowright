@@ -66,4 +66,11 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    * zoom outside its zoom range). Empty: the style draws it.
    */
   explainLayerHidden?(layer: string): StyleCause[];
+  /**
+   * Optional, after a `waitForIdle()` that timed out: true when the surface was seen to be one that NEVER becomes idle
+   * by design (an animated source, data re-set in a loop, continuous repainting) — as opposed to one still loading or
+   * moving. A negative assertion may then take its verdict without idle; otherwise it waits for idle.
+   * Must never answer true for a surface that is merely slow.
+   */
+  neverIdle?(): boolean;
 }

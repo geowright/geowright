@@ -50,6 +50,27 @@ test.describe("moving: 'allow'", () => {
     });
   }
 
+  // a drag's press and lngLat()'s answer have no check at the instant the real event arrives, so on a moving target
+  // they would act on a predicted, never-verified pixel. The option is refused — in the typings and at runtime.
+  test("dragTo, dragBy and lngLat refuse { moving: 'allow' } and send no input", async ({ page }) => {
+    const map = geowright(page);
+    const patrol = map.feature({ layer: 'patrols', id: 1 });
+    const before = (await map.viewState()).center;
+    const refused = [
+      // @ts-expect-error — `moving` is not an option of dragTo
+      await patrol.dragTo({ lng: 34.81, lat: 32.09 }, { moving: 'allow', timeout: 2000 }).then(() => null, (e: Error) => e),
+      // @ts-expect-error — nor of dragBy
+      await patrol.dragBy({ dLng: 0.01, dLat: 0 }, { moving: 'allow', timeout: 2000 }).then(() => null, (e: Error) => e),
+      // @ts-expect-error — nor of lngLat
+      await patrol.lngLat({ moving: 'allow', timeout: 2000 }).then(() => null, (e: Error) => e),
+    ];
+    for (const [i, name] of ['dragTo', 'dragBy', 'lngLat'].entries()) {
+      expect(refused[i]?.message, name).toContain(`${name}() does not take { moving: 'allow' }`);
+    }
+    expect((await map.viewState()).center, 'no drag reached the map').toEqual(before);
+    expect(await page.getByTestId('click-count').textContent()).toBe('0');
+  });
+
   test('a stationary feature next to the route is unaffected by the option', async ({ page }) => {
     const map = geowright(page);
     await map.feature({ layer: 'parked', id: 9 }).click({ moving: 'allow' });

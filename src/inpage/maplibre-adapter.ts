@@ -313,9 +313,18 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
    * an animated image/canvas/video source): it will never be idle, by design.
    */
   idleDiagnosis(): string | undefined {
+    return this.diagnose()?.why;
+  }
+
+  /** The last waitForIdle() timed out on a map that never becomes idle by design — not one that is loading, moving or slow. */
+  neverIdle(): boolean {
+    return this.diagnose()?.never ?? false;
+  }
+
+  private diagnose(): { why?: string; never: boolean } | undefined {
     const w = this.lastWait;
     if (!w) return undefined;
-    if (w.moving) return 'the camera is moving (an animation or a gesture in progress)';
+    if (w.moving) return { why: 'the camera is moving (an animation or a gesture in progress)', never: false };
     const never = 'Such a map NEVER becomes idle: do not wait for idle here; retrying assertions and actions work without it';
     // Deterministic, whatever the frame rate: an animated canvas source or a video source repaints the map for ever.
     const sources = this.map.getStyle()?.sources ?? {};
@@ -323,24 +332,24 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       const spec = sources[id] as { type?: string; animate?: boolean };
       return spec.type === 'video' || (spec.type === 'canvas' && spec.animate !== false);
     });
-    if (animated.length) return `source(s) ${animated.join(', ')}: an animated canvas / video source repaints the map on every frame. ${never}`;
+    if (animated.length) return { why: `source(s) ${animated.join(', ')}: an animated canvas / video source repaints the map on every frame. ${never}`, never: true };
     // OBSERVED, not inferred: the data of a source was replaced again and again while we waited. (The first version
     // inferred it from "a GeoJSON source is pending and frames are rendered" and blamed a setData loop on an app that
     // merely loaded slowly on an overloaded machine. A wrong diagnosis is worse than none.)
-    if (w.replaced.length) return `the app keeps replacing the data of source(s) ${w.replaced.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`;
+    if (w.replaced.length) return { why: `the app keeps replacing the data of source(s) ${w.replaced.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`, never: true };
     // Before "tiles are still loading": inline GeoJSON needs no network, so a dead worker is the stronger explanation.
     const dead = deadWorkerDiagnosis(w.pending, w.workerSourcesLoaded);
-    if (dead) return dead;
+    if (dead) return { why: dead, never: false };
     const tiled = w.pending.filter((p) => ['vector', 'raster', 'raster-dem'].includes(p.type));
-    if (tiled.length) return `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`;
-    if (w.pending.length) return `source(s) ${w.pending.map((p) => p.id).join(', ')} have not finished loading`;
+    if (tiled.length) return { why: `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`, never: false };
+    if (w.pending.length) return { why: `source(s) ${w.pending.map((p) => p.id).join(', ')} have not finished loading`, never: false };
     // (loaded() stays false for a map with an animated source, so it cannot be a condition here)
     // Few frames prove nothing: a page that is merely SLOW (software GL on a starved CI machine: 3 frames in 2.5s) looks
     // the same as one that animates. Found on Linux in a container, where this line accused five static apps of animating.
     const fps = w.frames / (w.ms / 1000);
-    if (w.frames >= 10 && fps >= 4) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image). ${never}`;
-    if (w.frames >= 2) return `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms (${fps.toFixed(1)} per second) with the camera at rest and no source loading. Either the page is slow and still settling (raise the timeout: test.slow()), or the app repaints the map continuously — in which case it never becomes idle and waiting for idle is the mistake`;
-    return w.loaded ? undefined : 'the style or a source has not finished loading';
+    if (w.frames >= 10 && fps >= 4) return { why: `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms with the camera at rest and no source loading: the app repaints it continuously (a paint property in a requestAnimationFrame loop, an animated image). ${never}`, never: true };
+    if (w.frames >= 2) return { why: `the map rendered ${w.frames} frames in ${Math.round(w.ms)}ms (${fps.toFixed(1)} per second) with the camera at rest and no source loading. Either the page is slow and still settling (raise the timeout: test.slow()), or the app repaints the map continuously — in which case it never becomes idle and waiting for idle is the mistake`, never: false };
+    return { why: w.loaded ? undefined : 'the style or a source has not finished loading', never: false };
   }
 
   visibility(f: RenderedFeature): Visibility {

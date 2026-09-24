@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { geowright, type MapHandle } from '../src/playwright';
 
 /**
  * ASSERT gap: an action in the regular DOM UI must be verifiable ON THE MAP.
@@ -129,4 +130,82 @@ test.describe('assert gap', () => {
     await expect(map).toHaveView({ center: { lng: 35.2, lat: 32.08 }, zoom: 12 });
     await expect(map).not.toHaveView({ center: { lng: 34.78, lat: 32.08 } });
   });
+});
+
+const rejects = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
+
+/**
+ * A poll is true, false or INCONCLUSIVE: the map could not be looked at, a named layer does not exist, the query is
+ * ambiguous where one feature is required. Only a conclusive result ends a retrying matcher early; an inconclusive one at
+ * the deadline fails BOTH polarities and says why — exactly toHaveView's rule for a map that never came to rest.
+ */
+test.describe('a verdict needs a map it could look at', () => {
+  test('.not on an unregistered mapId fails instead of passing', async ({ map, page }) => {
+    void map;
+    const e = await rejects(expect(geowright(page, { mapId: 'nope' })).not.toHaveFeature({ layer: 'alerts' }, { timeout: 800 }));
+    expect(e, 'the .not assertion passed although the map could never be queried').not.toBeNull();
+    expect(e?.message).toContain('no map registered as "nope"');
+  });
+
+  test('.not on a mistyped layer fails, and says the layer does not exist', async ({ map }) => {
+    const e = await rejects(expect(map).not.toHaveFeature({ layer: 'alert' }, { timeout: 800 }));
+    expect(e, '.not.toHaveFeature passed for a layer that does not exist').not.toBeNull();
+    expect(e?.message).toContain('layer "alert" does not exist. Layers:');
+    const count = await rejects(expect(map.features({ layer: 'alert' })).toHaveFeatureCount(0, { timeout: 800 }));
+    expect(count, 'toHaveFeatureCount(0) passed for a layer that does not exist').not.toBeNull();
+    // a positive assertion fails for the same reason, and names it
+    const pos = await rejects(expect(map).toHaveFeature({ layer: 'alert' }, { timeout: 800 }));
+    expect(pos?.message).toContain('layer "alert" does not exist');
+  });
+
+  test('.not.toHaveGeometry on a feature that is not on the map fails', async ({ map }) => {
+    const e = await rejects(expect(map.feature({ layer: 'alerts', id: 999 })).not.toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: 800 }));
+    expect(e, '.not.toHaveGeometry passed for a feature that is not on the map').not.toBeNull();
+    expect(e?.message).toContain('no rendered feature matches');
+    // ...while a real difference is a verdict
+    await expect(map.feature({ layer: 'alerts', id: 1 })).not.toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: 800 });
+  });
+});
+
+/**
+ * a `.not` or count verdict is taken only from a map that has settled (idle, or diagnosed as never idle) — a
+ * half-loaded map is not evidence of absence. The data here arrives late from a slow server (a delayed route answer).
+ */
+test.describe('a negative verdict waits for the map to settle', () => {
+  const late = async (page: import('@playwright/test').Page, id: string, delayMs: number) => {
+    await page.route(`**/${id}.geojson`, async (r) => {
+      await new Promise((res) => setTimeout(res, delayMs)); // the server is slow; the test does not sleep
+      await r.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: { n: 1 }, geometry: { type: 'Point', coordinates: [34.78, 32.08] } }] }) });
+    });
+    await page.evaluate((id) => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource(id, { type: 'geojson', data: `${location.origin}/${id}.geojson` });
+      m.addLayer({ id, type: 'circle', source: id, paint: { 'circle-radius': 10, 'circle-color': '#f0f' } });
+    }, id);
+  };
+
+  const matchers = {
+    '.not.toHaveFeature': (map: MapHandle, layer: string, timeout: number) => expect(map).not.toHaveFeature({ layer }, { timeout }),
+    'toHaveFeatureCount(0)': (map: MapHandle, layer: string, timeout: number) => expect(map.features({ layer })).toHaveFeatureCount(0, { timeout }),
+    '.not.toBeVisibleOnMap': (map: MapHandle, layer: string, timeout: number) => expect(map.feature({ layer })).not.toBeVisibleOnMap({ timeout }),
+  };
+
+  for (const [name, assertion] of Object.entries(matchers)) {
+    test(`${name} does not pass while a source is still loading (2.5 s)`, async ({ map, page }) => {
+      await late(page, 'late', 2500);
+      const t0 = Date.now();
+      const e = await rejects(assertion(map, 'late', 4000));
+      const took = Date.now() - t0;
+      await expect(map).toHaveFeature({ layer: 'late' }); // the feature does arrive
+      expect(e, `${name} passed after ${took} ms, while the map was still loading the source`).not.toBeNull();
+    });
+  }
+
+  for (const name of ['.not.toHaveFeature', '.not.toBeVisibleOnMap'] as const) {
+    test(`${name} fails for a feature that appears 300 ms after the call starts`, async ({ map, page }) => {
+      await late(page, 'soon', 300);
+      const e = await rejects(matchers[name](map, 'soon', 2000));
+      expect(e, `${name} passed although the feature appeared 300 ms later`).not.toBeNull();
+    });
+  }
 });

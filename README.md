@@ -129,8 +129,9 @@ hidden behind a mountain is an error, never a click on whatever is drawn at that
 is id + properties, and id-less look-alikes are told apart by where they are drawn.
 
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map), `{ autoPan: true }`, `{ timeout }`, and
-`{ moving: 'allow' }` for a target that never stops moving (the pointer leads it; a press that arrives late is swallowed
-before the app sees it — it can time out, it never clicks the wrong thing). The reasoning and the measurements:
+`{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
+arrives late is swallowed before the app sees it — it can time out, it never clicks the wrong thing; `dragTo`, `dragBy`
+and `lngLat` have no such check and refuse the option). The reasoning and the measurements:
 [DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
 
 ### When something fails, it says what WAS on the map
@@ -233,13 +234,14 @@ await map.draw.cancel();                                                  // ...
 
 | FeatureHandle (`map.feature(q)`) | |
 |---|---|
-| `click` `rightClick` `dblclick` `hover` `tap` `(opts?)` | full actionability + click-time verification |
-| `dragTo(lngLat, opts?)` · `dragBy({ dLng, dLat }, opts?)` | drag a handle to a place · move a whole shape |
-| `info()` · `lngLat(opts?)` · `geometry()` | resolved `FeatureSummary` (`layer id properties geometryType pixel client lngLat visible invisibleBecause state`; its pixel is the best GEOMETRIC candidate, unverified) · the VERIFIED action point as lng/lat (waits and fails like `click()`) · full geometry from the source |
+| `click` `rightClick` `dblclick` `tap` `(opts?)` | full actionability + click-time verification |
+| `hover(opts?)` | full actionability (verified on arrival only with `moving: 'allow'`) |
+| `dragTo(lngLat, opts?)` · `dragBy({ dLng, dLat }, opts?)` | drag a handle to a place · move a whole shape (no `moving` option) |
+| `info()` · `lngLat(opts?)` · `geometry()` | resolved `FeatureSummary` (`layer id properties geometryType pixel client lngLat visible invisibleBecause state`; its pixel is the best GEOMETRIC candidate, unverified) · the VERIFIED action point as lng/lat (waits and fails like `click()`; no `moving` option) · full geometry from the source |
 
-`FeatureSetHandle` (`map.features(q)`): `all()`, `count()` — snapshots, no waiting.
+`FeatureSetHandle` (`map.features(q)`): `all()`, `count()` — snapshots, no waiting (a removed or 0×0 map is an error, not 0).
 
-Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visible` (default true; `false`; `'any'`). Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `moving: 'allow'` (targets that never stop moving) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
+Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visible` (default true; `false`; `'any'`). Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `moving: 'allow'` (clicks, `tap`, `hover` on targets that never stop moving) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
 
 | Matcher (all retry; `.not` supported) | |
 |---|---|
@@ -250,6 +252,11 @@ Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visib
 | `expect(map.feature(q)).toHaveGeometry(expected, { tolerancePx? = 2 })` | GeoJSON geometry · vertex list · `{ circle: { center, edge } }` |
 | `expect(map).toHavePopup({ at?, feature?, text?, tolerancePx? })` | a popup is open and anchored there |
 | `expect(map).toHaveView({ center?, zoom?, bearing?, pitch? }, { zoomTolerance?, degreesTolerance? })` | camera, with the map at rest |
+
+A matcher that cannot reach a verdict fails **whichever way it is written**, and says why: the map is not registered or
+was removed, a named layer does not exist, several features match where one is required, the map has not settled (a
+`.not` or a count needs it idle, or seen to be never idle), the camera is moving (`toHavePopup`). "Could not look" never
+passes as "absent". To assert that a layer was removed, check `map.layers()`.
 
 Failures throw `GeowrightError` (actions) or a normal expect failure; both carry "what is on the map" and attach text + an annotated screenshot.
 

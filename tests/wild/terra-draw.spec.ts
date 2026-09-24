@@ -75,7 +75,9 @@ test.describe('wild: draw-geometries-with-terra-draw', () => {
     await expect(page.locator('.maplibregl-terradraw-delete-button')).toBeEnabled();
 
     await page.locator('.maplibregl-terradraw-delete-button').click();
-    await expect(map).not.toHaveFeature({ layer: 'td-polygon' });
+    // Delete stops terra-draw, and it REMOVES its layers. A query on a layer that does not exist has no verdict (a typo
+    // must not pass a `.not`, ), so the removal is asserted on the layer list.
+    await expect.poll(async () => (await map.layers()).map((l) => l.id)).not.toContain('td-polygon');
     await expect(page.locator('.maplibregl-terradraw-delete-button')).toBeDisabled();
   });
 });

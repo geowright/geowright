@@ -131,4 +131,18 @@ test.describe('visibility', () => {
     expect(snap).not.toMatch(/#501 Point .*NOT-VISIBLE/);
     expect(snap).toMatch(/#601 Polygon .*NOT-VISIBLE\(fill-opacity evaluates to 0\)/);
   });
+
+  // "could not decide" is not "not visible"
+  test('.not.toBeVisibleOnMap on a query matching several VISIBLE features fails (strict mode)', async ({ map }) => {
+    await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3);
+    const e = await expect(map.feature({ layer: 'alerts' })).not.toBeVisibleOnMap({ timeout: 800 }).then(() => null, (e: Error) => e);
+    expect(e, '.not.toBeVisibleOnMap passed while 3 alerts are visible').not.toBeNull();
+    expect(e?.message).toContain('strict mode violation: 3 features match');
+  });
+
+  test('.not.toHaveLayerPixels on a layer that does not exist fails, and says so', async ({ map }) => {
+    const e = await expect(map).not.toHaveLayerPixels('no-such-layer', { at: { lng: 34.78, lat: 32.08 }, timeout: 800 }).then(() => null, (e: Error) => e);
+    expect(e, '.not.toHaveLayerPixels passed for a layer that does not exist').not.toBeNull();
+    expect(e?.message).toContain('layer "no-such-layer" does not exist');
+  });
 });

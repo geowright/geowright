@@ -16,6 +16,17 @@ test.describe('DOM markers and popups', () => {
     expect(err?.message).toMatch(/popups on the map: "Gas leakSeverity: high" anchored @\(\d+,\d+\)/);
   });
 
+  // while the camera moves, whether a popup is anchored on its feature cannot be decided — in either polarity
+  test('.not.toHavePopup does not pass while the map is moving and the popup is open', async ({ map, page }) => {
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 1 } });
+    await page.evaluate(() => (window as any).__geowright_maps.main.easeTo({ bearing: 60, duration: 3000 })); // the app never closes the popup
+    const e = await expect(map).not.toHavePopup({}, { timeout: 1000 }).then(() => null, (e: Error) => e);
+    await expect(page.getByTestId('popup')).toBeVisible(); // it really is still open
+    expect(e, '.not.toHavePopup passed while the popup was open (map moving)').not.toBeNull();
+    expect(e?.message).toContain('the map was moving');
+  });
+
   test('marker by location is a normal Locator: click it, read it, open its popup', async ({ map, page }) => {
     await page.getByTestId('toggle-markers').check();
     const hq = await map.marker({ at: { lng: 34.84, lat: 32.12 } });

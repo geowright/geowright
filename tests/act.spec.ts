@@ -138,6 +138,28 @@ test.describe('act gap', () => {
     await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1'); // right target, after retry
   });
 
+  // the click-time check is armed in the page; an app that re-creates its map in the click handler used to make
+  // the check's answer vanish ("the click never reached the page"), and the click was sent again and again.
+  for (const moving of [undefined, 'allow'] as const) {
+    test(`a click whose handler re-registers the map reaches the app once (moving: ${moving})`, async ({ map, page }) => {
+      await page.evaluate(() => {
+        const w = window as any;
+        const m = w.__geowright_maps.main;
+        w.__alertClicks = 0;
+        m.on('click', 'alerts', () => {
+          w.__alertClicks++;
+          w.__geowright_maps.main = new Proxy(m, {}); // the app "re-creates" its map under the same id (a new instance identity)
+        });
+      });
+      await map.feature({ layer: 'alerts', id: 1 }).click({ moving, timeout: 4000 });
+      expect(await page.evaluate(() => (window as any).__alertClicks), 'number of real clicks the app received').toBe(1);
+      // nothing of the first map's check lingers: the next click is delivered, once, to the right feature
+      await map.feature({ layer: 'alerts', id: 2 }).click({ moving, timeout: 4000 });
+      expect(await page.evaluate(() => (window as any).__alertClicks)).toBe(2);
+      await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '2');
+    });
+  }
+
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {
     const err = await map.clickAt({ lng: 36, lat: 32 }, { timeout: 500 }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('outside the viewport');

@@ -13,7 +13,12 @@ nothing, and nothing ships with it. In TypeScript, `/// <reference types="geowri
 as written (it adds types only).
 - **Assert** with retrying matchers (`.not` supported): `toHaveFeature`, `toHaveFeatureCount`, `toBeVisibleOnMap`,
   `toHaveLayerPixels` (raster, image, canvas, video, heatmap, hillshade), `toHaveGeometry` (the full geometry from the
-  source, not the tile-clipped one), `toHavePopup`, `toHaveView`.
+  source, not the tile-clipped one), `toHavePopup`, `toHaveView`. A verdict of absence (a `.not`, a count, "not
+  visible") is taken only from a map that has settled: idle, or seen to be one that never becomes idle. A matcher that
+  cannot reach a verdict fails whichever way it is written, and says why: the map is not registered or was removed, a
+  named layer does not exist (to assert that a layer was removed, check `map.layers()`), several features match where
+  one is required, the camera is moving (`toHavePopup`). A removed or 0×0 map is an error for `features(q).count()`
+  and `all()`, never an empty map.
 - **Query** by `layer`, `layerType`, `source` (for layer ids a wrapper generates), `id`, `where` (equality, RegExp,
   `eq ne gt gte lt lte in matches exists`), `at` a location. By default, queries match only what a user can SEE. The
   style's paint properties are evaluated for each feature: opacity 0, a transparent colour and zero size do not count
@@ -26,9 +31,13 @@ as written (it adds types only).
   (`polygon`, `line`, `rectangle`, `circle`, `cancel`) take explicit finish gestures and are tested with terra-draw and
   mapbox-gl-draw.
 - **Actionability**: before any input, the target must be the only match, painted, still, under the pointer, the
-  topmost visible hit, and not covered by a DOM element. When the press arrives the hit test runs again, and a late
-  press is swallowed and retried. Options: `force`, `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for
-  a feature that never stops moving (the pointer leads it; it can time out, but it never clicks the wrong thing).
+  topmost visible hit, and not covered by a DOM element. For `click`, `dblclick`, `rightClick` and `tap`, the hit test
+  runs again when the press arrives, and a late press is swallowed and retried. A press that reached the app is never
+  sent again: not when the app re-creates its map in the click handler, not when the click navigates. Options: `force`,
+  `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for a feature that never stops moving, on `click`,
+  `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never clicks the wrong
+  thing). `dragTo`, `dragBy` and `lngLat` refuse `moving`, in their types and at run time: they have no check when the
+  input arrives.
   Works on rotated, pitched, globe and terrain maps. A location on the far side of the globe or behind a mountain is
   an error, never a click on something else.
 - **When it fails, it says what WAS on the map**: the features per layer with their properties, the values of the

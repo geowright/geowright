@@ -444,9 +444,22 @@ handler might run, the map is genuinely idle the whole time — there is nothing
 that reason, **retrying assertions are the primary synchronization mechanism**, the same
 `expect.poll`-style retry that ordinary web-first Playwright assertions use; a map-idle wait alone is
 never sufficient on its own for anything that depends on application logic between an action and an
-expected result. Each assertion's retry loop does still wait for a bounded map-idle (roughly half a
-second) before evaluating on every poll, so that a verdict is never based on a half-rendered frame —
-idle is the secondary, supporting mechanism, not the primary one.
+expected result. Each assertion's retry loop does still wait for a bounded map-idle before evaluating on
+every poll — idle is the secondary, supporting mechanism, not the primary one — and a verdict of
+**absence** (a `.not`, a count, "not visible") is taken only from a poll in which the map WAS idle, or was
+diagnosed as one that never becomes idle (below). Presence needs no such care: a feature that is found is
+there. The first version waited for that idle and ignored its answer: with a GeoJSON source whose data
+arrived after 2.5 s, `.not.toHaveFeature` passed after half a second, on the half-loaded map, and the
+feature appeared a moment later. The bounded wait grows (0.5, 1, 2 s) only while an absence verdict is what
+the assertion is waiting for, so that a slow page gets enough frames to be recognised as never idle; on an
+idle map it costs nothing, and a positive assertion waits no longer than before.
+
+A poll that cannot be decided is neither true nor false. The map is not registered or was removed (MapLibre
+answers a feature query on a removed map with nothing at all), a named layer does not exist (a typo), the
+query matches several features where exactly one is required, the map has not settled, the camera is moving
+(`toHavePopup`): such a poll never ends the retry loop, and if the last poll at the deadline was one of them the
+assertion fails in **both** polarities and says why — the rule `toHaveView` already had for a map that never
+came to rest. Before, "could not look" read as "absent", and each of these `.not` assertions passed.
 
 Some real applications intentionally never idle at all — a `requestAnimationFrame` loop that replaces
 `setData` every frame, a streaming line, an always-animating canvas source. An explicit
@@ -456,8 +469,10 @@ whose data the application keeps replacing (counted `sourcedataloading` events: 
 version inferred a `setData` loop from "a GeoJSON source is pending and frames are rendered" and blamed one on an
 application that was merely loading slowly on an overloaded machine; a wrong diagnosis is worse than none), continuous
 repainting with nothing loading, tiles still loading, or a moving camera.
-Assertions are unaffected, since their own idle wait is bounded rather than blocking; only an explicit,
-unconditional wait for idle needs to be opted out for a map like this.
+Assertions are unaffected, since their own idle wait is bounded rather than blocking, and the same diagnosis
+(an animated source, a source re-set in a loop, continuous repainting — never "still loading", "moving" or "slow")
+lets a negative verdict be taken on such a map without idle; only an explicit, unconditional wait for idle needs
+to be opted out for a map like this.
 
 **Timeouts mean what they say.** `waitForIdle()` defaults to two thirds of the test's timeout: the first idle after a
 navigation is a load — style, sources, tiles, first render — and Playwright bounds loads by the test timeout only.
