@@ -88,11 +88,14 @@ test.describe('timeouts', () => {
   // again for its end.
   test('a multi-point action has ONE timeout, shared by its points', async ({ map, page }) => {
     const timeout = 2000;
-    // The camera turns for most of the timeout (the start point waits for it to stop); the end point is off-screen.
+    // The camera turns until the app stops it at half the timeout (the start point waits for that); the end point is
+    // off-screen. One shared deadline fails at ~timeout; a fresh timeout per point would take ~1.5x. The stop comes from
+    // an app timer, not from the animation's own duration: on a starved machine frames come late, a timer much less so.
     await page.evaluate((ms) => {
       const m = (window as any).__geowright_maps.main;
-      m.easeTo({ bearing: 20, duration: ms });
-    }, timeout * 0.8);
+      m.easeTo({ bearing: 90, duration: 60_000 });
+      setTimeout(() => m.stop(), ms);
+    }, timeout * 0.5);
     const started = Date.now();
     const err = await map.dragAt({ lng: 34.78, lat: 32.08 }, { lng: 50, lat: 32.08 }, { timeout }).then(() => null, (e: Error) => e);
     const took = Date.now() - started;
