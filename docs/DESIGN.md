@@ -38,7 +38,9 @@ ties a testing library to implementation details that are free to change on any 
 plausible reason that library stopped being maintained. geowright's stability check is built
 entirely from public surface instead (described below).
 
-All of this sits behind one seam: `CanvasAdapter<W>`, in `src/inpage/types.ts`. The engine that
+All of this sits behind one seam: `CanvasAdapter<W>`, in `src/inpage/types.ts` (additions that are internal until 1.0,
+such as the failure-message explanations, extend it in `src/inpage/types-internal.ts`, outside the published
+typings). The engine that
 does query matching, action-point selection, and diagnostics has **zero imports from MapLibre or
 any other map library** — every library-specific behavior is one method on the adapter interface,
 most of them optional so an adapter can simply not implement what its library cannot do. The
@@ -494,13 +496,13 @@ rest in both the affirmative and the negated form of the check); and the animate
 case described under identity. It also catches flaws in the tests themselves: two wild-example specs
 that could fail on a timing or geometry chance (keyboard zooms pressed faster than the map settled; a
 pixel probe covering only a quarter of an animated canvas) were each reproduced in isolation on a quiet
-machine and fixed before the suite was counted. The complete suite as it stood on 2026-09-23 (312 tests,
-plus 7 that are opt-in and skipped) passed **6,240 of 6,240 at `--repeat-each=20`, zero flakes, zero
-retries**, in 50 minutes — the machine's load was logged once a minute through the run, and a number
+machine and fixed before the suite was counted. The complete suite as it stood on 2026-09-24 (349 tests,
+plus 13 that are opt-in and skipped) passed **6,980 of 6,980 at `--repeat-each=20`, zero flakes, zero
+retries**, in 56 minutes — the machine's load was logged once a minute through the run, and a number
 is only written here once the machine has produced it without other heavy work, or with only more load
 than a quiet machine (which can cause a failure, never a pass). The same commit passed the full suite
 and the compatibility matrix on Linux in the official Playwright container. The earlier suites passed
-the same way: 304 tests 6,080 of 6,080 in about an hour at the end of 2026-09-21, 299 tests 5,980 of
+the same way: 312 tests 6,240 of 6,240 in 50 minutes on 2026-09-23, 304 tests 6,080 of 6,080 in about an hour at the end of 2026-09-21, 299 tests 5,980 of
 5,980 in 50 minutes on a quiet machine the same day, 277 tests 5,540 of 5,540 the day before. The same suite has
 also been run through hosted Linux continuous integration (software rendering, no GPU, few CPU cores),
 which is measurably slower — the base suite alone runs in on the order of 20 minutes there versus about

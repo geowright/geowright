@@ -7,13 +7,14 @@ Stages are in order, not on dates. The maintainer orders the work; an item moves
 [decision record](docs/decisions/) moves it. Each stage has an exit: what has to be true to call it done.
 
 ## Now — 0.x: known in the MapLibre world
-- Docs you can trust: every code example in `README.md` and `docs/RECIPES.md` is run by the test suite.
+- **Done:** docs you can trust: every code example in `README.md` and `docs/RECIPES.md` is run by the test suite
+  (`tests/docs/`; a block that cannot run says why in the Markdown).
 - A long-form guide on geowright.dev: testing canvas maps — why pixel coordinates, screenshot diffs and
   `map.fire()` each fail, and what to do instead.
 - Listed where MapLibre users look for tools (the MapLibre ecosystem lists and docs).
 - "Bring your app": a clear path for users to submit an app that does not work, which becomes a vendored
   wild app and a fix.
-- Failures that explain invisibility: when a feature is painted invisibly, say which style property and
+- **Done:** failures that explain invisibility: when a feature is painted invisibly, say which style property and
   which expression branch made it so, at which zoom.
 
 **Exit:** the guide is published, geowright is listed in the MapLibre ecosystem, and apps from people

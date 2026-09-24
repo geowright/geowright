@@ -32,7 +32,8 @@ They are not repeated here, so there is one copy to keep true.
 ## Map
 | Path | What |
 |---|---|
-| `src/inpage/types.ts` | The adapter seam: what the engine may ask a map library |
+| `src/inpage/types.ts` | The adapter seam: what the engine may ask a map library (published typings) |
+| `src/inpage/types-internal.ts` | Seam additions that are internal until 1.0; never imported by the published typings |
 | `src/inpage/engine.ts` | Queries, identity, visibility, actionability. Imports nothing from any map library |
 | `src/inpage/maplibre-adapter.ts`, `maplibre-paint.ts` | The MapLibre / Mapbox GL v1 adapter; style evaluation via `@maplibre/maplibre-gl-style-spec` |
 | `src/inpage/index.ts`, `agent-entry.ts` | What is injected into the page (`window.__geowright`) |
