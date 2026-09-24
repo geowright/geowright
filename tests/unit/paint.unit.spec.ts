@@ -119,6 +119,34 @@ test.describe('why invisible: property, value, expression branch, zoom', () => {
     );
   });
 
+  test('fill-layer-opacity / line-layer-opacity 0 (MapLibre 6) hides the whole layer, outline included', () => {
+    // MapLibre 6 draw_fill / draw_line return early on a layer opacity of 0, before fill-color, the outline or a pattern.
+    const fill = fakeMap('fill', { 'fill-layer-opacity': 0, 'fill-color': '#f00', 'fill-outline-color': '#000' });
+    expect(paintVisibility(fill, feature({}))).toEqual({ visible: false, reason: 'fill-layer-opacity evaluates to 0' });
+    expect(why(fill, feature({}))).toBe('at zoom 10: fill-layer-opacity is 0 (a constant in the style)');
+    expect(paintVisibility(fakeMap('fill', { 'fill-layer-opacity': 0, 'fill-pattern': 'dots' }), feature({})).visible).toBe(false);
+    const line = fakeMap('line', { 'line-layer-opacity': ['step', ['zoom'], 1, 9, 0], 'line-width': 3 });
+    expect(paintVisibility(line, feature({}))).toEqual({ visible: false, reason: 'line-layer-opacity evaluates to 0' });
+    expect(why(line, feature({}))).toBe('at zoom 10: line-layer-opacity is 0 because the step on zoom used the stop at 9 (zoom 10)');
+    // partial layer opacity still draws; unset (older MapLibre, or not used) reads the default 1
+    expect(paintVisibility(fakeMap('fill', { 'fill-layer-opacity': 0.3 }), feature({})).visible).toBe(true);
+    expect(paintVisibility(fakeMap('line', { 'line-layer-opacity': 0.3 }), feature({})).visible).toBe(true);
+    expect(paintVisibility(fakeMap('line', {}), feature({})).visible).toBe(true);
+    // MapLibre 2–5 / Mapbox GL 1 do not know these properties: getPaintProperty THROWS. Not a reason, not an error.
+    const older = (type: string, paint: Record<string, unknown>) => {
+      const m = fakeMap(type, paint);
+      const get = m.getPaintProperty;
+      m.getPaintProperty = (id: string, name: string) => {
+        if (name.endsWith('-layer-opacity')) throw new TypeError("Cannot read properties of undefined (reading 'value')");
+        return get(id, name);
+      };
+      return m;
+    };
+    expect(paintVisibility(older('fill', {}), feature({}))).toEqual({ visible: true });
+    expect(paintVisibility(older('line', {}), feature({}))).toEqual({ visible: true });
+    expect(paintVisibility(older('fill', { 'fill-opacity': 0 }), feature({}))).toEqual({ visible: false, reason: 'fill-opacity evaluates to 0' });
+  });
+
   test('match compares types as MapLibre does: the string "1" is not the label 1', () => {
     const map = fakeMap('fill', { 'fill-opacity': ['match', ['get', 'n'], 1, 1, 0] });
     expect(paintVisibility(map, feature({ n: '1' })).visible).toBe(false);

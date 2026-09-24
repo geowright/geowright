@@ -125,6 +125,23 @@ test.describe('visibility', () => {
     expect(err?.message).toMatch(/covered by another feature; topmost is cover/);
   });
 
+  test('a layer hidden by fill-layer-opacity / line-layer-opacity 0 (MapLibre 6) is not visible, and the message says so', async ({ map, page }) => {
+    await expect(map).toHaveFeature({ layer: 'parcels', id: 101 });
+    await expect(map).toHaveFeature({ layer: 'parcels-outline', id: 101 });
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.setPaintProperty('parcels', 'fill-layer-opacity', 0);
+      m.setPaintProperty('parcels-outline', 'line-layer-opacity', 0);
+    });
+    await expect(map).not.toHaveFeature({ layer: 'parcels', id: 101 });
+    await expect(map).not.toHaveFeature({ layer: 'parcels-outline', id: 101 });
+    await expect(map).toHaveFeature({ layer: 'parcels', id: 101, visible: false });
+    const err = await expect(map).toHaveFeature({ layer: 'parcels', id: 101 }, { timeout: 600 }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('NOT VISIBLE: parcels#101 (fill-layer-opacity evaluates to 0');
+    const [outline] = await map.features({ layer: 'parcels-outline', id: 101, visible: 'any' }).all();
+    expect(outline.invisibleBecause).toContain('line-layer-opacity evaluates to 0');
+  });
+
   test('snapshot marks invisible entities', async ({ map }) => {
     const snap = await map.snapshot();
     expect(snap).toMatch(/#502 Point .*NOT-VISIBLE\(circle-opacity evaluates to 0/);

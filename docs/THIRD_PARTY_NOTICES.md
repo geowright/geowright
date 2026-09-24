@@ -6,8 +6,9 @@ currently installed (see `package.json` / `package-lock.json`); pin dates if you
 file after a dependency bump.
 
 None of the licenses below are copyleft, and none conflict with distributing the core under
-Apache-2.0. Nothing outside MIT / BSD-2-Clause / BSD-3-Clause /
-ISC / OFL-1.1 was found.
+Apache-2.0. What the package ships is MIT / BSD-2-Clause / BSD-3-Clause / ISC only; the demo app and
+`wild/` add OFL-1.1 (a font), Apache-2.0, Unlicense and EDL-1.0 (a BSD-3-Clause text: JSTS, inside the
+vendored Turf bundle), each with its text kept beside the file (decision 0015, proposed).
 
 ---
 
@@ -124,14 +125,15 @@ build tool that is executed, never copied, modified or distributed by this proje
 
 | What | License | Source | Ships? |
 |---|---|---|---|
-| Noto Sans Regular, glyph range 0–255 (`demo/public/glyphs/Noto Sans Regular/0-255.pbf`) | SIL Open Font License 1.1 | Google's Noto fonts; prebuilt SDF PBF fetched from `maplibre/demotiles` (`font/Noto Sans Regular/0-255.pbf`), 2026-09-20 — see `demo/public/glyphs/README.md` | No — demo-app fixture only, not part of `"files"` |
+| Noto Sans Regular, glyph range 0–255 (`demo/public/glyphs/Noto Sans Regular/0-255.pbf`) | SIL Open Font License 1.1; `Copyright 2022 The Noto Project Authors` — the notice and the license text are kept in `demo/public/glyphs/OFL.txt` (the PBF is a converted font, a "Modified Version") | Google's Noto fonts; prebuilt SDF PBF fetched from `maplibre/demotiles` (`font/Noto Sans Regular/0-255.pbf`), 2026-09-20 — see `demo/public/glyphs/README.md` | No — demo-app fixture only, not part of `"files"` |
 
 ### Vendored maplibre-gl build (demo app, checked into git)
 
 `demo/public/maplibre/maplibre-gl-shared.mjs` (514 KB) and `maplibre-gl-worker.mjs` (19 KB) are a
 prebuilt MapLibre GL JS dev bundle served directly to the demo app; the shared file's own embedded
-header reads `/** MapLibre GL JS * @license 3-Clause BSD ... v6.10.0 ... */`. Demo-only, not in
-`package.json` `"files"`.
+header reads `/** MapLibre GL JS * @license 3-Clause BSD ... v6.10.0 ... */`. MapLibre's full `LICENSE.txt`
+is kept beside them as `demo/public/maplibre/LICENSE.txt`; `demo/scripts/copy-worker.mjs` copies all three
+from `node_modules/maplibre-gl`. Demo-only, not in `package.json` `"files"`.
 
 ### `wild/` — apps, examples and fixtures we did not write
 
@@ -139,6 +141,13 @@ header reads `/** MapLibre GL JS * @license 3-Clause BSD ... v6.10.0 ... */`. De
 |---|---|---|
 | `wild/apps/deck-gl/` | `visgl/deck.gl` at `b28503d8742e3551a37372b9cb911aa1cc9b6706`, MIT, Copyright Vis.gl contributors | `wild/apps/deck-gl/LICENSE`; one-line map hook shown in `UPSTREAM.md` |
 | `wild/apps/pmtiles/` | `protomaps/PMTiles` at `aec8fa1341222fdddb3318e9ffa8e18e19b312f7`, BSD-3-Clause, Copyright 2021 Protomaps LLC | `wild/apps/pmtiles/LICENSE`; copied MapLibre/fflate bundle licenses in `dist/vendor/`; one-line map hook shown in `UPSTREAM.md` |
+
+Every app's committed `dist/` carries `dist/THIRD_PARTY_LICENSES.md`: the license text of each npm package its
+build bundles (React, ReactDOM, Vue, Svelte, `d3-*`, luma.gl / math.gl / loaders.gl, maplibre-gl, …), written by
+Vite's `build.license` (by `scripts/build.mjs` for `pmtiles`, which only copies files). `node wild/scripts/apps.mjs
+check`, run by the unit suite, fails when an app's `dist/` has none, or a package in it has no text.
+`wild/fixtures/vendor/turf@7/turf.min.js` bundles JSTS, licensed `(EDL-1.0 OR EPL-1.0)` and used under EDL-1.0,
+and further MIT / ISC / BSD / Unlicense packages: their texts are in `wild/fixtures/vendor/turf@7/THIRD_PARTY_LICENSES.md`.
 
 Full inventory and per-item licensing already tracked in `wild/README.md` (the table of
 `maplibre-examples/`, `apps/`, `fixtures/`) and `wild/fixtures/SOURCES.md` (per-fixture origin,
@@ -154,8 +163,9 @@ None of this ships in the npm package (confirmed: `npm pack --dry-run` includes 
 
 ## Flags
 
-- **Nothing found outside MIT / BSD-2-Clause / BSD-3-Clause / ISC / Apache-2.0 / SIL OFL-1.1.** No
-  GPL/LGPL/AGPL/SSPL/BSL or other copyleft or source-available license anywhere in
+- **Nothing found outside MIT / BSD-2-Clause / BSD-3-Clause / ISC / Apache-2.0 / SIL OFL-1.1**, plus, in
+  `wild/` only, Unlicense and EDL-1.0 (JSTS inside the Turf bundle, a dual `EDL-1.0 OR EPL-1.0` license used under
+  its BSD-3-Clause option). No GPL/LGPL/AGPL/SSPL/BSL or other copyleft or source-available license anywhere in
   `node_modules` for the packages audited, nor in `wild/`'s stated licenses.
 - `terra-draw` and `terra-draw-maplibre-gl-adapter` declare `"license": "MIT"` in `package.json` but
   do **not** ship a `LICENSE` file in the installed npm package — there is no copyright-holder line

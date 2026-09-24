@@ -64,7 +64,8 @@ as written (it adds types only).
   your app, `wild/README.md` ("Bring your app") shows how it becomes one of them. Known limitations:
   `docs/DESIGN.md`, "Costs and known limitations".
 - Apache-2.0. The injected scripts bundle MapLibre's style-spec evaluator and three small libraries; their licenses ship
-  as `dist/THIRD_PARTY_LICENSES.txt`.
+  as `dist/THIRD_PARTY_LICENSES.txt`. In the repository, the third-party code and fonts under `wild/` and `demo/`
+  (the test apps' builds, their fixtures, the demo's MapLibre build and glyphs) have their license texts beside them.
 
 Requires Node 22 or newer and `@playwright/test` 1.49 or newer (peer dependency). CI runs the full suite on Chromium
 with Playwright 1.49.0 and with the current version.

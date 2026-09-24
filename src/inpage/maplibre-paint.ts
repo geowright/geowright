@@ -13,7 +13,8 @@ import type { StyleBranch, StyleCause } from './types-internal';
 
 /**
  * "Rendered is not visible": queryRenderedFeatures returns features whose paint makes them
- * invisible (opacity 0, alpha-0 colour, zero radius/width, text-opacity 0 — all verified by spike).
+ * invisible (opacity 0, alpha-0 colour, zero radius/width, text-opacity 0 — all verified by spike; and
+ * MapLibre 6's whole-layer fill-layer-opacity / line-layer-opacity 0, read from its renderer).
  * This evaluates the layer's paint properties FOR ONE FEATURE (data-driven expressions, zoom,
  * feature-state) through public API: map.getPaintProperty / getLayoutProperty give the style
  * values, and the expression evaluator is MapLibre's own, from the separately published
@@ -46,7 +47,15 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
   const expression = (group: 'paint' | 'layout', name: string): StylePropertyExpression | null | undefined => {
     const propSpec = spec[`${group}_${type}`]?.[name];
     if (!propSpec) return undefined;
-    const raw = group === 'paint' ? map.getPaintProperty(f.layer, name as any) : map.getLayoutProperty(f.layer, name as any);
+    let raw: unknown;
+    try {
+      raw = group === 'paint' ? map.getPaintProperty(f.layer, name as any) : map.getLayoutProperty(f.layer, name as any);
+    } catch {
+      // A property the bundled spec knows but the app's library does not (fill-layer-opacity before MapLibre 6):
+      // MapLibre 2–5 and Mapbox GL 1 THROW on the read (verified by the compat matrix). That library cannot draw
+      // by it, so it has no say: not evaluable -> never a reason for "invisible".
+      return undefined;
+    }
     const input = raw === undefined || raw === null ? propSpec.default : raw;
     if (input === undefined) return null; // no value and no default, e.g. text-field, *-pattern
     const key = `${type}|${name}|${JSON.stringify(input)}|${JSON.stringify(globalState)}`;
@@ -143,7 +152,9 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
         );
       }
       case 'fill': {
-        const opacity = zero('paint', 'fill-opacity');
+        // fill-layer-opacity (MapLibre 6; older versions do not have it, see expression()): at 0 nothing of the layer
+        // is drawn, outline and pattern included.
+        const opacity = first(zero('paint', 'fill-layer-opacity'), zero('paint', 'fill-opacity'));
         if (opacity) return verdict(opacity);
         if (isSet('paint', 'fill-pattern')) return { visible: true };
         const outlineSet = map.getPaintProperty(f.layer, 'fill-outline-color') != null;
@@ -152,7 +163,7 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
       }
       case 'line': {
         const painted = isSet('paint', 'line-pattern') || isSet('paint', 'line-gradient');
-        return verdict(first(zero('paint', 'line-opacity'), zero('paint', 'line-width'), painted ? undefined : transparent('line-color')));
+        return verdict(first(zero('paint', 'line-layer-opacity'), zero('paint', 'line-opacity'), zero('paint', 'line-width'), painted ? undefined : transparent('line-color')));
       }
       case 'fill-extrusion':
         return verdict(first(zero('paint', 'fill-extrusion-opacity'), isSet('paint', 'fill-extrusion-pattern') ? undefined : transparent('fill-extrusion-color')));

@@ -1,32 +1,39 @@
 import { test, expect } from '@playwright/test';
 import { spawnSync } from 'node:child_process';
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
  * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0008) and a pinned UPSTREAM.md
- * with its one hook line (0010), and the `new` scaffold refuses a license outside the allowlist. No network.
+ * with its one hook line (0010), its dist/ ships the notices of what it bundles (0015), and the `new` scaffold refuses
+ * a license outside the allowlist. No network.
  */
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const SCRIPT = 'wild/scripts/apps.mjs';
+const NOTICES = 'dist/THIRD_PARTY_LICENSES.md';
 
 function run(root: string, ...args: string[]) {
   const r = spawnSync(process.execPath, [join(root, SCRIPT), ...args], { encoding: 'utf8' });
   return { code: r.status, out: r.stdout + r.stderr };
 }
 
-/** The part of the tree `check` reads, copied: the script, each app's license + UPSTREAM.md, the fixture records, the wild specs. */
-function scratchTree(): string {
-  const dir = test.info().outputPath('tree');
-  const copy = (p: string) => { mkdirSync(dirname(join(dir, p)), { recursive: true }); cpSync(join(ROOT, p), join(dir, p), { recursive: true }); };
+/**
+ * The part of the tree `check` reads, copied from `from` (this checkout by default) into `name`: the script, each
+ * app's license, UPSTREAM.md and dist/THIRD_PARTY_LICENSES.md, the fixture records, the wild specs.
+ */
+function scratchTree(name = 'tree', from = ROOT): string {
+  const dir = test.info().outputPath(name);
+  const copy = (p: string) => { mkdirSync(dirname(join(dir, p)), { recursive: true }); cpSync(join(from, p), join(dir, p), { recursive: true }); };
   copy(SCRIPT);
   copy('wild/fixtures/SOURCES.md');
   copy('wild/fixtures/sources');
   copy('wild/maplibre-examples/LICENSE.txt');
   copy('tests/wild');
-  for (const app of readdirSync(join(ROOT, 'wild/apps'))) {
-    for (const f of readdirSync(join(ROOT, 'wild/apps', app))) if (/^(licen[cs]e|copying)|^UPSTREAM\.md$/i.test(f)) copy(`wild/apps/${app}/${f}`);
+  // Directories only: a stray file (Finder's .DS_Store) is not an app, as in apps.mjs.
+  for (const app of readdirSync(join(from, 'wild/apps')).filter((n) => statSync(join(from, 'wild/apps', n)).isDirectory())) {
+    for (const f of readdirSync(join(from, 'wild/apps', app))) if (/^(licen[cs]e|copying)|^UPSTREAM\.md$/i.test(f)) copy(`wild/apps/${app}/${f}`);
+    if (existsSync(join(from, 'wild/apps', app, NOTICES))) copy(`wild/apps/${app}/${NOTICES}`);
   }
   return dir;
 }
@@ -55,6 +62,14 @@ test('check passes on the apps in this tree', () => {
   expect(r.code).toBe(0);
 });
 
+test('a stray file in wild/apps (a Finder .DS_Store) is not an app: the scratch copy and check both skip it', () => {
+  const checkout = scratchTree('checkout');
+  writeFileSync(join(checkout, 'wild/apps/.DS_Store'), 'Bud1: Finder metadata, not an app\n');
+  expect(run(checkout, 'check').code, 'check on a tree with the stray file').toBe(0);
+  const tree = scratchTree('tree', checkout);
+  expect(run(tree, 'check').code, 'check on a scratch copy of that tree').toBe(0);
+});
+
 test('check fails when a wild app has no LICENSE, or one outside the allowlist', () => {
   const tree = scratchTree();
   expect(run(tree, 'check').code, 'the copied tree passes before anything is planted').toBe(0);
@@ -74,7 +89,9 @@ test('check fails when a wild app has no LICENSE, or one outside the allowlist',
   expect(r.out).toContain('GPL');
 
   writeFileSync(join(planted, 'LICENSE'), MIT);
-  expect(run(tree, 'check').code, 'an MIT license, a pinned commit, the hook and a spec: passes').toBe(0);
+  mkdirSync(join(planted, 'dist'));
+  writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}`);
+  expect(run(tree, 'check').code, 'an MIT license, a pinned commit, the hook, a spec and dist notices: passes').toBe(0);
 
   rmSync(join(tree, 'tests/wild/planted.spec.ts'));
   writeFileSync(join(planted, 'UPSTREAM.md'), '- Repository: https://github.com/example/planted\n- Pinned commit: main\n');
@@ -82,6 +99,43 @@ test('check fails when a wild app has no LICENSE, or one outside the allowlist',
   expect(r.out).toContain('wild/apps/planted/UPSTREAM.md: names no full upstream commit SHA');
   expect(r.out).toContain('wild/apps/planted/UPSTREAM.md: does not show the one added hook line');
   expect(r.out).toContain('wild/apps/planted/: no spec in tests/wild/ opens /apps/planted/');
+});
+
+test('check fails when an app\'s dist/ ships no notices, or a notice without its license text', () => {
+  const tree = scratchTree();
+  const planted = join(tree, 'wild/apps/planted');
+  mkdirSync(join(planted, 'dist'), { recursive: true });
+  writeFileSync(join(planted, 'LICENSE'), MIT);
+  writeFileSync(join(planted, 'UPSTREAM.md'), `- Repository: https://github.com/example/planted\n- Pinned commit: \`${SHA}\`\n\n+(window.__geowright_maps ??= {}).main = map;\n`);
+  writeFileSync(join(tree, 'tests/wild/planted.spec.ts'), `// opens '/apps/planted/'\n`);
+
+  let r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`wild/apps/planted/${NOTICES}: missing`);
+
+  writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n## other-lib - 2.0.0 (ISC)\n`);
+  r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`wild/apps/planted/${NOTICES}: "other-lib - 2.0.0 (ISC)" has no license text`);
+
+  writeFileSync(join(planted, NOTICES), '# Licenses\n\nThe app does not bundle any dependencies with licenses.\n');
+  r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`wild/apps/planted/${NOTICES}: lists no package`);
+
+  writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n## other-lib - 2.0.0 (MIT)\n\n${MIT}`);
+  expect(run(tree, 'check').code, 'every package with its text: passes').toBe(0);
+});
+
+test('check fails when a file under wild/fixtures has no row in SOURCES.md or a sources/*.md record', () => {
+  const tree = scratchTree();
+  writeFileSync(join(tree, 'wild/fixtures/planted.geojson'), '{"type":"FeatureCollection","features":[]}');
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('wild/fixtures/planted.geojson: not named in wild/fixtures/SOURCES.md');
+
+  writeFileSync(join(tree, 'wild/fixtures/sources/planted.md'), '| `planted.geojson` | synthetic | first-party |\n');
+  expect(run(tree, 'check').code, 'named in a sources/*.md record: passes').toBe(0);
 });
 
 test('new scaffolds an MIT app: license byte-identical, UPSTREAM.md, fixture record, SOURCES.md row, spec; check then lists the TODOs', () => {

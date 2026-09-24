@@ -40,7 +40,9 @@ npm run build
 ```
 
 The build uses the app-local Vite config and writes the single-page static output to `dist/`. It does not run the
-application or Playwright.
+application or Playwright. `build.license` makes Vite write `dist/THIRD_PARTY_LICENSES.md`: the license text of every npm package the build bundles
+(`node wild/scripts/apps.mjs check` fails without it). A small plugin in `vite.config.js` corrects one heading
+in it: maplibre-gl 3's `dist/package.json` is a stub, so Vite would label it `maplibre-gl - 0.0.0`.
 
 ## Dependencies
 

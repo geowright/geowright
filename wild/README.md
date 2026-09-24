@@ -28,7 +28,8 @@ stand-in for OpenFreeMap "bright", whose OSM data / CC-BY design cannot be commi
 
 `node wild/scripts/apps.mjs check` (run by the unit suite, `tests/unit/wild-apps.unit.spec.ts`) holds every app here to
 the rules below: a license file on the allowlist, an `UPSTREAM.md` with the repository, the full commit and the hook
-line, and a spec that opens it.
+line, a spec that opens it, and a `dist/THIRD_PARTY_LICENSES.md` with the license text of everything `dist/` bundles.
+It also fails on a file under `fixtures/` that no row in `fixtures/SOURCES.md` or `fixtures/sources/*.md` names.
 
 ## Bring your app
 
@@ -51,7 +52,10 @@ issue from the "My map app does not work" template, which asks for everything be
    failure needs: one example, not the monorepo. Add exactly one line, the hook
    ([0010](../docs/decisions/0010-wild-apps-not-bent.md)). Our own build files (`package.json`, the bundler config,
    an `index.html` if upstream has none) sit beside them; build with `npm ci && npm run build` and commit `dist/`, which
-   `serve.mjs` serves at `/apps/<name>/`. `UPSTREAM.md` lists every vendored path and shows the one line as a diff.
+   `serve.mjs` serves at `/apps/<name>/`. `dist/` redistributes what the build bundles, so it carries their notices:
+   in the Vite config, `build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } }`; a build that only copies files
+   writes the same file itself (`apps/pmtiles/scripts/build.mjs`). A bundled package that ships no license file gets
+   its text added by the build (`apps/svelte-maplibre-gl/vite.config.js`); `check` fails on a section without one. `UPSTREAM.md` lists every vendored path and shows the one line as a diff.
 5. **Fixtures for everything it fetches.** Run the spec
    (`npx playwright test tests/wild/<name>.spec.ts`): the harness aborts every request to the outside and fails the
    test naming each URL. Answer each one with a route, from what exists first — `DEMOTILES`, `glyphs()`,
@@ -73,4 +77,7 @@ report still counts. Help happens in the issue — the snapshot, the failing cal
 the failure can be reproduced by a page written from scratch (on the demo app or a new first-party page under
 `tests/`, never a copy of their code), that page carries the failing spec instead. What made the app hard to test is
 written down in the issue, so the friction is not lost with the app. A dual license whose every option is on the list
-(`MIT OR Apache-2.0`, as `apps/svelte-maplibre-gl/`) is fine: keep both files.
+(`MIT OR Apache-2.0`, as `apps/svelte-maplibre-gl/`) is fine: keep both files. A choice where only one option is on
+the list is used under that option and its notice says so — JSTS, `EDL-1.0 OR EPL-1.0`, inside the Turf fixture, is
+used under EDL-1.0 ([0015](../docs/decisions/0015-third-party-notices-ship-with-the-copy.md), proposed); the helper
+leaves such a license to a person.

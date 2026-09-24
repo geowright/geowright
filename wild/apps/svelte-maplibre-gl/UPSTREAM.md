@@ -119,7 +119,10 @@ cd wild/apps/svelte-maplibre-gl && npm install && npm run build
 
 `npm run build` runs `vite build`. Both install and build succeeded on the first try (no retry
 needed). `dist/` is self-contained; the only two entry HTML files (`dist/clusters/index.html`,
-`dist/hover-styles/index.html`) reference only same-directory hashed assets.
+`dist/hover-styles/index.html`) reference only same-directory hashed assets. `build.license` makes Vite write `dist/THIRD_PARTY_LICENSES.md`: the license text of every npm package the build bundles
+(`node wild/scripts/apps.mjs check` fails without it). The
+`svelte-maplibre-gl` npm package ships no license file, so a small plugin in `vite.config.js` puts this directory's
+`LICENSE-MIT.txt` and `LICENSE-APACHE.txt` (its repository's) under that package's heading.
 
 ## Findings worth recording
 
