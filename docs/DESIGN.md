@@ -358,6 +358,25 @@ an application's data but is not drawn for a library-specific reason distinct fr
 reported as exactly that in diagnostics, rather than left indistinguishable from an ordinary
 symbol-collision hide.
 
+**A failure explains the invisibility: property, value, expression branch, zoom.** "`fill-opacity` evaluates to 0"
+tells a user *what* hid a feature, not *why* — in a real style the answer is buried in a `match` on a property or a
+`step` on zoom. So a failure message traces it: `fill-opacity is 0 because the match on ["get","kind"] took its fallback
+for kind="park"`, at the zoom it was evaluated at. The adapter hands the engine plain data across the seam
+(`StyleCause`: layer, property, value, zoom, and the branches taken, outermost first), and the engine words it. The
+attribution does not re-implement the evaluator: it walks the property's style JSON and asks MapLibre's evaluator for
+every value it needs (the input of a `match` / `step` / `interpolate`, each condition of a `case`, each argument of a
+`coalesce`); choosing the branch from those values is the operator's one documented rule, and the choice is *checked* —
+MapLibre also evaluates the chosen branch's output, which must equal the value of the whole, or the attribution stops and
+only property and value are reported. Covered: `match`, `case`, `step`, `interpolate` (and `-hcl`, `-lab`), `coalesce`,
+nested, and legacy `{ stops }` functions through the style-spec's own `convertFunction`. Not traced (property + value
+only): `let` / `var`, arithmetic and every other operator, and an interpolation strictly between two stops (both stops are
+named; no single branch produced the value). A layer the style does not draw at all is explained the same way: zoom
+below `minzoom` or at / above `maxzoom` (MapLibre's own rule), or layout `visibility` "none" — which since MapLibre 5.16
+may be an expression on global state, evaluated with the style-spec's visibility evaluator. The explanation is computed
+only when something has failed; the visibility verdict never pays for it. Writing this found a real bug: the pixel probe
+restored a layer with the constant `"visible"`, replacing a `visibility` expression and turning on a layer the app had
+hidden; it now puts back what was there.
+
 ## Globe and terrain
 
 **MapLibre's own viewport queries are measurably wrong on a globe projection**, in both directions, as
@@ -601,17 +620,30 @@ geographic content is invented, which is the one thing licensing actually restri
 legally uncomplicated fixture at a real cost in realism: a synthetic basemap has on the order of twenty
 layers where a real basemap style commonly has well over a hundred, and label density is correspondingly
 much lower — occlusion caused by dense basemap labelling, expected going in to be a significant source
-of friction, was as a result barely exercised.
+of friction, was as a result barely exercised. That was the first synthetic basemap; the one the suite uses now is
+label-dense (next section).
 
 ### Label realism
 
-The synthetic basemap has an opt-in `dense` variant — 71 layers, 21 label layers, about 340 labels in view, all
+The synthetic basemap first got an opt-in `dense` variant — 71 layers, 21 label layers, about 340 labels in view, all
 generated — for one question: what happens to an application's features when basemap labels are drawn ON TOP of them,
 which is where an application that inserts its layers below the labels (the usual advice; MapLibre's 3D-buildings
 example does it) actually lives. Of 60 buildings, 40 were clickable at their best pixel and 19 only at another one,
 because a house number, a point-of-interest name, a street name or a neighbourhood label covered the best; every click
 landed on the building that was asked for — after the whole-pixel fix described under actionability, which this
 fixture is what found.
+
+The dense basemap is now the DEFAULT for every wild app that loads a synthetic OpenFreeMap, MapTiler or CARTO style,
+and it is dense at every zoom those apps use, not only up close: around the city core lies a generated region
+(suburbs, villages and towns every few kilometres, arterial roads with names and route numbers drawn as road shields,
+motorways, rivers, lakes, parks, stations, bus stops, airports; cities, states and countries further out), under a
+79-layer style with 24 symbol layers. Measured the same way on both — basemap symbols MapLibre actually placed in the
+same 880×720 px window — the synthetic basemap renders 75, 42, 50, 93, 240 and 171 labels at zoom 11 to 16, the real
+OpenFreeMap style 59, 26, 35, 78, 239 and 130, and the sparse city it replaced 5, 5, 6, 10, 33 and 25. A spec keeps
+it within 0.6–2× of the real numbers at each zoom. The density found a library limitation at once: on a basemap this
+size, `snapshot()` keeps a section for every basemap layer in view and runs out of budget before the application's own
+layer gets a single row (9 app symbols, 0 listed; on the real style, 0 of 1,025 buildings). It is pinned down by a
+spec marked as a known failure until the budget is fixed.
 
 A REAL basemap is available too, but only on a developer's own machine: a script caches a small OpenFreeMap extract
 (OpenStreetMap data, ODbL) outside the repository — never committed, never in CI — and an opt-in spec set runs the same
@@ -625,8 +657,8 @@ could not: the floating building parts mentioned under actionability.
 33 applications not written for this project — 23 official MapLibre examples, 3 React (react-map-gl)
 applications, 1 deck.gl MapLibre React application, 1 Protomaps PMTiles application,
 2 Svelte (svelte-maplibre-gl) applications, and 3 Vue (vue-maplibre-gl) applications —
-covering 135 specs in total (`tests/wild` holds 143: the other 8 are the dense-basemap and opt-in real-basemap
-realism specs, which are not apps):
+covering 135 specs in total (`tests/wild` holds 147: the other 12 are the dense-basemap, label-density and opt-in
+real-basemap realism specs, which are not apps):
 
 | app | specs | result |
 |---|---|---|

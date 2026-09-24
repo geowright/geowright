@@ -15,6 +15,8 @@ import type {
   Geometry,
   Pt,
   RenderedFeature,
+  StyleBranch,
+  StyleCause,
 } from './types';
 
 /** Library-agnostic logic. Knows nothing about MapLibre; only the adapter seam. */
@@ -735,7 +737,9 @@ export class Engine<W = unknown> {
         lines.push(`layer "${id}": does not exist. Layers: ${known.map((l) => l.id).join(', ')}`);
         continue;
       }
-      if (!info.visible) lines.push(`layer "${id}": visibility is "none"`);
+      const hiddenBy = this.adapter.explainLayerHidden?.(id) ?? [];
+      if (hiddenBy.length) lines.push(...hiddenBy.map(describeLayerHidden));
+      else if (!info.visible) lines.push(`layer "${id}": visibility is "none"`);
       const rendered = this.find({ layer: id, visible: 'any' });
       lines.push(`layer "${id}": ${rendered.length} feature(s) rendered in viewport`);
       for (const f of rendered.slice(0, 8)) lines.push(`  - ${describe(f)}`);
@@ -749,13 +753,24 @@ export class Engine<W = unknown> {
         );
       }
       const want = q.visible ?? true;
+      let someInvisible = want === 'any' && rendered.some((f) => !f.visible);
       if (want !== 'any') {
         const other = this.find({ ...q, layer: id, visible: 'any' }).filter((f) => f.visible !== want);
+        someInvisible = want && other.length > 0;
         if (other.length) {
           lines.push(
             `  ${other.length} feature(s) match but are ${want ? 'NOT VISIBLE' : 'visible'}` +
               (want ? `: ${other.slice(0, 3).map((f) => `${f.layer}${f.id !== undefined ? '#' + f.id : ''} (${f.invisibleBecause})`).join('; ')}. Rendered-but-invisible features match only with { visible: 'any' }.` : ''),
           );
+        }
+      }
+      // WHY the style paints a match invisibly: property, value, expression branch, zoom. Computed here, on failure
+      // only — the verdict itself never needs it.
+      if (someInvisible && this.adapter.explainInvisible) {
+        for (const pieces of [...this.group({ ...q, layer: id, visible: false }).values()].slice(0, 3)) {
+          const causes = this.adapter.explainInvisible(pieces[0]);
+          const f = pieces[0];
+          if (causes.length) lines.push(`  -> ${f.layer}${f.id !== undefined ? '#' + f.id : ''} is not visible ${describeStyleCauses(causes)}`);
         }
       }
       if (q.id !== undefined && rendered.length) {
@@ -1344,6 +1359,67 @@ export function describe(f: { layer: string; id?: string | number; properties: R
     `${f.layer}${f.id !== undefined ? `#${f.id}` : ''} ${props.length > 120 ? props.slice(0, 117) + '…' : props}${f.pixel ? ` @(${f.pixel.x},${f.pixel.y})` : ''}` +
     (f.visible === false ? ` [NOT VISIBLE: ${f.invisibleBecause}]` : '')
   );
+}
+
+/* ---------------- wording of style causes (data from the adapter: explainInvisible / explainLayerHidden) ---------------- */
+
+const fmtZoom = (z: number) => String(Math.round(z * 100) / 100);
+const fmtJson = (v: unknown) => JSON.stringify(v);
+/** An input and its value: `kind="park"` for ["get","kind"], `zoom 11.2` for ["zoom"], else `<json> = <value>`. */
+function fmtInput(b: StyleBranch): string {
+  const input = b.input as unknown[];
+  if (Array.isArray(input) && input[0] === 'zoom' && input.length === 1) return `zoom ${fmtZoom(b.inputValue as number)}`;
+  if (Array.isArray(input) && input[0] === 'get' && input.length === 2 && typeof input[1] === 'string') return `${input[1]}=${fmtJson(b.inputValue)}`;
+  return `${fmtJson(b.input)} = ${fmtJson(b.inputValue)}`;
+}
+const fmtOn = (b: StyleBranch) => {
+  const input = b.input as unknown[];
+  return Array.isArray(input) && input[0] === 'zoom' && input.length === 1 ? 'zoom' : fmtJson(b.input);
+};
+
+export function describeBranch(b: StyleBranch): string {
+  switch (b.taken) {
+    case 'label':
+      return `the ${b.op} on ${fmtOn(b)} matched ${fmtInput(b)}`;
+    case 'fallback':
+      return b.op === 'case' ? `the case took its fallback (no condition was true)` : `the ${b.op} on ${fmtOn(b)} took its fallback for ${fmtInput(b)}`;
+    case 'condition':
+      return `the case took its branch ${b.at} (the first true condition: ${fmtJson(b.condition)})`;
+    case 'base':
+      return `the ${b.op} on ${fmtOn(b)} used its base output (${fmtInput(b)} is below its first stop, ${fmtJson(b.at)})`;
+    case 'stop':
+      return b.op === 'step' ? `the step on ${fmtOn(b)} used the stop at ${fmtJson(b.at)} (${fmtInput(b)})` : `the ${b.op} on ${fmtOn(b)} used its stop at ${fmtJson(b.at)} (${fmtInput(b)}; no interpolation beyond its first and last stops)`;
+    case 'between': {
+      const [lo, hi] = b.at as [number, number];
+      return `the ${b.op} on ${fmtOn(b)} interpolated between its stops at ${lo} and ${hi} (${fmtInput(b)})`;
+    }
+    case 'argument':
+      return `the coalesce used its argument ${b.at} (the ones before it were null)`;
+  }
+}
+
+/** "fill-opacity is 0 because the match on ["get","kind"] took its fallback for kind="park"" — without the zoom. */
+function describeValue(c: StyleCause): string {
+  const what = `${c.property} is ${fmtJson(c.value)}`;
+  if (c.origin === 'default') return `${what} (not set in the style: the default)`;
+  if (c.origin === 'constant') return `${what} (a constant in the style)`;
+  const kind = c.origin === 'function' ? 'legacy function' : 'expression';
+  if (!c.branches.length) return `${what} (an ${kind}; which of its branches produced this cannot be traced)`;
+  return `${what} because ${c.origin === 'function' ? 'its legacy function, read as an expression: ' : ''}${c.branches.map(describeBranch).join(', then ')}`;
+}
+
+/** Why one feature is painted invisibly: every cause, and the zoom once. */
+export function describeStyleCauses(causes: StyleCause[]): string {
+  if (!causes.length) return '';
+  return `at zoom ${fmtZoom(causes[0].zoom)}: ${causes.map(describeValue).join('; and ')}`;
+}
+
+/** Why a whole layer is not drawn: zoom range or layout visibility. */
+export function describeLayerHidden(c: StyleCause): string {
+  const head = `layer "${c.layer}" is not drawn at zoom ${fmtZoom(c.zoom)}`;
+  if (c.property === 'minzoom') return `${head}: its minzoom is ${c.value} (drawn from zoom ${c.value})`;
+  if (c.property === 'maxzoom') return `${head}: its maxzoom is ${c.value} (drawn below zoom ${c.value} only)`;
+  return `${head}: layout property ${describeValue(c)}`;
 }
 
 function describeEl(el: Element): string {

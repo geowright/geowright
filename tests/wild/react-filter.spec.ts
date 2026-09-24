@@ -49,7 +49,7 @@ test.describe('wild: react-map-gl / filter', () => {
     await expect(map).not.toHaveFeature({ layer: 'counties-highlighted' });
   });
 
-  test('the snapshot copes with a 17-layer basemap, generated ids and nested properties', async ({ wild }) => {
+  test('the snapshot copes with a production-sized basemap, generated ids and nested properties', async ({ wild }) => {
     const map = await wild.open(APP, { routes });
     const snap = await map.snapshot({ layers: ['counties'], perLayer: 2 });
     expect(snap).toMatch(/\[counties\] 275 fill entities/);

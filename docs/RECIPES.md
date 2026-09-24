@@ -22,11 +22,13 @@ three lines to add.
 
 Test / development builds only — the line exposes the map instance to every script on the page ([SECURITY.md](../SECURITY.md)).
 
+<!-- example: skip (app-side code: it runs in your app, not in a test; `{ … }` stands for your map options) -->
 ```ts
 // plain MapLibre GL JS / Mapbox GL JS v1
 const map = new maplibregl.Map({ … });
 if (import.meta.env.MODE !== 'production') (window.__geowright_maps ??= {}).main = map;
 ```
+<!-- example: skip (app-side component markup with elided props; verified in wild/apps/react-map-gl) -->
 ```jsx
 // react-map-gl, @vis.gl/react-maplibre
 <Map onLoad={(e) => ((window.__geowright_maps ??= {}).main = e.target)} … />
@@ -40,6 +42,9 @@ if (import.meta.env.MODE !== 'production') (window.__geowright_maps ??= {}).main
 <mgl-map @map:load="e => ((e.map.getContainer().ownerDocument.defaultView.__geowright_maps ??= {}).main = e.map)" … />
 <!-- in <script setup> the plain form works:  const onLoad = (e) => ((window.__geowright_maps ??= {}).main = e.map) -->
 ```
+
+In TypeScript the property is not declared on `Window`: write `(window as any).__geowright_maps`, as the
+[react-map-gl app](../wild/apps/react-map-gl/geojson/src/app.tsx) does.
 
 Two maps on a page: register them under two names and pass `geowright(page, { mapId: 'left' })`.
 
@@ -92,8 +97,8 @@ layer. To say "labels do not count": `geowright(page, { ignoreLayers: [/* label 
 
 Tests should not depend on a tile server. `routeVectorTiles(page, '**/tiles/**', { <source-layer>: <GeoJSON> })` cuts real
 vector tiles from GeoJSON inside `page.route`; [`tests/wild/basemap.ts`](../tests/wild/basemap.ts) builds a whole
-OpenMapTiles-shaped basemap that way (style, sprite, glyphs, a synthetic city — `{ dense: true }` for production-like
-label density). For a REAL basemap on your own machine only: `scripts/fetch-real-basemap.sh` +
+OpenMapTiles-shaped basemap that way (style, sprite with road shields, glyphs, a synthetic city and region with
+production-like label density; `{ dense: false }` for the old sparse city). For a REAL basemap on your own machine only: `scripts/fetch-real-basemap.sh` +
 `GEOWRIGHT_REAL_BASEMAP=1` (the data is ODbL: cached outside the repository, never committed).
 
 For a `pmtiles://https://…` source, route the underlying HTTPS archive URL and serve a local synthetic archive with

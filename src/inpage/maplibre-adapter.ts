@@ -1,6 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { extrusionBase, extrusionHeight, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
-import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, Visibility } from './types';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, missingIcon, paintColour, paintVisibility, unparseableProperties } from './maplibre-paint';
+import type { CanvasAdapter, Geometry, LayerInfo, LngLat, Overlay, Pt, RenderedFeature, StyleCause, Visibility } from './types';
 
 /** A source that is not loaded right now: its type, whether its GeoJSON is inline (nothing to download), and how long
  *  it has been pending as far as this adapter has seen (the retries of one waitForIdle() share that clock). */
@@ -345,6 +345,14 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     return paintVisibility(this.map, f);
   }
 
+  explainInvisible(f: RenderedFeature): StyleCause[] {
+    return explainPaint(this.map, f);
+  }
+
+  explainLayerHidden(layer: string): StyleCause[] {
+    return explainLayerHidden(this.map, layer);
+  }
+
   colour(f: RenderedFeature) {
     return paintColour(this.map, f);
   }
@@ -413,6 +421,9 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
     const canvas = this.map.getCanvas();
     const gl = (canvas.getContext('webgl2') ?? canvas.getContext('webgl')) as WebGLRenderingContext | null;
     if (!gl || !this.map.getLayer(layer) || this.map.getLayoutProperty(layer, 'visibility') === 'none') return undefined;
+    // Put back what the app had: since MapLibre 5.16 visibility may be an EXPRESSION on global state, and writing back
+    // the constant "visible" replaced it (and turned on a layer the app had hidden).
+    const restore = this.map.getLayoutProperty(layer, 'visibility') ?? 'visible';
     const dpr = canvas.width / canvas.clientWidth;
     const R = Math.max(1, Math.round(radiusPx)); // (2R+1)² device pixels around the point
     const grab = () => {
@@ -433,7 +444,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
         this.map.setLayoutProperty(layer, 'visibility', 'none');
         without = read();
       } finally {
-        this.map.setLayoutProperty(layer, 'visibility', 'visible');
+        this.map.setLayoutProperty(layer, 'visibility', restore);
         this.map.redraw();
       }
       return difference(withLayer, without);
@@ -452,7 +463,7 @@ export class MapLibreAdapter implements CanvasAdapter<LngLat> {
         this.map.setLayoutProperty(layer, 'visibility', 'none');
         without = await frame();
       } finally {
-        this.map.setLayoutProperty(layer, 'visibility', 'visible');
+        this.map.setLayoutProperty(layer, 'visibility', restore);
         this.map.triggerRepaint();
       }
       return withLayer && without ? difference(withLayer, without) : undefined;
