@@ -45,7 +45,7 @@ issue from the "My map app does not work" template, which asks for everything be
    demo app or on an app already in `wild/`? If so, fix it there — an app is vendored for a failure only it shows. Ask
    in the issue for whatever is missing: the commit, the failing call, what it fetches.
 2. **The license.** Read the repository's license file at that commit — the file, not the badge. It must be MIT, BSD,
-   ISC, Apache-2.0, CC0 or Unlicense ([0008](../docs/decisions/0008-third-party-license-allowlist.md)), and so must
+   ISC, Apache-2.0, CC0, Unlicense or EDL-1.0 ([0015](../docs/decisions/0015-third-party-notices-ship-with-the-copy.md)), and so must
    everything the app's build bundles into `dist/`. Anything else: see "When the license is not on the list" below.
 3. **Scaffold.** `node wild/scripts/apps.mjs new <name> <repository-url> <full-commit-sha> <path/to/upstream/LICENSE>`
    reads the license text and refuses anything off the list, before writing a byte. Then it writes
@@ -75,13 +75,14 @@ issue from the "My map app does not work" template, which asks for everything be
 
 ### When the license is not on the list
 
-GPL, LGPL, AGPL, MPL, CC-BY in any form, ODbL, a dual license with a non-permissive option, or no license at all
+GPL, LGPL, AGPL, MPL, CC-BY in any form, ODbL, a choice of licenses none of whose options is on the list, or no license at all
 (which means all rights reserved): the app cannot be vendored, in whole or in part, and the helper refuses it. The
 report still counts. Help happens in the issue — the snapshot, the failing call, the fix if it is in geowright. If
 the failure can be reproduced by a page written from scratch (on the demo app or a new first-party page under
 `tests/`, never a copy of their code), that page carries the failing spec instead. What made the app hard to test is
 written down in the issue, so the friction is not lost with the app. A dual license whose every option is on the list
-(`MIT OR Apache-2.0`, as `apps/svelte-maplibre-gl/`) is fine: keep both files. A choice where only one option is on
-the list is used under that option and its notice says so — JSTS, `EDL-1.0 OR EPL-1.0`, inside the Turf fixture, is
-used under EDL-1.0 ([0015](../docs/decisions/0015-third-party-notices-ship-with-the-copy.md), proposed); the helper
-leaves such a license to a person.
+(`MIT OR Apache-2.0`, as `apps/svelte-maplibre-gl/`) is fine: keep both files. A choice where only some options are on
+the list (`MIT OR GPL-3.0`) is fine too, for an app as for a dependency inside a bundle: it is used under an option on
+the list, UPSTREAM.md (or the notices) says so, and only that option's license file is vendored — JSTS, `EDL-1.0 OR
+EPL-1.0`, inside the Turf fixture, is used under EDL-1.0 ([0015](../docs/decisions/0015-third-party-notices-ship-with-the-copy.md)).
+The helper recognises license files, not choices: it refuses a file off the list, so the election is a person's.

@@ -1,7 +1,7 @@
 // Vendoring helper for third-party apps under wild/apps/ — the mechanical part of "Bring your app" (wild/README.md).
 //
 //   node wild/scripts/apps.mjs new <name> <upstream-repo-url> <commit> <LICENSE-file>...
-//       Refuse unless every license file is on the allowlist (docs/decisions/0008). Then scaffold, never overwriting:
+//       Refuse unless every license file is on the allowlist (docs/decisions/0015). Then scaffold, never overwriting:
 //       wild/apps/<name>/<LICENSE> (byte-identical), wild/apps/<name>/UPSTREAM.md, wild/fixtures/sources/<name>.md,
 //       a row in wild/fixtures/SOURCES.md and tests/wild/<name>.spec.ts. Every TODO(new-app) is yours to fill in.
 //   node wild/scripts/apps.mjs check
@@ -36,7 +36,7 @@ const NOTICES = 'dist/THIRD_PARTY_LICENSES.md';
 // wrapper app reaches the map its own way (`e.target`, `e.map`, a ref), so there only the registration itself is fixed.
 const EXAMPLE_HOOK = /^\s*\(window\.__geowright_maps \?\?= \{\}\)\.main = map;(\s*\/\/.*)?$/;
 const APP_HOOK = /__geowright_maps\s*\?\?=\s*\{\}\s*\)\s*\.main\s*=/;
-const ALLOWLIST = 'MIT, BSD, ISC, Apache-2.0, CC0, Unlicense (and OFL for fonts)';
+const ALLOWLIST = 'MIT, BSD, ISC, Apache-2.0, CC0, Unlicense, EDL-1.0 (and OFL for fonts)';
 
 // Recognised by the license text itself, not by what anyone says it is. Whitespace is normalised first.
 const ALLOWED = [
@@ -90,7 +90,7 @@ function newApp([name, url, commit, ...licenses]) {
     if (!c.ok) {
       fail([
         `REFUSED: ${l}: ${c.why}.`,
-        `Only ${ALLOWLIST} can be vendored under wild/ (docs/decisions/0008). Nothing was written.`,
+        `Only ${ALLOWLIST} can be vendored under wild/ (docs/decisions/0015). Nothing was written.`,
         'The app cannot be vendored, but the report still counts: help in the issue, reproduce with a first-party page if',
         'the problem allows, and write the friction down there. See wild/README.md, "When the license is not on the list".',
       ]);

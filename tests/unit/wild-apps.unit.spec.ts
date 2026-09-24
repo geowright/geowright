@@ -5,7 +5,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0008) and a pinned UPSTREAM.md
+ * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0015) and a pinned UPSTREAM.md
  * with its one hook line (0016), its dist/ ships the notices of what it bundles (0015), each MapLibre example's
  * committed patch is the hook and nothing else (0016), and the `new` scaffold refuses a license outside the
  * allowlist. No network.
@@ -307,7 +307,7 @@ for (const [kind, text, named] of [
     expect(r.code).toBe(1);
     expect(r.out).toContain(`REFUSED: ${license}:`);
     expect(r.out).toContain(named);
-    expect(r.out).toContain('Only MIT, BSD, ISC, Apache-2.0, CC0, Unlicense (and OFL for fonts) can be vendored');
+    expect(r.out).toContain('Only MIT, BSD, ISC, Apache-2.0, CC0, Unlicense, EDL-1.0 (and OFL for fonts) can be vendored');
     expect(r.out).toContain('Nothing was written.');
     expect(existsSync(join(tree, 'wild/apps/fake-app'))).toBe(false);
     expect(existsSync(join(tree, 'wild/fixtures/sources/fake-app.md'))).toBe(false);

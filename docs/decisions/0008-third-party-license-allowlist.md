@@ -1,6 +1,6 @@
 # 0008. Third-party material: a strict license allowlist
 
-- Status: Accepted
+- Status: Superseded by 0015
 - Date: 2026-09-20
 - Decided by: Shai Sinai
 

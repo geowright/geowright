@@ -1,8 +1,8 @@
 # 0015. Third-party material: the allowlist, and its notices ship with every copy
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-24
-- Decided by: Shai Sinai (to accept or reject)
+- Decided by: Shai Sinai
 - Supersedes: 0008
 
 ## Decision
