@@ -16,7 +16,9 @@ mkdir -p .scratch
 LOCK=.scratch/linux-suite.lock
 mkdir "$LOCK" 2>/dev/null || { echo "linux-suite: already running in this checkout ($PWD/$LOCK; remove it if no run is)" >&2; exit 1; }
 trap 'rmdir "$LOCK"' EXIT
-VOLUME="geowright-linux-$(pwd -P | shasum | cut -c1-12)"
+# shasum on macOS, sha1sum where there is no shasum (a Linux host): the same SHA-1, so the same volume name.
+SHA1=$(command -v shasum >/dev/null 2>&1 && echo shasum || echo sha1sum)
+VOLUME="geowright-linux-$(pwd -P | $SHA1 | cut -c1-12)"
 PW=$(node -p "require('./node_modules/@playwright/test/package.json').version")
 IMAGE="mcr.microsoft.com/playwright:v${PW}-noble"
 OUT="$PWD/test-results-linux"
@@ -29,7 +31,9 @@ RAN_CLEAN=0; [ -n "$(git status --porcelain)" ] || RAN_CLEAN=1
 
 # (COPYFILE_DISABLE / --no-mac-metadata: macOS tar otherwise adds an AppleDouble `._name` twin for every file with
 #  extended attributes, and Playwright on Linux then tries to run `._act.spec.ts`)
-git ls-files -z --cached --others --exclude-standard | COPYFILE_DISABLE=1 tar --no-mac-metadata --null -T - -cf - 2>/dev/null | docker run --rm -i --init --ipc=host \
+case "$(tar --version 2>/dev/null)" in *bsdtar*) MAC_TAR=--no-mac-metadata ;; *) MAC_TAR= ;; esac # GNU tar has no such flag (exit 64)
+# shellcheck disable=SC2086 # MAC_TAR is one flag or nothing
+git ls-files -z --cached --others --exclude-standard | COPYFILE_DISABLE=1 tar $MAC_TAR --null -T - -cf - 2>/dev/null | docker run --rm -i --init --ipc=host \
   -v "$VOLUME":/work -v "$OUT":/out -e CI=true -e FORCE_COLOR=0 -e LINUX_WORKERS "$IMAGE" bash -c '
     set -euo pipefail
     mkdir -p /work/src && cd /work/src

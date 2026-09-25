@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test';
-import { execFileSync, spawn, type ChildProcess } from 'node:child_process';
+import { execFileSync, spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { createServer } from 'node:net';
@@ -12,6 +12,12 @@ import { fileURLToPath } from 'node:url';
  */
 const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const SCRIPT = `${ROOT}scripts/kill-preview.sh`;
+
+// The script tells this checkout's servers apart by git's top level, and finds listeners with lsof. Where either is
+// missing there is nothing to test: scripts/linux-suite.sh runs the suite in a COPY of the tree, without .git.
+const ok = (cmd: string, ...args: string[]) => spawnSync(cmd, args, { stdio: 'ignore' }).status === 0;
+test.skip(!ok('git', '-C', ROOT, 'rev-parse', '--is-inside-work-tree'), 'not a git checkout (the Linux container runs a copy of the tree)');
+test.skip(!ok('sh', '-c', 'command -v lsof'), 'no lsof: kill-preview.sh finds listeners with it');
 
 async function freePort(): Promise<number> {
   const s = createServer().listen(0, '127.0.0.1');
