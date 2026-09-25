@@ -17,6 +17,9 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
   assertions passed).
 
 **Fixed**
+- `engines` says Node 22.12 or newer (was 22): the package is ES modules only, and a Playwright project that is not
+  `"type": "module"` compiles its tests to CommonJS, whose `require()` of an ES module works without a flag only from
+  Node 22.12.
 - Locations just across the antimeridian (`clickAt` and the other location actions, `map.clientPoint()`, `draw.*`, a
   query's `at` and the snapshot's `filter.at`, `toHaveLayerPixels`, `toHaveGeometry`, `marker()` / `popup()` /
   `toHavePopup({ at })`) are projected in the copy of the world the map draws in view: seen from lng
