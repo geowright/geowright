@@ -9,16 +9,19 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
 - **BREAKING (types):** the location actions (`clickAt`, `dblclickAt`, `rightClickAt`, `hoverAt`, `wheelAt`, `dragAt`,
   `tapAt`, `doubleTapAt`, `touchDragAt`, `pinchAt`, `twoFingerRotateAt`) no longer accept `{ moving: 'allow' }`, which
   they silently ignored. Their options are `SteadyActionOptions`; passing `moving` throws an error pointing to
-  `click()` / `tap()` / `hover()` on a feature, which verify a moving target when the input arrives.
+  `click()` / `tap()` / `hover()` on a feature, which verify a moving target when the input arrives. A value typed
+  `ActionOptions` no longer fits them either, even one that never sets `moving`: type it `SteadyActionOptions`.
 
 **Fixed**
-- Locations just across the antimeridian (`clickAt` and the other location actions, a query's `at`,
-  `toHaveLayerPixels`, `toHaveGeometry`) are projected in the copy of the world the map draws in view: seen from lng
+- Locations just across the antimeridian (`clickAt` and the other location actions, `map.clientPoint()`, `draw.*`, a
+  query's `at` and the snapshot's `filter.at`, `toHaveLayerPixels`, `toHaveGeometry`, `marker()` / `popup()` /
+  `toHavePopup({ at })`) are projected in the copy of the world the map draws in view: seen from lng
   179.5, lng -179.8 is 0.7° east, not a whole world west. Such a location is no longer reported as hidden on a pitched
   map.
 - Assertions (`toHaveFeature`, `toHaveFeatureCount`, `toBeVisibleOnMap`, `toHaveGeometry`, `toHavePopup`, `toHaveView`)
   and `map.marker()` / `map.popup()` on a page that cannot answer fail at their timeout with "the page did not answer",
   instead of when the page answers. A failed assertion no longer waits for such a page to describe the map.
+  `toBeVisibleOnMap`'s pixel probe is the exception: it still waits for the page to answer.
 - A feature action whose real input call throws (`click`, `tap`, `hover`, `dragTo`, `dragBy`) ends with that error,
   instead of retrying and possibly sending the input twice.
 - `autoPan: true` no longer pans to a feature that the layer's `filter` never draws; the failure message says the filter
@@ -28,6 +31,9 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
   draws them from.
 - The snapshot no longer counts an id-less feature as drawn just because a look-alike with the same properties is drawn
   elsewhere.
+- `geometry()` and `toHaveGeometry` no longer take the shape from a data feature with the same properties that the
+  layer's `filter` never draws, and the check of how many look-alikes an id-less feature has counts only the ones the
+  filter draws.
 - Features of a map inside an open shadow root (a web component) can be clicked and are listed as clickable by the
   snapshot; they were refused as covered by the host element.
 - `toHavePopup({ at | feature })`, `marker()` and `popup()` find overlays on a map under a CSS `transform: scale()`.
