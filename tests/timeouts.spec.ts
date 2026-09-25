@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { geowright } from '../src/playwright';
+import { geowright, type MapHandle } from '../src/playwright';
 
 /** The default action timeout follows the test's timeout; an action's `timeout` is a wall-clock promise. */
 test.describe('timeouts', () => {
@@ -68,6 +68,30 @@ test.describe('timeouts', () => {
     }
     await expect(page.getByTestId('popup')).toHaveCount(0); // and nothing was clicked afterwards
   });
+
+  // an assertion's polls (the settle wait, the query, the camera read) and marker() / popup() waited for a busy page
+  // without a bound: they failed when the page answered (~5 s here), not at their timeout; and a failed assertion then
+  // waited for the page again for its map state and screenshot.
+  for (const [name, look] of [
+    ['toHaveFeature', (map: MapHandle) => expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: TIMEOUT })],
+    ['not.toHaveFeature', (map: MapHandle) => expect(map).not.toHaveFeature({ layer: 'alerts', id: 1 }, { timeout: TIMEOUT })],
+    ['toHaveFeatureCount', (map: MapHandle) => expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(99, { timeout: TIMEOUT })],
+    ['toBeVisibleOnMap', (map: MapHandle) => expect(map.feature({ layer: 'alerts', id: 1 })).toBeVisibleOnMap({ timeout: TIMEOUT })],
+    ['toHaveGeometry', (map: MapHandle) => expect(map.feature({ layer: 'alerts', id: 1 })).toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: TIMEOUT })],
+    ['toHavePopup', (map: MapHandle) => expect(map).toHavePopup({}, { timeout: TIMEOUT })],
+    ['toHaveView', (map: MapHandle) => expect(map).toHaveView({ zoom: 3 }, { timeout: TIMEOUT })],
+    ['marker()', (map: MapHandle) => map.marker({ at: { lng: 34.84, lat: 32.12 } }, { timeout: TIMEOUT })],
+    ['popup()', (map: MapHandle) => map.popup({}, { timeout: TIMEOUT })],
+  ] as const) {
+    test(`${name} on a page that cannot answer fails at its timeout, not when the page answers`, async ({ map, page }) => {
+      block(page, BUSY);
+      const started = Date.now();
+      const err = await look(map).then(() => null, (e: Error) => e);
+      const took = Date.now() - started;
+      expect(err?.message, name).toMatch(/the page did not answer "\w+" in the time that was left/);
+      expect(took, `${name} failed ${took}ms after it started, with a ${TIMEOUT}ms timeout and the page busy for ${BUSY}ms`).toBeLessThan(2 * TIMEOUT);
+    });
+  }
 
   // a last attempt that started with a few ms left was abandoned for want of them, and the timeout then blamed
   // "a busy main thread" on an idle page, burying the real reason (here: occluded). timeout: 1 makes it certain.
