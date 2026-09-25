@@ -1,6 +1,7 @@
 import { test as base, expect as baseExpect } from '@playwright/test';
 import { geowright, expect, type MapHandle } from '../../src/playwright';
 import { routeVectorTiles } from '../../src/playwright/tiles';
+import { guardNetwork } from '../fixtures';
 import { LIBS } from './libs';
 
 /**
@@ -21,19 +22,13 @@ const PARCELS = {
 for (const lib of LIBS) {
   const test = base.extend<{ map: MapHandle }>({
     map: async ({ page, baseURL }, use) => {
-      const external: string[] = [];
-      await page.route(/^https?:\/\//, (route) => {
-        const url = route.request().url();
-        if (url.startsWith(baseURL!)) return route.fallback();
-        external.push(url);
-        return route.abort();
-      });
+      const guard = await guardNetwork(page, baseURL!); // the exact origin, as in the core suite: :41750 is not :4175
       await routeVectorTiles(page, '**/vt/parcels/**', { parcels: PARCELS });
       await page.goto(`/?lib=${lib.alias}`);
       const map = geowright(page);
       await map.waitForIdle();
       await use(map);
-      if (external.length) throw new Error(`external network requests are not allowed in tests:\n${external.join('\n')}`);
+      guard.check();
     },
   });
 
