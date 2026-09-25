@@ -29,6 +29,24 @@ import type { StyleBranch, StyleCause } from './types-internal';
  * counts as visible — never a false "invisible".
  */
 const spec = latest as unknown as Record<string, Record<string, any>>;
+
+/**
+ * Compiled expressions and filters, by their style JSON. Bounded: an app that keeps changing a paint property (a
+ * highlight driven by a changing literal, an animation) would otherwise add an entry per value, forever.
+ */
+const CACHE_MAX = 500;
+function cached<V>(cache: Map<string, V>, key: string, make: () => V): V {
+  if (cache.has(key)) {
+    const v = cache.get(key)!;
+    cache.delete(key); // most recently used last: the oldest is dropped first
+    cache.set(key, v);
+    return v;
+  }
+  const v = make();
+  cache.set(key, v);
+  if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value!);
+  return v;
+}
 const parsed = new Map<string, StylePropertyExpression | null>();
 const UNPARSEABLE = Symbol('unparseable') as unknown as StylePropertyExpression;
 
@@ -147,24 +165,23 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
     const input = raw === undefined || raw === null ? propSpec.default : raw;
     if (input === undefined) return null; // no value and no default, e.g. text-field, *-pattern
     const key = `${type}|${name}|${JSON.stringify(input)}|${JSON.stringify(globalState)}`;
-    let expr = parsed.get(key);
-    if (expr === undefined) {
+    const expr = cached(parsed, key, () => {
       try {
         // An operator the bundled evaluator has never heard of does NOT throw: the array is taken for a
         // literal value (verified). An array with a string head, on a property that is not array-typed,
         // that is not a known expression, is an expression from the future.
         const fromTheFuture = Array.isArray(input) && typeof input[0] === 'string' && propSpec.type !== 'array' && !styleExpression.isExpression(input);
-        // `within` / `distance` evaluate to false / NaN without the tile geometry — a wrong answer, not an unknown one.
-        const geometry = needsGeometry(input);
-        if (geometry) unparseable.set(`${f.layer}: ${name}`, geometry);
-        expr = fromTheFuture || geometry ? UNPARSEABLE : normalizePropertyExpression(input, name, propSpec as any, globalState);
+        return fromTheFuture || needsGeometry(input) ? UNPARSEABLE : normalizePropertyExpression(input, name, propSpec as any, globalState);
       } catch {
-        expr = UNPARSEABLE;
+        return UNPARSEABLE;
       }
-      if (expr === UNPARSEABLE && !unparseable.has(`${f.layer}: ${name}`)) unparseable.set(`${f.layer}: ${name}`, 'newer');
-      parsed.set(key, expr);
+    });
+    if (expr === UNPARSEABLE) {
+      // `within` / `distance` evaluate to false / NaN without the tile geometry — a wrong answer, not an unknown one.
+      caveatsOf(map).unparseable.set(`${f.layer}: ${name}`, { why: needsGeometry(input) ?? 'newer', layer: f.layer, group, name, input: JSON.stringify(raw) });
+      return undefined;
     }
-    return expr === UNPARSEABLE ? undefined : expr;
+    return expr;
   };
 
   const state = (f.state ?? {}) as any;
@@ -216,21 +233,48 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
 }
 
 /**
- * Properties the bundled evaluator cannot answer for: an expression it could not parse (the app runs a newer MapLibre
- * than the style-spec we ship: 'newer'), or one that uses `within` / `distance`, which need the feature's tile
- * geometry ('within' / 'distance'). For those the visibility answer degrades to "visible" — safe, but weaker, and it
- * must not be silent: diagnostics print this list once.
+ * What the evaluator could not answer with confidence, per map (the caveats of one map are not another's), recorded as
+ * verdicts are made and listed as long as they are still true of that map (see the two functions below).
+ *  - `unparseable`: properties the bundled evaluator cannot answer for: an expression it could not parse (the app runs
+ *    a newer MapLibre than the style-spec we ship: 'newer'), or one that uses `within` / `distance`, which need the
+ *    feature's tile geometry. For those the visibility answer degrades to "visible" — safe, but weaker, and it must not
+ *    be silent: diagnostics print this list once.
+ *  - `zoomUncertain`: zoom-and-data paint properties whose verdict was UNCERTAIN because tile zooms vary across the view
+ *    (pitch, terrain, globe): hidden at one tile zoom, drawn at another. Treated as visible, and said once.
  */
-const unparseable = new Map<string, 'newer' | 'within' | 'distance'>();
-export const unparseableProperties = (): string[] => [...unparseable.keys()];
-export const unparseableReasons = (): [property: string, why: 'newer' | 'within' | 'distance'][] => [...unparseable];
+type Unparseable = { why: 'newer' | 'within' | 'distance'; layer: string; group: 'paint' | 'layout'; name: string; input: string };
+const caveats = new WeakMap<object, { unparseable: Map<string, Unparseable>; zoomUncertain: Map<string, string> }>();
+const caveatsOf = (map: MlMap) => {
+  let c = caveats.get(map);
+  if (!c) caveats.set(map, (c = { unparseable: new Map(), zoomUncertain: new Map() }));
+  return c;
+};
 
-/**
- * Zoom-and-data paint properties whose verdict was UNCERTAIN because tile zooms vary across the view (pitch, terrain,
- * globe): hidden at one tile zoom, drawn at another. Treated as visible, and said once.
- */
-const zoomUncertain = new Set<string>();
-export const zoomUncertainProperties = (): string[] => [...zoomUncertain];
+/** Unparseable properties of this map whose layer still has the value that could not be parsed. */
+export function unparseableReasons(map: MlMap): [property: string, why: 'newer' | 'within' | 'distance'][] {
+  const list = caveatsOf(map).unparseable;
+  for (const [k, u] of list) {
+    let now: unknown;
+    try {
+      now = map.getLayer(u.layer) ? (u.group === 'paint' ? map.getPaintProperty(u.layer, u.name as any) : map.getLayoutProperty(u.layer, u.name as any)) : NaN;
+    } catch {
+      now = NaN; // cannot be read (any more)
+    }
+    if (JSON.stringify(now) !== u.input) list.delete(k);
+  }
+  return [...list].map(([k, u]) => [k, u.why]);
+}
+export const unparseableProperties = (map: MlMap): string[] => unparseableReasons(map).map(([p]) => p);
+
+/** Uncertain properties of this map whose layer is still there, in a view whose tile zooms still vary. */
+export function zoomUncertainProperties(map: MlMap): string[] {
+  const list = caveatsOf(map).zoomUncertain;
+  for (const [k, layer] of list) {
+    const l = map.getLayer(layer);
+    if (!l || !tileZoom(map, l.source).varies) list.delete(k);
+  }
+  return [...list.keys()];
+}
 
 /** A style property a verdict rests on. */
 type Prop = { group: 'paint' | 'layout'; name: string };
@@ -249,7 +293,7 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
   /** A hiding reason only if it hides in EVERY tile of the view (zoom-and-data paint where tile zooms vary). */
   const everywhere = (group: 'paint' | 'layout', name: string, hides: (v: any) => boolean): boolean => {
     if (ev.elsewhere(group, name).every(hides)) return true;
-    zoomUncertain.add(`${f.layer}: ${name}`);
+    caveatsOf(map).zoomUncertain.set(`${f.layer}: ${name}`, f.layer);
     return false;
   };
   const isZero = (v: any) => typeof v === 'number' && v <= 0;
@@ -382,16 +426,14 @@ const compiled = new Map<string, StyleExpression | null>();
 /** A PART of a style expression, evaluated by MapLibre's evaluator. `ok: false` when it cannot stand alone (a `var`) or throws. */
 function evalPart(json: unknown, propSpec: any, c: Ctx): { ok: true; value: any } | { ok: false } {
   const key = `${JSON.stringify(propSpec ?? null)}|${JSON.stringify(json)}|${JSON.stringify(c.globalState)}`;
-  let e = compiled.get(key);
-  if (e === undefined) {
+  const e = cached(compiled, key, () => {
     try {
       const r = styleExpression.createExpression(json, 'geowright', propSpec ?? null, c.globalState);
-      e = r.result === 'success' ? r.value : null;
+      return r.result === 'success' ? r.value : null;
     } catch {
-      e = null;
+      return null;
     }
-    compiled.set(key, e);
-  }
+  });
   if (!e) return { ok: false };
   try {
     return { ok: true, value: e.evaluateWithoutErrorHandling(c.globals as any, c.feature, c.state) };
@@ -585,15 +627,13 @@ export function filterAdmits(map: MlMap, f: RenderedFeature): boolean | undefine
     /* older MapLibre: no global state */
   }
   const key = `${JSON.stringify(raw)}|${JSON.stringify(globalState)}`;
-  let compiled = filters.get(key);
-  if (compiled === undefined) {
+  const compiled = cached(filters, key, () => {
     try {
-      compiled = featureFilter(raw as any, `layers.${f.layer}.filter`, globalState);
+      return featureFilter(raw as any, `layers.${f.layer}.filter`, globalState);
     } catch {
-      compiled = null;
+      return null;
     }
-    filters.set(key, compiled);
-  }
+  });
   if (!compiled || compiled.needGeometry) return undefined;
   const feature = { type: GEOM_TYPE[f.geometry.type] ?? 1, id: f.id, properties: f.properties };
   const t = tileZoom(map, layer.source);

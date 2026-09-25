@@ -1,6 +1,7 @@
 import { expect as baseExpect } from '@playwright/test';
 import { test } from './fixtures'; // the network guard and the slow-machine throttle
 import { geowright, expect } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /**
  * { moving: 'allow' } — acting on features that never stop moving (demo/moving.html: two patrol units
@@ -117,4 +118,37 @@ test.describe("moving: 'allow'", () => {
     await map.feature({ layer: 'parked', id: 9 }).click({ moving: 'allow' });
     await baseExpect(page.getByTestId('clicked')).toHaveText('P-9');
   });
+});
+
+// A moving target is resolved again when the press arrives. What the press may land on is still the ONE feature the
+// query resolves to then: here the query `{ layer: 'look' }` resolves to the only visible dot (id 1) when it is aimed
+// at, and at the instant of the press the app shows two others instead (one of them exactly under the pointer, above
+// the aimed one, which it hides). The query now matches two features; the press must not approve whichever of them is
+// under the pointer.
+test("moving: 'allow' — a press that arrives when the query matches several features is swallowed, not approved", async ({ map, page }) => {
+  await page.evaluate(() => {
+    const w = window as any;
+    const m = w.__geowright_maps.main;
+    const at = (x: number, y: number) => m.unproject([x, y]).toArray();
+    const dot = (id: number, o: number, c: number[]) => ({ type: 'Feature', id, properties: { kind: 'bus', o }, geometry: { type: 'Point', coordinates: c } });
+    m.addSource('look', { type: 'geojson', data: { type: 'FeatureCollection', features: [dot(1, 1, at(480, 360)), dot(2, 0, at(480, 360)), dot(3, 0, at(300, 250))] } });
+    // opacity from the feature-state when there is one: the app switches which dots are shown, synchronously
+    m.addLayer({ id: 'look', type: 'circle', source: 'look', paint: { 'circle-radius': 12, 'circle-color': '#0a6', 'circle-opacity': ['coalesce', ['feature-state', 'o'], ['get', 'o']] } });
+    w.__lookClicks = 0;
+    m.on('click', 'look', () => w.__lookClicks++);
+    let swapped = false;
+    // registered before any check the action arms: it runs first, as if the other dots arrived just then
+    window.addEventListener('pointerdown', () => {
+      if (swapped) return;
+      swapped = true;
+      m.setFeatureState({ source: 'look', id: 1 }, { o: 0 });
+      m.setFeatureState({ source: 'look', id: 2 }, { o: 1 });
+      m.setFeatureState({ source: 'look', id: 3 }, { o: 1 });
+    }, true);
+  });
+  await map.waitForIdle();
+  await expect(map.features({ layer: 'look' })).toHaveFeatureCount(1);
+  const err = await map.feature({ layer: 'look' }).click({ moving: 'allow', timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+  expect(await page.evaluate(() => (window as any).__lookClicks), 'the app got no click').toBe(0);
+  expect(err?.message).toContain('strict mode violation');
 });

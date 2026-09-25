@@ -2,7 +2,7 @@ import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl
 import { clientFrame, toSurface } from './engine';
 import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
-import type { InternalCanvasAdapter, ProbeResult, StyleCause } from './types-internal';
+import type { InternalCanvasAdapter, InternalRenderedFeature, ProbeResult, StyleCause } from './types-internal';
 
 /** A source that is not loaded right now: its type, whether its GeoJSON is inline (nothing to download), and how long
  *  it has been pending as far as this adapter has seen (the retries of one waitForIdle() share that clock). */
@@ -214,6 +214,22 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       }));
   }
 
+  /**
+   * MapLibre keeps a feature's id only if it is a non-negative integer: GeoJSON ids go through vt-pbf, which parses a
+   * string id as an integer and writes any number as an unsigned varint ('north-gate' -> 0, '4f3a' -> 4, -5 ->
+   * 18446744073709552000, 1.5 -> 1; Mapbox GL 1 and older MapLibre drop a non-numeric one), and a vector tile holds
+   * nothing else. With `promoteId` the rendered id is the property value itself.
+   */
+  idRoundTrips(layerId: string, id: string | number): boolean | undefined {
+    const layer = this.map.getLayer(layerId);
+    const source = layer?.source ? (this.map.getSource(layer.source) as { type?: string; promoteId?: unknown } | undefined) : undefined;
+    if (!layer || !source || (source.type !== 'geojson' && source.type !== 'vector')) return undefined;
+    const promoteId = source.promoteId; // public option, echoed on the source: a property name, or one per source-layer
+    if (typeof promoteId === 'string' || (promoteId && typeof promoteId === 'object' && layer.sourceLayer && (promoteId as Record<string, unknown>)[layer.sourceLayer])) return true;
+    const n = typeof id === 'number' ? id : /^(0|[1-9]\d*)$/.test(id) ? Number(id) : NaN;
+    return Number.isSafeInteger(n) && n >= 0;
+  }
+
   /** Layer ids, bottom to top. getLayersOrder() is MapLibre >= 3; the style has said the same thing since v1. */
   private layerIds(): string[] {
     return typeof this.map.getLayersOrder === 'function' ? this.map.getLayersOrder() : (this.map.getStyle()?.layers ?? []).map((l) => l.id);
@@ -420,12 +436,12 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   }
 
   caveats(): string[] {
-    const out = unparseableReasons().map(([p, why]) =>
+    const out = unparseableReasons(this.map).map(([p, why]) =>
       why === 'newer'
         ? `visibility unknown for layer ${p} — unsupported expression (newer than the bundled style-spec evaluator); treated as visible`
         : `visibility unknown for layer ${p} — "${why}" depends on the feature's tile geometry, which the style evaluator does not have; treated as visible`,
     );
-    for (const p of zoomUncertainProperties()) out.push(`visibility uncertain for layer ${p} — a zoom-and-data expression is drawn per tile zoom, and tile zooms vary across this view (pitch, terrain or globe); treated as visible where some tile zoom draws it`);
+    for (const p of zoomUncertainProperties(this.map)) out.push(`visibility uncertain for layer ${p} — a zoom-and-data expression is drawn per tile zoom, and tile zooms vary across this view (pitch, terrain or globe); treated as visible where some tile zoom draws it`);
     // What THIS version of the map library cannot do (feature-detected). Said once, in diagnostics and the snapshot.
     if (typeof this.map.redraw !== 'function') out.push('this map library version has no synchronous redraw(): the pixel probe renders through the frame loop instead (three real frames; the frame without the layer may be seen as a one-frame flicker)');
     if (this.geojsonWithoutData().length) out.push(`source(s) ${this.geojsonWithoutData().join(', ')}: this map library version has no GeoJSONSource.getData() and the source was given a URL — features outside the viewport and full geometries are unknowable (as for tiled sources)`);
@@ -594,10 +610,11 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   }
 }
 
-function toRendered(f: MapGeoJSONFeature): RenderedFeature {
+function toRendered(f: MapGeoJSONFeature): InternalRenderedFeature {
   return {
     layer: f.layer.id,
     source: f.source,
+    sourceLayer: f.sourceLayer || undefined,
     id: f.id,
     properties: (f.properties ?? {}) as Record<string, unknown>,
     geometry: f.geometry as Geometry,

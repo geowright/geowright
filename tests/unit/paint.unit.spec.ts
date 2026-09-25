@@ -52,7 +52,43 @@ test.describe('unsupported expressions (evaluator older than the app\'s MapLibre
     const map = fakeMap('circle', { 'circle-opacity': ['frobnicate-from-the-future', 1] });
     expect(paintVisibility(map, feature({}))).toEqual({ visible: true });
     paintVisibility(map, feature({ other: 1 }));
-    expect(unparseableProperties().filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
+    expect(unparseableProperties(map).filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
+  });
+});
+
+/** Caveats are about ONE map as it is now: not another map's, not a style the app has since changed. */
+test.describe('caveats belong to one map, and to its current style and view', () => {
+  test("another map's unsupported expression is not listed for this one", () => {
+    const a = fakeMap('circle', { 'circle-opacity': ['frobnicate-from-the-future', 2] });
+    const b = fakeMap('circle', { 'circle-opacity': 1 });
+    paintVisibility(a, feature({}));
+    paintVisibility(b, feature({}));
+    expect(unparseableProperties(a)).toContain('l: circle-opacity');
+    expect(unparseableProperties(b)).toEqual([]);
+  });
+
+  test('a caveat goes when the style property that caused it is changed, or its layer is removed', () => {
+    const paint: Record<string, unknown> = { 'circle-opacity': ['frobnicate-from-the-future', 3] };
+    const map = fakeMap('circle', paint);
+    paintVisibility(map, feature({}));
+    expect(unparseableProperties(map)).toEqual(['l: circle-opacity']);
+    paint['circle-opacity'] = 0.5; // the app set a plain value
+    expect(unparseableProperties(map)).toEqual([]);
+    paint['circle-opacity'] = ['frobnicate-from-the-future', 3];
+    paintVisibility(map, feature({}));
+    expect(unparseableProperties(map)).toEqual(['l: circle-opacity']);
+    map.getLayer = () => undefined; // the app removed the layer
+    expect(unparseableProperties(map)).toEqual([]);
+  });
+
+  test('"uncertain" goes when tile zooms no longer vary across the view', () => {
+    const opts = { zoom: 11.7, pitch: 75 };
+    const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, opts);
+    paintVisibility(map, feature({ o: 1 }));
+    expect(zoomUncertainProperties(map)).toEqual(['l: circle-opacity']);
+    expect(zoomUncertainProperties(fakeMap('circle', {}, {}, opts))).toEqual([]); // another map
+    opts.pitch = 0; // the camera levelled out
+    expect(zoomUncertainProperties(map)).toEqual([]);
   });
 });
 
@@ -232,18 +268,20 @@ test.describe('zoom-and-data paint is judged as the renderer draws it', () => {
   test('where tile zooms vary across the view (high pitch) it is uncertain: visible, and said once', () => {
     const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.7, pitch: 75 });
     expect(paintVisibility(map, feature({ o: 1 }))).toEqual({ visible: true });
-    expect(zoomUncertainProperties()).toContain('l: circle-opacity');
+    expect(zoomUncertainProperties(map)).toContain('l: circle-opacity');
     // hidden at EVERY tile zoom: still a confident "invisible"
     expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 30, ['get', 'o']] }, {}, { zoom: 11.7, pitch: 75 }), feature({ o: 1 })).visible).toBe(false);
   });
 
   test('`within` and `distance` need the tile geometry: not evaluable, so visible — and said once', () => {
     const area = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
-    expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 1, 0] }), feature({}))).toEqual({ visible: true });
-    expect(paintVisibility(fakeMap('line', { 'line-opacity': ['case', ['<', ['distance', { type: 'Point', coordinates: [0, 0] }], 100], 1, 0] }), feature({}))).toEqual({ visible: true });
+    const within = fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 1, 0] });
+    const distance = fakeMap('line', { 'line-opacity': ['case', ['<', ['distance', { type: 'Point', coordinates: [0, 0] }], 100], 1, 0] });
+    expect(paintVisibility(within, feature({}))).toEqual({ visible: true });
+    expect(paintVisibility(distance, feature({}))).toEqual({ visible: true });
     expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 0, 1] }), feature({}))).toEqual({ visible: true });
-    expect(unparseableProperties().filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
-    expect(unparseableReasons()).toContainEqual(['l: line-opacity', 'distance']);
+    expect(unparseableProperties(within).filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
+    expect(unparseableReasons(distance)).toContainEqual(['l: line-opacity', 'distance']);
   });
 });
 

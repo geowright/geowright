@@ -11,6 +11,10 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
   they silently ignored. Their options are `SteadyActionOptions`; passing `moving` throws an error pointing to
   `click()` / `tap()` / `hover()` on a feature, which verify a moving target when the input arrives. A value typed
   `ActionOptions` no longer fits them either, even one that never sets `moving`: type it `SteadyActionOptions`.
+- A `where` operand of the wrong kind is an error (TypeScript rejects most of these already): `in` that is not an array
+  (it did a substring match), `exists` that is not a boolean, `gt` / `gte` / `lt` / `lte` that is not a number,
+  `matches` / `flags` that is not a string, and an `undefined` value or operand (they matched nothing, so negative
+  assertions passed).
 
 **Fixed**
 - Locations just across the antimeridian (`clickAt` and the other location actions, `map.clientPoint()`, `draw.*`, a
@@ -37,6 +41,31 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
 - Features of a map inside an open shadow root (a web component) can be clicked and are listed as clickable by the
   snapshot; they were refused as covered by the host element.
 - `toHavePopup({ at | feature })`, `marker()` and `popup()` find overlays on a map under a CSS `transform: scale()`.
+- On a map larger than the browser window, a location outside the window is refused as "outside the browser window" by
+  `clickAt` and the other location actions (`force` included: it skips the cover checks, not reachability),
+  `map.clientPoint()`, and the destination of `dragTo` / `dragBy`. They pressed or released there, where the app never
+  got the input, or said "covered by a DOM element". `autoPan` may bring it into the window. The snapshot says
+  `outside-window` for such a feature, not `covered-by-dom`.
+- On a zoomed-out map (a second copy of the world can be on screen), one id-less feature from tiles is no longer counted
+  twice, or refused as a strict-mode violation, when its tile pieces straddle a multiple of the world's width on screen.
+- `lngLat()`, `info().lngLat` and `map.lngLatAt()` report lng in [-180, 180]: a point at lng -179.8 seen from lng 179.5
+  was reported at 180.2. A location action given the reported value still acts on the copy in view.
+- `click()`, `tap()` and `hover()` with `{ moving: 'allow' }` (and any click whose target could not be resolved when its
+  check was armed) swallow a press that arrives when the query matches more than one feature; the press approved
+  whichever match was under the pointer.
+- A query by a GeoJSON feature id that is not a non-negative integer (a string id such as a UUID, a negative or
+  fractional number) finds that feature. MapLibre draws such an id as another number, so the query matched nothing and
+  `.not.toHaveFeature({ id })` passed on a feature that is drawn; the same for `snapshot({ filter })`, `marker()`,
+  `popup()` and `toHavePopup({ feature })`. Look-alikes (same properties) whose ids MapLibre draws as one number are
+  counted, queried and clicked apart. On a tiled source, whose features can only have such ids through
+  `promoteId`, a query by one is an error that says so.
+- GeoJSON features with a `null` property: `geometry()` and `toHaveGeometry` read the full shape from the source again,
+  and the snapshot no longer lists them as "inside the view but not drawn individually" (MapLibre drops null properties
+  from what it draws).
+- Two features of one vector source with the same id and properties in different source-layers are two features: the one
+  drawn on top covers the other instead of counting as the same feature.
+- The "visibility unknown / uncertain for layer …" notes of failure messages and the snapshot are about this map as it is
+  now: not another map's, and not about a style value or a camera the app has changed since.
 
 ## 0.1.0 — 2026-09-27
 

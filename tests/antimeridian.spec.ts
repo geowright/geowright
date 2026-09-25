@@ -78,6 +78,20 @@ test.describe('antimeridian', () => {
     await expect(map.feature({ layer: 'am' })).not.toHaveGeometry({ type: 'Point', coordinates: [180.3, 0] }, { tolerancePx: 1 });
   });
 
+  test('the lng/lat reported for a place just across the antimeridian is in [-180, 180], and aims where it is drawn', async ({ map, page }) => {
+    await across(page);
+    await map.waitForIdle();
+    const dot = map.feature({ layer: 'am' });
+    // MapLibre unprojects the copy in view to 180.2; the data, and what the app's own events report wrapped, say -179.8
+    const ll = await dot.lngLat();
+    const info = (await dot.info()).lngLat!;
+    const back = await map.lngLatAt(await map.clientPoint({ lng: -179.8, lat: 0 }));
+    for (const v of [ll, info, back]) expect(Math.abs(v.lng - -179.8)).toBeLessThan(0.05);
+    // fed back into a location action, the reported value still acts on the copy in view
+    await map.clickAt(ll);
+    expect(await page.evaluate(() => (window as any).__amClicks)).toBe(1);
+  });
+
   test('without world copies there is no nearer copy: a location across the antimeridian is outside the view', async ({ map, page }) => {
     await across(page, { renderWorldCopies: false });
     await map.waitForIdle();

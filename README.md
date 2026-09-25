@@ -107,6 +107,12 @@ features integer ids, or copy the id into a property and name it in the source's
 with `where`.
 Handles are lazy: nothing is resolved until an action or assertion runs.
 
+`id` is the id in the app's data. MapLibre keeps a feature id only if it is a non-negative integer and draws any other
+(`'north-gate'`, a UUID, `-5`, `1.5`) as some other number, or none: on a GeoJSON source such an id is found through the source's
+data (look-alikes drawn with one number are told apart by where they are drawn); on a tiled source it can never match,
+and the query is an error that points to `promoteId`. A `where` operand of the wrong kind (`in` that is not an array,
+`exists` that is not a boolean, a bound that is not a number, an `undefined` value) is an error too.
+
 ### Visible by default
 
 MapLibre's `queryRenderedFeatures` also returns features painted with opacity 0, a transparent colour or zero size — so a
@@ -135,7 +141,8 @@ is id + properties, and id-less look-alikes are told apart by where they are dra
 
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map; never the target's own layer), `{ autoPan: true }`, `{ timeout }`, and
 `{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
-arrives late is swallowed before the app sees it — it can time out, it never clicks the wrong thing; `dragTo`, `dragBy`,
+arrives late, or when the query matches more than one feature, is swallowed before the app sees it — it can time out, it
+never clicks the wrong thing; `dragTo`, `dragBy`,
 `lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`…) have no such check and refuse the option). The reasoning and the measurements:
 [DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
 
@@ -237,7 +244,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 | `draw.polygon` `draw.line` `(vertices, { finish, vertexDelay? })` | `finish`: `click-last` (default) `click-first` `dblclick` `enter` `none` |
 | `draw.rectangle(a, b, opts?)` · `draw.circle(center, edge, opts?)` · `draw.cancel()` | `gesture`: `click-move-click` (default) or `drag`; Escape |
 | `marker(where)` · `popup(where?)` → `Promise<Locator>` | DOM overlays as normal Locators; `where`: `{ at?, feature?, tolerancePx? }` |
-| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel |
+| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel (waits for a pixel inside the browser window; the lng reported is in [-180, 180]) |
 
 | FeatureHandle (`map.feature(q)`) | |
 |---|---|
