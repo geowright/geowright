@@ -3,81 +3,6 @@
 Notable changes to geowright, newest first. While the version is 0.x a minor version may change the API; such changes
 are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.md`.
 
-## Unreleased
-
-**Changed**
-- **BREAKING (types):** the location actions (`clickAt`, `dblclickAt`, `rightClickAt`, `hoverAt`, `wheelAt`, `dragAt`,
-  `tapAt`, `doubleTapAt`, `touchDragAt`, `pinchAt`, `twoFingerRotateAt`) no longer accept `{ moving: 'allow' }`, which
-  they silently ignored. Their options are `SteadyActionOptions`; passing `moving` throws an error pointing to
-  `click()` / `tap()` / `hover()` on a feature, which verify a moving target when the input arrives. A value typed
-  `ActionOptions` no longer fits them either, even one that never sets `moving`: type it `SteadyActionOptions`.
-- A `where` operand of the wrong kind is an error (TypeScript rejects most of these already): `in` that is not an array
-  (it did a substring match), `exists` that is not a boolean, `gt` / `gte` / `lt` / `lte` that is not a number,
-  `matches` / `flags` that is not a string, and an `undefined` value or operand (they matched nothing, so negative
-  assertions passed).
-
-**Fixed**
-- `engines` says Node 22.12 or newer (was 22): the package is ES modules only, and a Playwright project that is not
-  `"type": "module"` compiles its tests to CommonJS, whose `require()` of an ES module works without a flag only from
-  Node 22.12.
-- Locations just across the antimeridian (`clickAt` and the other location actions, `map.clientPoint()`, `draw.*`, a
-  query's `at` and the snapshot's `filter.at`, `toHaveLayerPixels`, `toHaveGeometry`, `marker()` / `popup()` /
-  `toHavePopup({ at })`) are projected in the copy of the world the map draws in view: seen from lng
-  179.5, lng -179.8 is 0.7° east, not a whole world west. Such a location is no longer reported as hidden on a pitched
-  map.
-- Assertions (`toHaveFeature`, `toHaveFeatureCount`, `toBeVisibleOnMap`, `toHaveGeometry`, `toHavePopup`, `toHaveView`)
-  and `map.marker()` / `map.popup()` on a page that cannot answer fail at their timeout with "the page did not answer",
-  instead of when the page answers. A failed assertion no longer waits for such a page to describe the map.
-  `toBeVisibleOnMap`'s pixel probe is the exception: it still waits for the page to answer.
-- A feature action whose real input call throws (`click`, `tap`, `hover`, `dragTo`, `dragBy`) ends with that error,
-  instead of retrying and possibly sending the input twice.
-- `autoPan: true` no longer pans to a feature that the layer's `filter` never draws; the failure message says the filter
-  leaves it out.
-- `snapshot({ skipLayers })` / `({ layers })` no longer lists the layers it left out as "visible but empty".
-- Why-invisible messages name the expression branch of zoom-and-data paint properties, traced at the tile zoom MapLibre
-  draws them from.
-- The snapshot no longer counts an id-less feature as drawn just because a look-alike with the same properties is drawn
-  elsewhere.
-- `geometry()` and `toHaveGeometry` no longer take the shape from a data feature with the same properties that the
-  layer's `filter` never draws, and the check of how many look-alikes an id-less feature has counts only the ones the
-  filter draws.
-- Features of a map inside an open shadow root (a web component) can be clicked and are listed as clickable by the
-  snapshot; they were refused as covered by the host element.
-- `toHavePopup({ at | feature })`, `marker()` and `popup()` find overlays on a map under a CSS `transform: scale()`.
-- On a map larger than the browser window, a location outside the window is refused as "outside the browser window" by
-  `clickAt` and the other location actions (`force` included: it skips the cover checks, not reachability),
-  `map.clientPoint()`, and the destination of `dragTo` / `dragBy`. They pressed or released there, where the app never
-  got the input, or said "covered by a DOM element". `autoPan` may bring it into the window. The snapshot says
-  `outside-window` for such a feature, not `covered-by-dom`.
-- On a zoomed-out map (a second copy of the world can be on screen), one id-less feature from tiles is no longer counted
-  twice, or refused as a strict-mode violation, when its tile pieces straddle a multiple of the world's width on screen.
-- `lngLat()`, `info().lngLat` and `map.lngLatAt()` report lng in [-180, 180]: a point at lng -179.8 seen from lng 179.5
-  was reported at 180.2. A location action given the reported value still acts on the copy in view.
-- `click()`, `tap()` and `hover()` with `{ moving: 'allow' }` (and any click whose target could not be resolved when its
-  check was armed) swallow a press that arrives when the query matches more than one feature; the press approved
-  whichever match was under the pointer.
-- A query by a GeoJSON feature id that is not a non-negative integer (a string id such as a UUID, a negative or
-  fractional number) finds that feature. MapLibre draws such an id as another number, so the query matched nothing and
-  `.not.toHaveFeature({ id })` passed on a feature that is drawn; the same for `snapshot({ filter })`, `marker()`,
-  `popup()` and `toHavePopup({ feature })`. Look-alikes (same properties) whose ids MapLibre draws as one number are
-  counted, queried and clicked apart. On a tiled source, whose features can only have such ids through
-  `promoteId`, a query by one is an error that says so.
-- GeoJSON features with a `null` property: `geometry()` and `toHaveGeometry` read the full shape from the source again,
-  and the snapshot no longer lists them as "inside the view but not drawn individually" (MapLibre drops null properties
-  from what it draws).
-- Two features of one vector source with the same id and properties in different source-layers are two features: the one
-  drawn on top covers the other instead of counting as the same feature.
-- The "visibility unknown / uncertain for layer …" notes of failure messages and the snapshot are about this map as it is
-  now: not another map's, and not about a style value or a camera the app has changed since.
-- `snapshot({ filter })` takes a RegExp `where` value, like every other query; it threw in the page ("a where operator
-  object has no operator in it"). `SnapshotOptions['filter']` is typed as `FeatureQuery`, RegExp values included.
-- `toHaveView` on a map it could never ask (an unregistered `mapId`) says why (`no map registered as "…"`), instead of
-  "the map never came to rest (last seen: undefined)"; with no camera seen, it says "nothing seen".
-- A feature's `click()` and `tap()`, an `autoPan` pan (feature and location actions) and `lngLat()` fail at their
-  timeout on a page that stalls after the pixel was found, instead of waiting for it: arming the click-time check, the
-  pan and reading the lng/lat are abandoned at the deadline, like finding the pixel. A `{ moving: 'allow' }` click or
-  hover no longer waits for the page to disarm the check of an attempt that found no target.
-
 ## 0.1.0 — 2026-09-27
 
 The first published version.
@@ -92,16 +17,22 @@ as written (it adds types only).
   visible") is taken only from a map that has settled: idle, or seen to be one that never becomes idle. A matcher that
   cannot reach a verdict fails whichever way it is written, and says why: the map is not registered or was removed, a
   named layer does not exist (to assert that a layer was removed, check `map.layers()`), several features match where
-  one is required, the camera is moving (`toHavePopup`). A removed or 0×0 map is an error for `features(q).count()`
-  and `all()`, never an empty map.
+  one is required, the camera is moving (`toHavePopup`), the map was never registered (`toHaveView`). A removed or
+  0×0 map is an error for `features(q).count()` and `all()`, never an empty map. On a page too busy to answer, a
+  matcher, `map.marker()` and `map.popup()` fail at their timeout with "the page did not answer" (`toBeVisibleOnMap`'s
+  pixel probe is the exception: it waits for the page).
 - **Query** by `layer`, `layerType`, `source` (for layer ids a wrapper generates), `id`, `where` (equality, RegExp,
-  `eq ne gt gte lt lte in matches exists`; any other value, such as an array, an unknown operator or an operator object with none in it, is an error),
+  `eq ne gt gte lt lte in matches exists`; any other value, such as an array, an unknown operator or an operator object with none in it, is an error,
+  and so is an operand of the wrong kind: `in` that is not an array, `exists` that is not a boolean, a bound that is
+  not a number, `matches` / `flags` that is not a string, `undefined`),
   `at` a location (one on the far side of the globe or behind a mountain matches nothing). By default, queries match only what a user can SEE. The
   style's paint properties are evaluated for each feature, as the renderer draws them (a zoom-and-data expression at
   the tile zoom): opacity 0, a transparent colour and zero size do not count
   as visible. A layer's `visibility` (including a `visibility` expression, MapLibre 5.16+), `minzoom` and `maxzoom`
   are respected. `visible: 'any'` opts out. Features need no ids: identity is id + properties, and look-alikes are
-  told apart by where they are drawn.
+  told apart by where they are drawn. `id` is the id in the app's data: a GeoJSON id that MapLibre draws as another
+  number (a string such as a UUID, a negative or fractional number) is still found; on a tiled source, where only
+  `promoteId` can give a feature such an id, a query by one is an error that says so.
 - **Act** with real input only (`page.mouse` / keyboard / touchscreen, CDP for multi-touch, never `map.fire()`):
   `click`, `dblclick`, `rightClick`, `hover`, `tap` on a feature; the same at a location; `dragTo`, `dragBy`, `dragAt`,
   `wheelAt`, `keyboard.press`; `pinchAt`, `twoFingerRotateAt`, `touchDragAt`, `doubleTapAt` (Chromium). Draw helpers
@@ -111,13 +42,17 @@ as written (it adds types only).
   topmost visible hit, and not covered by a DOM element. For `click`, `dblclick`, `rightClick` and `tap`, the hit test
   runs again when the press arrives and must find the same feature (not a look-alike that slid under the pointer); a
   late press is swallowed, a tap's touch events included, and retried. A press that reached the app is never
-  sent again: not when the app re-creates its map in the click handler, not when the click navigates. Options: `force`,
+  sent again: not when the app re-creates its map in the click handler, not when the click navigates, not when the
+  input call itself throws (the action ends with that error). Options: `force`,
   `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for a feature that never stops moving, on `click`,
   `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never clicks the wrong
-  thing). `dragTo`, `dragBy` and `lngLat` refuse `moving`, in their types and at run time: they have no check when the
-  input arrives.
-  Works on rotated, pitched, globe and terrain maps, and inside a container scaled with CSS `transform: scale()`. A location on the far side of the globe or behind a mountain is
-  an error, never a click on something else.
+  thing). `dragTo`, `dragBy`, `lngLat` and the location actions (`clickAt`, `tapAt`, …; their options are
+  `SteadyActionOptions`) refuse `moving`, in their types and at run time: they have no check when the input arrives.
+  Works on rotated, pitched, globe and terrain maps, inside a container scaled with CSS `transform: scale()`, and in
+  an open shadow root (a web component). A location on the far side of the globe or behind a mountain is an error,
+  never a click on something else; so is a location outside the browser window on a map larger than it (`force`
+  included; `autoPan` may bring it in). A location just across the antimeridian is the one in the copy of the world
+  drawn in view (seen from lng 179.5, lng -179.8 is 0.7° east), and reported longitudes are in [-180, 180].
 - **When it fails, it says what WAS on the map**: the features per layer with their properties, the values of the
   property you asked about, and the reason. Reasons: not rendered, layer hidden, off-screen, occluded (naming the
   occluder), ambiguous, or not visible. For "not visible" it names the style property, its value, the expression
@@ -127,9 +62,10 @@ as written (it adds types only).
 - `waitForIdle()`, and when the map never becomes idle, why: an animated source, a source re-set in a loop, continuous
   repainting, tiles still loading, a moving camera, or a dead MapLibre web worker. Timeouts follow the test's own
   timeout (actions a third of it, at least 10 s; `waitForIdle()` two thirds; matchers use Playwright's expect timeout).
-  An action's timeout is wall-clock while it looks for its pixel, and for its failure report, even on a page too busy
-  to answer; a page that stalls after the pixel was found (arming `click()` / `tap()`'s check, an `autoPan` pan,
-  `lngLat()`, `dragBy()`) or after the input was sent can still hold it past its timeout. An action with several points
+  An action's timeout is wall-clock until its input is sent (finding its pixel, arming `click()` / `tap()`'s check,
+  an `autoPan` pan, `lngLat()`, and its failure report), even on a page too busy to answer. Real input is never
+  abandoned half-way: once it is sent, a feature's `click()` and `tap()`, and `hover()` with `moving: 'allow'`, wait
+  for the page to say where it landed, which a stalled page can hold past the timeout. An action with several points
   (a drag, a shape) has one timeout for all of them. As in Playwright, `timeout: 0` means no timeout.
 - DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element. They are found
   inside the map's container, also when a web component hosts the map in its shadow root.
@@ -148,7 +84,7 @@ as written (it adds types only).
   prints the hook for your wrapper (react-map-gl, `@vis.gl/react-maplibre`, svelte-maplibre-gl, vue-maplibre-gl). A whole
   `playwright.config` is written only where there is none; where there is one, `init` prints the two lines to add to it.
   `--dir` and `--url` take `--dir e2e` or `--dir=e2e`; a flag without its value is an error, not a guess.
-- Every example in the README and `docs/RECIPES.md` is type-checked and runs in the test suite.
+- Every runnable example in the README and `docs/RECIPES.md` is type-checked and runs in the test suite.
 - Tested against 33 apps its authors did not write: 23 MapLibre examples, plus 10 apps built on react-map-gl,
   svelte-maplibre-gl, vue-maplibre-gl, deck.gl's `MapboxOverlay` and PMTiles (`wild/`). If geowright does not work on
   your app, `wild/README.md` ("Bring your app") shows how it becomes one of them. Known limitations:
