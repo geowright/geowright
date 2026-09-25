@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0015) and a pinned UPSTREAM.md
- * with its one hook line (0016), its dist/ ships the notices of what it bundles (0015), each MapLibre example's
+ * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0020) and a pinned UPSTREAM.md
+ * with its one hook line (0016), its dist/ ships the notices of what it bundles (0020), each MapLibre example's
  * committed patch is the hook and nothing else (0016), and the `new` scaffold refuses a license outside the
  * allowlist. No network.
  */
@@ -283,9 +283,45 @@ test('a directory a fixture record names covers the data under it, not code: a s
   writeFileSync(join(tree, 'wild/fixtures/demotiles/planted.min.js'), '!function(){}();\n');
   const r = run(tree, 'check');
   expect(r.code).toBe(1);
-  expect(r.out).toContain('wild/fixtures/demotiles/planted.min.js: code, and not named by its path or file name in wild/fixtures/SOURCES.md');
+  expect(r.out).toContain('wild/fixtures/demotiles/planted.min.js: code, and not named by its path in wild/fixtures/SOURCES.md');
 
   writeFileSync(join(tree, 'wild/fixtures/sources/planted.md'), '| `demotiles/planted.min.js` | synthetic | first-party |\n');
+  expect(run(tree, 'check').code, 'named by its path: passes').toBe(0);
+});
+
+test('a fixture is recorded by its own path: a file name, or the tail of another path, that a record mentions is not enough', () => {
+  const tree = scratchTree();
+  mkdirSync(join(tree, 'wild/fixtures/newapp'), { recursive: true });
+  // Both names appear in the records, for other files: vendor/turf@7/turf.min.js and demotiles/style.json.
+  writeFileSync(join(tree, 'wild/fixtures/newapp/turf.min.js'), '!function(){}();\n');
+  writeFileSync(join(tree, 'wild/fixtures/newapp/style.json'), '{"version":8,"sources":{},"layers":[]}');
+  mkdirSync(join(tree, 'wild/fixtures/turf@7'), { recursive: true });
+  writeFileSync(join(tree, 'wild/fixtures/turf@7/turf.min.js'), '!function(){}();\n'); // the tail of vendor/turf@7/…
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('wild/fixtures/newapp/turf.min.js: code, and not named by its path');
+  expect(r.out).toContain('wild/fixtures/newapp/style.json: not named in wild/fixtures/SOURCES.md');
+  expect(r.out).toContain('wild/fixtures/turf@7/turf.min.js: code, and not named by its path');
+
+  writeFileSync(join(tree, 'wild/fixtures/sources/planted.md'),
+    '| `newapp/turf.min.js`, `newapp/style.json` | synthetic | first-party |\n| `turf@7/turf.min.js` | synthetic | first-party |\n');
+  expect(run(tree, 'check').code, 'each named by its path: passes').toBe(0);
+});
+
+test('every file under demo/public is named by its path in docs/THIRD_PARTY_NOTICES.md', () => {
+  const tree = scratchTree();
+  for (const p of ['demo/public', 'docs/THIRD_PARTY_NOTICES.md']) {
+    mkdirSync(dirname(join(tree, p)), { recursive: true });
+    cpSync(join(ROOT, p), join(tree, p), { recursive: true });
+  }
+  expect(run(tree, 'check').code, 'the committed demo/public: every file recorded').toBe(0);
+
+  writeFileSync(join(tree, 'demo/public/maplibre/planted.mjs'), 'export {};\n');
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('demo/public/maplibre/planted.mjs: not named by its path in docs/THIRD_PARTY_NOTICES.md');
+
+  writeFileSync(join(tree, 'docs/THIRD_PARTY_NOTICES.md'), readFileSync(join(tree, 'docs/THIRD_PARTY_NOTICES.md'), 'utf8') + '\n`demo/public/maplibre/planted.mjs`: synthetic.\n');
   expect(run(tree, 'check').code, 'named by its path: passes').toBe(0);
 });
 
@@ -360,12 +396,29 @@ for (const [kind, text, named] of [
     expect(r.code).toBe(1);
     expect(r.out).toContain(`REFUSED: ${license}:`);
     expect(r.out).toContain(named);
-    expect(r.out).toContain('Only MIT, BSD, ISC, Apache-2.0, CC0, Unlicense, EDL-1.0 (and OFL for fonts) can be vendored');
+    expect(r.out).toContain('Only MIT, BSD (0BSD too), ISC, Apache-2.0, CC0, Unlicense, EDL-1.0, the Unicode data license (and OFL for fonts) can be vendored');
     expect(r.out).toContain('Nothing was written.');
     expect(existsSync(join(tree, 'wild/apps/fake-app'))).toBe(false);
     expect(existsSync(join(tree, 'wild/fixtures/sources/fake-app.md'))).toBe(false);
     expect(existsSync(join(tree, 'tests/wild/fake-app.spec.ts'))).toBe(false);
     expect(readFileSync(join(tree, 'wild/fixtures/SOURCES.md'), 'utf8')).toBe(sourcesBefore);
+  });
+}
+
+// Decision 0020 adds these two to the list; both texts are recognised by their own wording (0BSD's is ISC's grant without
+// its notice condition, the Unicode data license's opens as MIT's does).
+for (const [kind, text] of [
+  ['0BSD (tslib)', 'Copyright (c) Microsoft Corporation.\n\nPermission to use, copy, modify, and/or distribute this software for any\npurpose with or without fee is hereby granted.\n\nTHE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES.\n'],
+  ['the Unicode data license', 'UNICODE LICENSE V3\n\nCOPYRIGHT AND PERMISSION NOTICE\n\nCopyright © 1991-2024 Unicode, Inc.\n\nPermission is hereby granted, free of charge, to any person obtaining a\ncopy of data files and any associated documentation (the "Data Files") or\nsoftware and any associated documentation (the "Software") to deal in the\nData Files or Software without restriction.\n'],
+] as const) {
+  test(`new accepts ${kind} (decision 0020)`, () => {
+    const tree = scratchTree();
+    const license = test.info().outputPath('upstream/LICENSE');
+    mkdirSync(dirname(license), { recursive: true });
+    writeFileSync(license, text);
+    const r = run(tree, 'new', 'fake-app', 'https://github.com/example/fake-app', SHA, license);
+    expect(r.out).not.toContain('REFUSED');
+    expect(existsSync(join(tree, 'wild/apps/fake-app/LICENSE'))).toBe(true);
   });
 }
 

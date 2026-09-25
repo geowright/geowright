@@ -33,7 +33,7 @@ export default defineConfig({
     sourcemap: false,
     emptyOutDir: true,
     // dist/ is committed and redistributed: ship the license text of every package the build bundles next to it
-    // (decision 0015; `node wild/scripts/apps.mjs check` fails without it).
+    // (decision 0020; `node wild/scripts/apps.mjs check` fails without it).
     license: { fileName: 'THIRD_PARTY_LICENSES.md' },
     rollupOptions: {
       input: resolve(__dirname, 'index.html')
