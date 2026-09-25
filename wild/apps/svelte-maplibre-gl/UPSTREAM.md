@@ -122,7 +122,9 @@ needed). `dist/` is self-contained; the only two entry HTML files (`dist/cluster
 `dist/hover-styles/index.html`) reference only same-directory hashed assets. `build.license` makes Vite write `dist/THIRD_PARTY_LICENSES.md`: the license text of every npm package the build bundles
 (`node wild/scripts/apps.mjs check` fails without it). The
 `svelte-maplibre-gl` npm package ships no license file, so a small plugin in `vite.config.js` puts this directory's
-`LICENSE-MIT.txt` and `LICENSE-APACHE.txt` (its repository's) under that package's heading.
+`LICENSE-MIT.txt` and `LICENSE-APACHE.txt` (its repository's) under that package's heading. Another adds Melt UI's
+MIT text after bits-ui's: bits-ui's slider, in the clusters chunk, "is adapted from the @melt-ui/svelte slider", and
+bits-ui's LICENSE carries only its own notice.
 
 ## Findings worth recording
 

@@ -143,8 +143,11 @@ MapLibre's build bundles into the two files. `copy-worker.mjs` therefore also wr
 each of those packages (in 6.10.0: `@mapbox/point-geometry`, `@mapbox/unitbezier`, `@mapbox/vector-tile`,
 `@maplibre/geojson-vt`, `@maplibre/maplibre-gl-style-spec`, `@maplibre/mlt` — `(MIT OR Apache-2.0)`, used under MIT —,
 `@maplibre/vt-pbf`, `bidi-js`, `earcut`, `gl-matrix`, `murmurhash-js`, `pbf`, `potpack`, `quickselect`, `tinyqueue`;
-ISC / BSD-2-Clause / BSD-3-Clause / MIT) and of the two files MapLibre copied into its own source with the notice in a
-comment (`grid-index`, `@mapbox/whoots-js`, both ISC). It fails if MapLibre's sources gain another such notice.
+ISC / BSD-2-Clause / BSD-3-Clause / MIT) and of the code MapLibre copied into its own source with the notice or the
+origin in a comment (`grid-index` and `@mapbox/whoots-js`, both ISC; `parseCacheControl()`'s regex, "Taken from
+[Wreck]", with `@hapi/wreck`'s BSD-3-Clause text). Code copied from `vector-tile-js` is covered by the bundled
+`@mapbox/vector-tile`'s text. It fails if MapLibre's sources gain another copyright line or a note on where code came
+from ("Taken from [X](…)", "Copied from https://…").
 
 ### `wild/` — apps, examples and fixtures we did not write
 
@@ -162,7 +165,9 @@ Vite lists `maplibre-gl` there as one package, so each app's build expands it (`
 maps of the installed copy: for 6.10.0 the list above plus `kdbush` and `@mapbox/tiny-sdf`, which its main file adds;
 5.13.0 and 3.6.2 a similar set, with `supercluster`, `geojson-vt`, `@mapbox/geojson-rewind`, `@mapbox/whoots-js` and
 `tslib` (0BSD). The main file of 5.13.0 and 6.10.0 also carries `DOM.sanitize()`, adapted from Chris Ferdinandi's
-"(c) 2021 Chris Ferdinandi, MIT License": listed with the MIT text. `check` fails on a notices file that lists
+"(c) 2021 Chris Ferdinandi, MIT License": listed with the MIT text; every MapLibre 3–6 build carries the Wreck regex
+(listed as above). svelte-maplibre-gl's clusters page bundles bits-ui's slider, "adapted from the @melt-ui/svelte
+slider": its notices add Melt UI's MIT text after bits-ui's (a plugin in its `vite.config.js`). `check` fails on a notices file that lists
 `maplibre-gl` without the packages every MapLibre 3–6 build bundles.
 `wild/fixtures/vendor/turf@7/turf.min.js` bundles JSTS, licensed `(EDL-1.0 OR EPL-1.0)` and used under EDL-1.0,
 and further MIT / ISC / BSD / Unlicense packages: their texts are in `wild/fixtures/vendor/turf@7/THIRD_PARTY_LICENSES.md`.
