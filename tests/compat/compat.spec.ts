@@ -106,6 +106,37 @@ for (const lib of LIBS) {
       expect(e, 'toBeVisibleOnMap passed for a feature that changes no pixel, because the pixels under it change by themselves').not.toBeNull();
     });
 
+    // hidden by `visibility`, the probed layer's source reloaded and the feature left the hit test for a while. Hidden
+    // by its opacity (with a zero transition, the app's own put back after) nothing reloads, on every version.
+    test('pixel probe: hides by opacity — no source reload, the feature is still in the hit test right after', async ({ map, page }) => {
+      await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('zones', 'fill-opacity-transition', { duration: 5000, delay: 0 }));
+      for (const [q, source] of [[{ layer: 'zones', id: 10 }, 'zones'], [{ layer: 'parcels', id: 500 }, 'parcels']] as const) {
+        await map.waitForIdle();
+        const r = await page.evaluate(
+          async ({ q, source }) => {
+            const m = (window as any).__geowright_maps.main;
+            let reloads = 0;
+            const onData = (e: { sourceId?: string; type: string; tile?: unknown }) => void (e.sourceId === source && (e.type === 'sourcedataloading' || e.tile) && reloads++);
+            m.on('sourcedataloading', onData);
+            m.on('sourcedata', onData);
+            const p = await (window as any).__geowright.pixelProbe('main', q);
+            if (!p.ok) throw new Error(p.message);
+            const hitRightAfter = m.queryRenderedFeatures([p.surface.x, p.surface.y], { layers: [q.layer] }).length > 0;
+            const loadedRightAfter = m.isSourceLoaded(source);
+            await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+            m.off('sourcedataloading', onData);
+            m.off('sourcedata', onData);
+            return { drawn: p.diff > 0, hitRightAfter, loadedRightAfter, reloads };
+          },
+          { q, source },
+        );
+        baseExpect({ layer: q.layer, ...r }).toEqual({ layer: q.layer, drawn: true, hitRightAfter: true, loadedRightAfter: true, reloads: 0 });
+      }
+      // put back: MapLibre right after its synchronous redraw(), Mapbox GL 1 after the next frame
+      const paint = () => page.evaluate(() => ['fill-opacity', 'fill-opacity-transition'].map((p) => (window as any).__geowright_maps.main.getPaintProperty('zones', p)));
+      await baseExpect.poll(paint).toEqual([0.8, { duration: 5000, delay: 0 }]);
+    });
+
     // style evaluation on every version — zoom- and feature-state-driven paint, a legacy { stops } function, promoteId.
     test('style evaluation: zoom and feature-state paint, legacy stops, promoteId', async ({ map, page }) => {
       await page.evaluate(() => {

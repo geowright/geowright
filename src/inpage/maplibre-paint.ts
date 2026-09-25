@@ -579,6 +579,46 @@ export function layoutVisible(map: MlMap, layerId: string): boolean {
   return layoutVisibility(map, layerId).value !== 'none';
 }
 
+/** The paint properties that, all at 0, make a layer of that type draw nothing. */
+const OPACITY_PROPERTIES: Record<string, string[]> = {
+  fill: ['fill-opacity'],
+  line: ['line-opacity'],
+  circle: ['circle-opacity', 'circle-stroke-opacity'],
+  symbol: ['icon-opacity', 'text-opacity'],
+  'fill-extrusion': ['fill-extrusion-opacity'],
+};
+
+/**
+ * The opacity properties the pixel probe can set to 0 to hide this layer WITHOUT MapLibre reloading its source. A paint
+ * change reloads the source only when the old or the new value is data-driven (feature properties or feature-state) or
+ * cross-faded — StyleLayer.setPaintProperty, the same in MapLibre 2–6 and Mapbox GL 1 — while `visibility: none` always
+ * does, and the tiles that come back from that reload lack the layer. Undefined when the type has no such
+ * properties, or one of them is data-driven or cannot be read: then only `visibility` can hide the layer.
+ */
+export function reloadFreeOpacity(map: MlMap, layerId: string): string[] | undefined {
+  const type = map.getLayer(layerId)?.type;
+  const names = type ? OPACITY_PROPERTIES[type] : undefined;
+  if (!names) return undefined;
+  for (const name of names) {
+    let raw: unknown;
+    try {
+      raw = map.getPaintProperty(layerId, name as any);
+    } catch {
+      return undefined;
+    }
+    if (raw === undefined || raw === null || typeof raw === 'number') continue;
+    // an operator the bundled evaluator does not know would be read as a literal (see evaluatorFor): unknown, not constant
+    if (Array.isArray(raw) && typeof raw[0] === 'string' && !styleExpression.isExpression(raw)) return undefined;
+    try {
+      const kind = (normalizePropertyExpression(raw as any, name, spec[`paint_${type}`][name]) as { kind?: string }).kind;
+      if (kind !== 'constant' && kind !== 'camera') return undefined;
+    } catch {
+      return undefined;
+    }
+  }
+  return names;
+}
+
 /**
  * Why the style draws NOTHING of a layer at the current camera: the zoom is outside minzoom–maxzoom (MapLibre hides
  * a layer when zoom < minzoom or zoom >= maxzoom), or layout `visibility` is "none" — a constant, or (MapLibre

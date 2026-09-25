@@ -3,6 +3,14 @@
 Notable changes to geowright, newest first. While the version is 0.x a minor version may change the API; such changes
 are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.md`.
 
+## Unreleased
+
+**Fixed**
+- The pixel probe (`toBeVisibleOnMap`, `toHaveLayerPixels`) hides the probed layer by setting its opacity to 0 instead
+  of its `visibility` to `none`. MapLibre no longer reloads the layer's source after a probe, and the feature no longer
+  drops out of the rendering and the hit test for a moment afterwards. A layer whose opacity is data-driven is still
+  hidden by `visibility`, and its source still reloads.
+
 ## 0.1.0 — 2026-09-27
 
 The first published version.

@@ -374,20 +374,34 @@ Measured warm, on a quiet machine, this costs on the order of 25–27 ms per pro
 measured at 205 ms, attributable to a source reload the first probe triggers, discussed next); an
 early, informal measurement taken while the machine was under heavy unrelated load suggested
 85–180 ms, which is the number to distrust. The probe has two real costs beyond time: it fires
-MapLibre's `styledata` event and causes the layer's source to reload afterward, so an application with
-its own `styledata` listeners will see that; and the differential it measures is per *layer* at a
-pixel, not per feature, so a second feature from the same layer under the same pixel confounds it.
+MapLibre's `styledata` event, so an application with its own `styledata` listeners will see that; and the
+differential it measures is per *layer* at a pixel, not per feature, so a second feature from the same layer under
+the same pixel confounds it.
+
+How it hides the layer matters. With `visibility: none`, MapLibre reloads the layer's source (every source type
+but raster), and the tiles that come back from that reload lack the layer: right after the probe the feature was
+missing from the rendering and from the hit test, for 10–60 ms on a quiet machine and more under load, until the
+reload after the restore landed — on MapLibre 2 and 6 and Mapbox GL 1, GeoJSON and vector tiles alike. A **paint**
+change reloads the source only when the old or the new value is data-driven (feature properties or feature-state) or
+cross-faded (`StyleLayer.setPaintProperty`, the same in all of them). So the probe hides the layer by setting its
+opacity properties to 0 (`fill-opacity`; `line-opacity`; `circle-opacity` and `circle-stroke-opacity`; `icon-opacity`
+and `text-opacity`; `fill-extrusion-opacity`) with a zero transition, puts back the app's values, and puts back the
+app's transitions only after a frame has drawn the restored value (earlier, the restore itself would fade in). Nothing
+reloads and the feature never leaves the hit test (`tests/visibility.spec.ts`, and the compat matrix on every
+version).
+Only a layer whose opacity is data-driven (or a type without one) is still hidden by
+`visibility`, and pays the reload.
 
 Three corrections to the probe. It reads the layer-on pixels **twice**: if they differ, something else is
 changing the pixels there (a fade, an animation under the feature, a camera that never stops), and hiding the layer
 counts only if it changes them clearly more (more than twice the control difference); otherwise there is no verdict
 yet. (A first version refused any control difference and turned "the trace is visible" on MapLibre's forever-panning
-realtime example into "no verdict"; a camera drifting a few pixels between reads is noise, a yellow line is signal.) (A control after the restore does not work: the layer is not drawn again until its source has reloaded.
+realtime example into "no verdict"; a camera drifting a few pixels between reads is noise, a yellow line is signal.) (A control after the restore does not work where the layer was hidden by `visibility`: it is not drawn again until its source has reloaded.
 MapLibre 2–4 advance a paint transition only on a style change — the probe's own hide is one — so there a transition in
 progress under the feature can still pass for a contribution.) Without `redraw()` (Mapbox GL JS v1) the reads are real frames: their wait is budgeted from the matcher's
 remaining time, and a frame that does not come is "not yet", never a silent pass on paint alone. And
 `toBeVisibleOnMap` runs it once per verdict, as intended: a conclusive result is reused while the feature looks the same
-(re-probed after 1, 2, 4… s), instead of reloading the source on every poll of a waiting `.not`. The restore puts back
+(re-probed after 1, 2, 4… s), instead of re-rendering the map four times on every poll of a waiting `.not`. The restore puts back
 what the app had only if the layer is still hidden by the probe; an app that hides the same layer in the frames between
 (Mapbox GL v1) cannot be told apart from the probe and is still undone.
 

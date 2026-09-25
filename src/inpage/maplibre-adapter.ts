@@ -1,6 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
 import { clientFrame, toSurface } from './engine';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
 import type { InternalCanvasAdapter, InternalRenderedFeature, ProbeResult, StyleCause } from './types-internal';
 
@@ -460,14 +460,15 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
    * Pixel probe. A WebGL canvas without preserveDrawingBuffer reads back zeros — except in the
    * same task as the draw. `redraw()` (public, MapLibre >= 2) renders synchronously, so: draw, read, draw, read again
    * (the CONTROL), hide the layer, draw, read, restore, draw. All in one task, so the intermediate frame is never
-   * composited (no flicker). Costs four renders (~50ms each on SwiftShader), fires 'styledata'
-   * and makes MapLibre reload the layer's source afterwards — a probe, not something to run per poll.
+   * composited (no flicker). Costs four renders (~50ms each on SwiftShader) and fires 'styledata' — a probe, not
+   * something to run per poll. The layer is hidden by its opacity; only where that is data-driven (or the type has
+   * none) by `visibility`, and then MapLibre reloads the layer's source afterwards (see hide below).
    *
    * The control read: the "with" and "without" reads are compared, and pixels that change BY THEMSELVES (a
    * fade, an animation under the feature, a camera that never stops) would pass for the layer's contribution. So the
    * layer-on pixels are read twice, and hiding the layer must change them by clearly more than they change by
    * themselves (signal against noise); otherwise there is no verdict yet: inconclusive. Not a control after the
-   * restore: the layer is not drawn again until its source has reloaded. MapLibre 2–4 advance a paint transition only
+   * restore: hidden by `visibility`, the layer is not drawn again until its source has reloaded. MapLibre 2–4 advance a paint transition only
    * on a style change — the probe's own hide is one — so there a transition in progress under the feature can still
    * pass for a contribution.
    *
@@ -507,16 +508,42 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       control === 0 || diff > 2 * control
         ? { diff }
         : { inconclusive: `the pixels there changed by ${control} between two reads with the layer drawn, and hiding the layer changed them by ${diff}, not clearly more than that — something is animating or still fading in there` };
+    // Hide the layer by its opacity where that reloads nothing (reloadFreeOpacity): hidden by `visibility: none`, the
+    // layer's source reloads, and the tiles that come back lack the layer, so right after the probe the feature is
+    // missing from the rendering and the hit test until a second reload lands. Set with a zero transition, so the
+    // hide and the restore are instant; the app's transitions go back only after a frame has drawn the restored value
+    // (before that, the restore itself would fade in). An opacity transition the app had in progress ends at its target.
+    const opacity = reloadFreeOpacity(this.map, layer);
+    const saved: { name: string; value: unknown; transition: unknown }[] = [];
     // Put back what the app had: since MapLibre 5.16 visibility may be an EXPRESSION on global state, and writing back
     // the constant "visible" replaced it (and turned on a layer the app had hidden). Read right before hiding, and put
-    // back only if it is still the probe's own "none" (the app may have set something else in between).
+    // back only if it is still the probe's own value (the app may have set something else in between).
     let restore: unknown;
     const hide = () => {
-      restore = this.map.getLayoutProperty(layer, 'visibility') ?? 'visible';
-      this.map.setLayoutProperty(layer, 'visibility', 'none');
+      if (!opacity) {
+        restore = this.map.getLayoutProperty(layer, 'visibility') ?? 'visible';
+        this.map.setLayoutProperty(layer, 'visibility', 'none');
+        return;
+      }
+      for (const name of opacity) {
+        saved.push({ name, value: this.map.getPaintProperty(layer, name as any), transition: this.map.getPaintProperty(layer, `${name}-transition` as any) });
+        this.map.setPaintProperty(layer, `${name}-transition` as any, { duration: 0, delay: 0 });
+        this.map.setPaintProperty(layer, name as any, 0);
+      }
     };
     const unhide = () => {
-      if (this.map.getLayoutProperty(layer, 'visibility') === 'none') this.map.setLayoutProperty(layer, 'visibility', restore as any);
+      if (!opacity) {
+        if (this.map.getLayoutProperty(layer, 'visibility') === 'none') this.map.setLayoutProperty(layer, 'visibility', restore as any);
+        return;
+      }
+      for (const s of saved) if (this.map.getPaintProperty(layer, s.name as any) === 0) this.map.setPaintProperty(layer, s.name as any, s.value);
+    };
+    const restoreTransitions = () => {
+      if (!this.map.getLayer(layer)) return;
+      for (const s of saved) {
+        const t = this.map.getPaintProperty(layer, `${s.name}-transition` as any) as { duration?: number; delay?: number } | undefined;
+        if (t?.duration === 0 && t.delay === 0) this.map.setPaintProperty(layer, `${s.name}-transition` as any, s.transition);
+      }
     };
     if (typeof this.map.redraw === 'function') {
       const read = () => (this.map.redraw(), grab());
@@ -529,6 +556,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       } finally {
         unhide();
         this.map.redraw();
+        restoreTransitions();
       }
       return verdict(difference(first, withLayer), difference(withLayer, without));
     }
@@ -552,6 +580,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         without = await frame();
       } finally {
         unhide();
+        if (saved.length) this.map.once('render', restoreTransitions);
         this.map.triggerRepaint();
       }
       return without ? verdict(difference(first, withLayer), difference(withLayer, without)) : late;

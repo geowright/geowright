@@ -156,11 +156,11 @@ test.describe('visibility', () => {
   test('a waiting .not.toBeVisibleOnMap does not re-probe on every poll', async ({ map, page }) => {
     await page.evaluate(() => {
       const m = (window as any).__geowright_maps.main;
-      const set = m.setLayoutProperty;
+      const set = m.setPaintProperty;
       (window as any).__probes = 0;
-      // counted, not changed: the probe hides the layer with exactly this call
-      m.setLayoutProperty = function (layer: string, name: string, value: unknown, ...rest: unknown[]) {
-        if (layer === 'alerts' && name === 'visibility' && value === 'none') (window as any).__probes++;
+      // counted, not changed: the probe hides the layer with exactly this call (its opacity is not data-driven)
+      m.setPaintProperty = function (layer: string, name: string, value: unknown, ...rest: unknown[]) {
+        if (layer === 'alerts' && name === 'circle-opacity' && value === 0) (window as any).__probes++;
         return set.call(this, layer, name, value, ...rest);
       };
     });
@@ -249,3 +249,127 @@ test.describe('the paint evaluator agrees with the renderer', () => {
   });
 });
 
+
+/**
+ * The pixel probe hides the layer by its opacity. Hidden by `visibility: none`, MapLibre reloads the layer's
+ * source, and the tiles that come back lack the layer: right after the probe the feature was missing from the hit test.
+ * A paint change reloads nothing unless the value is data-driven; only then does the probe still hide by visibility.
+ */
+test.describe('the pixel probe hides a layer by its opacity', () => {
+  test.beforeEach(async ({ page, map }) => {
+    await page.getByTestId('toggle-sensors').check();
+    await map.waitForIdle();
+  });
+
+  type Q = { layer: string; id: number };
+  /** Probe `q` (as toBeVisibleOnMap does) and say what the probed source did, and what the hit test sees right after. */
+  const probe = (page: import('@playwright/test').Page, q: Q, source: string) =>
+    page.evaluate(
+      async ({ q, source }) => {
+        const m = (window as any).__geowright_maps.main;
+        // a reload shows as 'sourcedataloading' (tiled sources) or as tiles arriving again ('sourcedata' with a tile)
+        let reloads = 0;
+        const onLoading = (e: { sourceId?: string; type: string; tile?: unknown }) => void (e.sourceId === source && (e.type === 'sourcedataloading' || e.tile) && reloads++);
+        m.on('sourcedataloading', onLoading);
+        m.on('sourcedata', onLoading);
+        const r = await (window as any).__geowright.pixelProbe('main', q);
+        if (!r.ok) throw new Error(`${q.layer} ${q.id}: ${r.message}`);
+        const hitRightAfter = m.queryRenderedFeatures([r.surface.x, r.surface.y], { layers: [q.layer] }).length > 0;
+        const loadedRightAfter = m.isSourceLoaded(source);
+        await new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done)));
+        m.off('sourcedataloading', onLoading);
+        m.off('sourcedata', onLoading);
+        return { drawn: r.diff > 0, hitRightAfter, loadedRightAfter, reloads };
+      },
+      { q, source },
+    );
+
+  // its own source and footprint: extruded over the parcels, it would hide them (and the probe would rightly say so)
+  const addExtrusion = (page: import('@playwright/test').Page) =>
+    page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const box = [[34.74, 32.1], [34.746, 32.1], [34.746, 32.104], [34.74, 32.104], [34.74, 32.1]];
+      m.addSource('blocks', { type: 'geojson', data: { type: 'Feature', id: 88, properties: {}, geometry: { type: 'Polygon', coordinates: [box] } } });
+      m.addLayer({ id: 'blocks', type: 'fill-extrusion', source: 'blocks', paint: { 'fill-extrusion-color': '#37474f', 'fill-extrusion-height': 40 } });
+    });
+  const TARGETS = [
+    { q: { layer: 'parcels', id: 101 }, source: 'parcels', opacity: 'fill-opacity', what: 'GeoJSON fill' },
+    { q: { layer: 'buildings', id: 1013 }, source: 'buildings', opacity: 'fill-opacity', what: 'vector-tile fill' },
+    { q: { layer: 'roads', id: 201 }, source: 'roads', opacity: 'line-opacity', what: 'line' },
+    { q: { layer: 'alerts', id: 1 }, source: 'alerts', opacity: 'circle-opacity', what: 'circle' },
+    { q: { layer: 'stations-points', id: 329 }, source: 'stations', opacity: 'icon-opacity', what: 'symbol (icon)' },
+    { q: { layer: 'blocks', id: 88 }, source: 'blocks', opacity: 'fill-extrusion-opacity', what: 'fill-extrusion' },
+  ];
+
+  test('a probe reloads no source, and the feature is still in the hit test right after it', async ({ map, page }) => {
+    await addExtrusion(page);
+    await map.waitForIdle();
+    for (const t of TARGETS) {
+      await map.waitForIdle();
+      expect({ target: t.what, ...(await probe(page, t.q, t.source)) }).toEqual({ target: t.what, drawn: true, hitRightAfter: true, loadedRightAfter: true, reloads: 0 });
+    }
+  });
+
+  test('hiding by opacity and hiding by visibility give the same verdict, for every layer type', async ({ map, page }) => {
+    await addExtrusion(page);
+    // not fill-extrusion: its opacity cannot be data-driven, so it is always hidden by opacity — and at 0 MapLibre 2–6 and
+    // Mapbox GL 1 return from drawing it before drawing anything, as for a hidden layer
+    const cases = [
+      ...TARGETS.filter((t) => t.what !== 'fill-extrusion').map((t) => ({ ...t, drawn: true })),
+      { q: { layer: 'sensors-ghost', id: 504 }, source: 'sensors', opacity: 'icon-opacity', what: 'a transparent icon', drawn: false },
+    ];
+    for (const t of cases) {
+      await map.waitForIdle();
+      const byOpacity = await probe(page, t.q, t.source);
+      // the same value, made data-driven: now only `visibility` can hide the layer, and the source reloads
+      await page.evaluate(({ layer, opacity }) => {
+        const m = (window as any).__geowright_maps.main;
+        m.setPaintProperty(layer, opacity, ['coalesce', ['get', '__not_a_property'], m.getPaintProperty(layer, opacity) ?? 1]);
+      }, { layer: t.q.layer, opacity: t.opacity });
+      await map.waitForIdle();
+      const byVisibility = await probe(page, t.q, t.source);
+      expect({ target: t.what, byOpacity: byOpacity.drawn, byVisibility: byVisibility.drawn, visibilityReloaded: byVisibility.reloads > 0 }).toEqual({ target: t.what, byOpacity: t.drawn, byVisibility: t.drawn, visibilityReloaded: true });
+    }
+  });
+
+  test('the probe puts back the opacity and its transition, and the layer is drawn at full opacity right after', async ({ map, page }) => {
+    const paint = {
+      'circle-radius': 14,
+      'circle-color': '#6a1b9a',
+      'circle-opacity': 0.9,
+      'circle-opacity-transition': { duration: 5000, delay: 0 },
+      'circle-stroke-width': 3,
+      'circle-stroke-color': '#000',
+      'circle-stroke-opacity': ['interpolate', ['linear'], ['zoom'], 0, 1, 22, 0.8], // zoom-only: still no reload
+    };
+    await page.evaluate((paint) => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('fade', { type: 'geojson', data: { type: 'Feature', id: 77, properties: {}, geometry: { type: 'Point', coordinates: [34.745, 32.075] } } });
+      m.addLayer({ id: 'fade', type: 'circle', source: 'fade', paint });
+    }, paint);
+    await map.waitForIdle();
+    const first = await probe(page, { layer: 'fade', id: 77 }, 'fade');
+    const after = await page.evaluate(async () => {
+      const m = (window as any).__geowright_maps.main;
+      // a second probe right away: had the restore faded in (over the app's 5 s), the layer would be drawn fainter now
+      const diffs = [];
+      for (let i = 0; i < 2; i++) diffs.push((await (window as any).__geowright.pixelProbe('main', { layer: 'fade', id: 77 })).diff);
+      const read = (p: string) => m.getPaintProperty('fade', p);
+      return {
+        sameDiff: diffs[0] === diffs[1],
+        'circle-opacity': read('circle-opacity'),
+        'circle-opacity-transition': read('circle-opacity-transition'),
+        'circle-stroke-opacity': read('circle-stroke-opacity'),
+        'circle-stroke-opacity-transition': read('circle-stroke-opacity-transition') ?? null,
+      };
+    });
+    expect(first).toEqual({ drawn: true, hitRightAfter: true, loadedRightAfter: true, reloads: 0 });
+    expect(after).toEqual({
+      sameDiff: true,
+      'circle-opacity': 0.9,
+      'circle-opacity-transition': { duration: 5000, delay: 0 },
+      'circle-stroke-opacity': paint['circle-stroke-opacity'],
+      'circle-stroke-opacity-transition': null,
+    });
+  });
+});
