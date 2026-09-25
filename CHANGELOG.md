@@ -66,6 +66,14 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
   drawn on top covers the other instead of counting as the same feature.
 - The "visibility unknown / uncertain for layer …" notes of failure messages and the snapshot are about this map as it is
   now: not another map's, and not about a style value or a camera the app has changed since.
+- `snapshot({ filter })` takes a RegExp `where` value, like every other query; it threw in the page ("a where operator
+  object has no operator in it"). `SnapshotOptions['filter']` is typed as `FeatureQuery`, RegExp values included.
+- `toHaveView` on a map it could never ask (an unregistered `mapId`) says why (`no map registered as "…"`), instead of
+  "the map never came to rest (last seen: undefined)"; with no camera seen, it says "nothing seen".
+- A feature's `click()` and `tap()`, an `autoPan` pan (feature and location actions) and `lngLat()` fail at their
+  timeout on a page that stalls after the pixel was found, instead of waiting for it: arming the click-time check, the
+  pan and reading the lng/lat are abandoned at the deadline, like finding the pixel. A `{ moving: 'allow' }` click or
+  hover no longer waits for the page to disarm the check of an attempt that found no target.
 
 ## 0.1.0 — 2026-09-27
 

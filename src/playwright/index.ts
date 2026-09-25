@@ -16,17 +16,23 @@ import type {
   LngLat,
   Overlay,
   PixelPoint,
-  SnapshotOptions,
+  SnapshotOptions as WireSnapshotOptions,
   WhereOp,
   WhereValue,
 } from '../inpage/types.js'; // explicit extension: the published .d.ts must resolve under moduleResolution nodenext
 
 // Every type a public signature names is importable from 'geowright'.
-export type { ActionPointOptions, Geometry, GeometryExpectation, LayerInfo, LngLat, PixelPoint, SnapshotOptions, WhereOp, WhereValue };
+export type { ActionPointOptions, Geometry, GeometryExpectation, LayerInfo, LngLat, PixelPoint, WhereOp, WhereValue };
 
 /** Query as written in tests: like the wire format, but `where` values may also be a RegExp. */
 export interface FeatureQuery extends Omit<WireQuery, 'where'> {
   where?: Record<string, WhereValue | RegExp | WhereOp>;
+}
+
+/** Options of `map.snapshot()`. */
+export interface SnapshotOptions extends Omit<WireSnapshotOptions, 'filter'> {
+  /** List only entities matching this query — how to find one feature among thousands of look-alikes. */
+  filter?: FeatureQuery;
 }
 
 export interface FeatureSummary extends Omit<WireSummary, 'world'> {
@@ -423,6 +429,17 @@ export class MapHandle {
   }
 
   /**
+   * @internal `_answerBy` for arming a click-time (hover-time) check. No input has left yet, so the wait is abandoned at
+   * `deadline` like a query's; the page arms the check all the same whenever it gets to it, and it is disarmed then.
+   */
+  _armBy(deadline: number, method: string, arming: Promise<string>): Promise<string> {
+    return this._answerBy(deadline, method, arming).catch((e) => {
+      if (e instanceof DeadlineError) arming.then((token) => void this._disarm(token), () => {}); // armed after all, later
+      throw e;
+    });
+  }
+
+  /**
    * @internal Ends a click-time (hover-time) check and returns what it saw. `undefined`: the check is gone with the page
    * it was armed in — the input navigated, so the round trip failed or reached a fresh page. Real input left, so it is
    * taken as DELIVERED, as Playwright takes a click that navigates: it must never be sent again.
@@ -521,8 +538,8 @@ export class MapHandle {
   }
 
   /** Text snapshot of the map for humans and LLM agents (the canvas analogue of an aria snapshot). */
-  snapshot(opts?: SnapshotOptions): Promise<string> {
-    return this._call('snapshot', opts ?? {});
+  snapshot(opts: SnapshotOptions = {}): Promise<string> {
+    return this._call('snapshot', { ...opts, filter: opts.filter && toWire(opts.filter) });
   }
 
   layers(): Promise<LayerInfo[]> {
@@ -675,7 +692,7 @@ export class MapHandle {
     return this._retry<{ x: number; y: number }>(`${what} ${fmt(at)}`, timeout, async (by) => {
       const r = await this._pointNow(at, opts, seen, by);
       if ('outside' in r && opts.autoPan) {
-        await this._call('revealWorld', at);
+        await this._answerBy(by, 'revealWorld', this._call('revealWorld', at)); // the pan is sent either way; its answer is not waited for past the deadline
         await this._callBy(by, 'waitForIdle', 2000);
         return { retry: 'panned to location' };
       }
@@ -889,7 +906,8 @@ export class FeatureHandle {
   async _withActionPoint(
     what: string,
     opts: ActionOptions,
-    act: (p: { x: number; y: number }, aim: Aim, token?: string) => Promise<{ retry: string } | void>,
+    /** `deadline`: this attempt's; `act`'s round trips before the input leaves are abandoned then. */
+    act: (p: { x: number; y: number }, aim: Aim, token: string | undefined, deadline: number) => Promise<{ retry: string } | void>,
     /** Moving targets: arm the click-time check BEFORE the pixel is computed — every round trip after it is lateness. */
     armFirst?: () => Promise<string>,
     /** The deadline of the whole action, when it has more steps than this one (dragTo: its destination first). */
@@ -904,10 +922,7 @@ export class FeatureHandle {
     try {
       await this.map._retry<true>(what, timeout, async (deadline) => {
         const arming = armFirst?.();
-        const token = arming && (await this.map._answerBy(deadline, 'arm', arming).catch((e) => {
-          if (e instanceof DeadlineError) arming.then(release, () => {}); // armed after all, later: disarm it then
-          throw e;
-        }));
+        const token = arming && (await this.map._armBy(deadline, 'arm', arming));
         // Looking for the pixel has no side effects and may be abandoned at the deadline; real input (below) never is.
         const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), this.pointOpts(opts, aim.leadMs)).catch((e) => {
           release(token);
@@ -915,12 +930,13 @@ export class FeatureHandle {
         });
         if (r.ok) aim.velocity = r.velocity;
         if (!r.ok) {
-          if (token) await this.map._disarm(token);
+          release(token); // its verdict is not needed: not waited for
           if (opts.autoPan && !panned && (r.reason === 'not-found' || r.reason === 'offscreen')) {
+            // The camera move is sent either way; the wait for its answer is abandoned at the deadline, like a query's.
             const revealed =
               typeof opts.autoPan === 'object'
-                ? (await this.map._call('revealWorld', opts.autoPan), true)
-                : await this.map._call<boolean>('reveal', toWire(this.query));
+                ? (await this.map._answerBy(deadline, 'revealWorld', this.map._call('revealWorld', opts.autoPan)), true)
+                : await this.map._answerBy(deadline, 'reveal', this.map._call<boolean>('reveal', toWire(this.query)));
             if (revealed) {
               panned = true;
               await this.map._callBy(deadline, 'waitForIdle', 2000);
@@ -929,7 +945,7 @@ export class FeatureHandle {
           }
           return { retry: `${r.reason}: ${r.message}` };
         }
-        const outcome = await act(r.client, aim, token);
+        const outcome = await act(r.client, aim, token, deadline);
         if (!outcome) {
           // Trace friendliness: WHICH pixel, and why that one. One short text attachment per action.
           await attach(`pixel — ${what}`, `client (${r.client.x}, ${r.client.y}) · canvas (${r.surface.x}, ${r.surface.y})${r.feature.world ? ` · ${JSON.stringify(r.feature.world)}` : ''}\n${r.why}`);
@@ -951,9 +967,9 @@ export class FeatureHandle {
   async click(opts: ActionOptions & { button?: 'left' | 'right' | 'middle'; clickCount?: number } = {}): Promise<void> {
     const what = `${this}.${opts.button === 'right' ? 'rightClick' : opts.clickCount === 2 ? 'dblclick' : 'click'}()`;
     await step(what, () =>
-      this._withActionPoint(what, opts, async (p, aim, armed) => {
+      this._withActionPoint(what, opts, async (p, aim, armed, deadline) => {
         // Arm an in-page check that re-runs the hit test at the instant the REAL event arrives.
-        const token = armed ?? (await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)));
+        const token = armed ?? (await this.map._armBy(deadline, 'armClick', this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts))));
         let verdict: ClickVerdict | undefined;
         try {
           await sendInput(async () => {
@@ -1003,8 +1019,8 @@ export class FeatureHandle {
   async tap(opts: ActionOptions = {}): Promise<void> {
     const what = `${this}.tap()`;
     await step(what, () =>
-      this._withActionPoint(what, opts, async (p, aim) => {
-        const token = await this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts));
+      this._withActionPoint(what, opts, async (p, aim, _armed, deadline) => {
+        const token = await this.map._armBy(deadline, 'armClick', this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)));
         let verdict: ClickVerdict | undefined;
         try {
           await sendInput(() => this.map.page.touchscreen.tap(p.x, p.y));
@@ -1028,9 +1044,9 @@ export class FeatureHandle {
       const dest = { ...opts, autoPan: false, force: true };
       const deadline = deadlineOf(opts.timeout ?? this.map.timeout); // one timeout for both
       await this.map._pointAt(to, dest, `${what} destination`, deadline);
-      await this._withActionPoint(what, opts, async (a) => {
+      await this._withActionPoint(what, opts, async (a, _aim, _token, attempt) => {
         // one round trip, no waiting: the camera may have moved since, so the destination pixel is read afresh
-        const b = await this.map._pointNow(to, dest);
+        const b = await this.map._pointNow(to, dest, undefined, attempt);
         if ('retry' in b) return { retry: `destination: ${b.retry}` };
         await sendInput(() => this.map._drag(a, b.value, opts.steps, opts.modifiers));
       }, undefined, deadline);
@@ -1047,10 +1063,10 @@ export class FeatureHandle {
     refuseMoving('dragBy', opts);
     const what = `${this}.dragBy(${+delta.dLng.toFixed(5)}, ${+delta.dLat.toFixed(5)})`;
     await step(what, () =>
-      this._withActionPoint(what, opts, async (a) => {
-        const from = await this.map.lngLatAt(a);
+      this._withActionPoint(what, opts, async (a, _aim, _token, deadline) => {
+        const from = await this.map._callBy<LngLat>(deadline, 'worldAt', a);
         // no waiting between the verified source and the press: a destination that is not reachable NOW is a retry
-        const b = await this.map._pointNow({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true });
+        const b = await this.map._pointNow({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true }, undefined, deadline);
         if ('retry' in b) return { retry: `destination: ${b.retry}` };
         await sendInput(() => this.map._drag(a, b.value, opts.steps, opts.modifiers));
       }),
@@ -1067,7 +1083,8 @@ export class FeatureHandle {
 
   /**
    * lng/lat of the pixel an action WOULD use: fully verified (on the feature, topmost, not under DOM,
-   * map still) — so it waits and fails exactly like `click()`, and takes the same options.
+   * map still) — so it waits and fails exactly like `click()`, and takes the same options except `moving`
+   * (SteadyActionOptions: on a moving target it would be a predicted, never-verified pixel).
    * (`info().lngLat` is cheaper but only the best GEOMETRIC candidate: on a feature that is mostly
    * covered by another one it can be a covered pixel.)
    */
@@ -1075,7 +1092,7 @@ export class FeatureHandle {
     refuseMoving('lngLat', opts);
     const what = `${this}.lngLat()`;
     let at: LngLat | undefined;
-    await this._withActionPoint(what, opts, async (p) => void (at = await this.map.lngLatAt(p)));
+    await this._withActionPoint(what, opts, async (p, _aim, _token, deadline) => void (at = await this.map._callBy<LngLat>(deadline, 'worldAt', p)));
     return at!;
   }
 
@@ -1246,8 +1263,9 @@ const matchers = {
   },
 
   /**
-   * Exactly N rendered features match. Deliberately NOT named toHaveCount: expect.extend is keyed
-   * by name, and shadowing Playwright's locator matcher makes its failures point into this file.
+   * Exactly N features match — VISIBLE ones by default, as in every query (`visible: 'any'` in the query opts out).
+   * Deliberately NOT named toHaveCount: expect.extend is keyed by name, and shadowing Playwright's locator matcher
+   * makes its failures point into this file.
    */
   async toHaveFeatureCount(received: FeatureSetHandle, expected: number, options?: { timeout?: number }) {
     if (!(received instanceof FeatureSetHandle)) throw new Error('toHaveFeatureCount: receiver must be map.features(...)');
@@ -1479,6 +1497,7 @@ ${indent(explain)}`,
     let settled = false;
     let unanswered: string | undefined; // the last poll was abandoned at the deadline, and no earlier one was answered
     let answered = false;
+    let failed: string | undefined; // the last poll's error, when no poll was answered (an unregistered mapId, say)
     for (let i = 0; ; i++) {
       unanswered = undefined;
       try {
@@ -1498,12 +1517,11 @@ ${indent(explain)}`,
         answered = true;
         if (settled && pass !== this.isNot) break;
       } catch (e) {
-        /* map not registered yet: retry */
         // Abandoned at the deadline after an answered poll: that answer is the verdict (see pollVerdict).
         if (e instanceof DeadlineError) {
           if (answered) break;
           unanswered = e.message;
-        }
+        } else if (!answered) failed = (e as Error).message.split('\n')[0]; // e.g. not registered YET: retried, and said if it lasts
       }
       const wait = POLL[Math.min(i, POLL.length - 1)];
       if (Date.now() + wait >= deadline) break;
@@ -1511,6 +1529,7 @@ ${indent(explain)}`,
     }
     if (!settled || unanswered) pass = this.isNot; // never came to rest, or could not be asked: fail, whichever way the assertion was written
     const actual = view && { center: view.center, zoom: view.zoom, bearing: view.bearing, pitch: view.pitch };
+    const seen = actual ? `last seen: ${JSON.stringify(actual)}` : 'nothing seen';
     return {
       pass,
       name: 'toHaveView',
@@ -1519,7 +1538,7 @@ ${indent(explain)}`,
       message: () =>
         `expect(map).${this.isNot ? 'not.' : ''}toHaveView(${JSON.stringify(expected)})\n\n` +
         `Expected: ${JSON.stringify(expected)} (±${zt} zoom, ±${dt}° centre, ±${ANGLE_TOLERANCE}° bearing and pitch), map at rest, within ${timeout}ms\n` +
-        `Received: ${unanswered ? `no verdict: ${unanswered} (last seen: ${JSON.stringify(actual)})` : settled ? JSON.stringify(actual) : `the map never came to rest within ${timeout}ms (last seen: ${JSON.stringify(actual)})`}`,
+        `Received: ${unanswered ? `no verdict: ${unanswered} (${seen})` : !answered && failed ? `no verdict: ${failed} (${seen})` : settled ? JSON.stringify(actual) : `the map never came to rest within ${timeout}ms (${seen})`}`,
     };
   },
 } satisfies Record<string, Matcher>;

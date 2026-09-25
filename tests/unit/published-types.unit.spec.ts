@@ -80,9 +80,9 @@ test('published typings: `expect` typed from @playwright/test, the signature typ
     expect(index).toMatch(/export declare const expect: Expect</);
 
     // Everything the typings take from the internal types module is exported under the same name — except the wire
-    // formats, whose public faces are the binding's own FeatureQuery / FeatureSummary.
+    // formats, whose public faces are the binding's own FeatureQuery / FeatureSummary / SnapshotOptions (RegExp values).
     const imported = index.match(/import type \{([^}]*)\} from ["']\.\.\/inpage\/types\.js["']/)?.[1] ?? '';
-    const names = imported.split(',').map((s) => s.trim()).filter((s) => s && !/ as Wire(Query|Summary)$/.test(s));
+    const names = imported.split(',').map((s) => s.trim()).filter((s) => s && !/ as Wire(Query|Summary|SnapshotOptions)$/.test(s));
     expect(names.length).toBeGreaterThan(3); // the list is real
     const exported = new Set([...index.matchAll(/export (?:type )?\{([^}]*)\}/g)].flatMap((m) => m[1].split(',').map((s) => s.trim())));
     for (const m of index.matchAll(/export (?:declare )?(?:interface|type|class|const|function) (\w+)/g)) exported.add(m[1]);

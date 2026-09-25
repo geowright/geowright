@@ -193,6 +193,22 @@ test.describe('a verdict needs a map it could look at', () => {
     expect(e?.message).toContain('no map registered as "nope"');
   });
 
+  // toHaveView used to swallow the error of every poll and blame "the map never came to rest (last seen: undefined)".
+  test('toHaveView on an unregistered mapId says so, in both polarities', async ({ map, page }) => {
+    void map;
+    const other = geowright(page, { mapId: 'nope' });
+    for (const e of [
+      await rejects(expect(other).toHaveView({ zoom: 12 }, { timeout: FAIL_FAST_MS })),
+      await rejects(expect(other).not.toHaveView({ zoom: 12 }, { timeout: FAIL_FAST_MS })),
+    ]) {
+      expect(e, 'toHaveView passed on a map that could never be asked').not.toBeNull();
+      expect(e?.message).toContain('no map registered as "nope"');
+      expect(e?.message).toContain('nothing seen');
+      expect(e?.message).not.toContain('never came to rest');
+      expect(e?.message).not.toContain('undefined');
+    }
+  });
+
   test('.not on a mistyped layer fails, and says the layer does not exist', async ({ map }) => {
     const e = await rejects(expect(map).not.toHaveFeature({ layer: 'alert' }, { timeout: FAIL_FAST_MS }));
     expect(e, '.not.toHaveFeature passed for a layer that does not exist').not.toBeNull();
