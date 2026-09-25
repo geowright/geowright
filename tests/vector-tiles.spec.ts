@@ -1,6 +1,7 @@
 import { test, expect } from './fixtures';
 import { BUILDINGS } from './buildings';
 import { vectorTileHandler } from '../src/playwright/tiles';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /**
  * Vector-tile sources: the browser only ever holds the tiles in view, so the library cannot know
@@ -27,12 +28,12 @@ test.describe('vector tile layer', () => {
 
   test('off-screen: honest about what cannot be known; autoPan takes a location', async ({ map, page }) => {
     const far = map.feature({ layer: 'buildings', id: 1028 });
-    const err = await far.click({ timeout: 700 }).then(() => null, (e: Error) => e);
+    const err = await far.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('uses a tiled (vector) source');
     expect(err?.message).toContain('{ autoPan: { lng, lat } }');
 
     // `autoPan: true` has nothing to look up for tiles: same clear failure, not a hang or a wrong click
-    const err2 = await far.click({ timeout: 700, autoPan: true }).then(() => null, (e: Error) => e);
+    const err2 = await far.click({ timeout: FAIL_FAST_MS, autoPan: true }).then(() => null, (e: Error) => e);
     expect(err2?.message).toContain('uses a tiled (vector) source');
 
     await far.click({ autoPan: { lng: 35.2, lat: 32.092 } });

@@ -1,5 +1,6 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /**
  * Failures that EXPLAIN invisibility: when the style hides a feature or a whole layer, the failure
@@ -55,7 +56,7 @@ test.describe('failures explain invisibility', () => {
   test('zoom-driven: an interpolate on zoom, below its first stop, is clamped to it', async ({ map, page }) => {
     await addLayer(page, { type: 'line', paint: { 'line-color': '#c62828', 'line-width': ['interpolate', ['linear'], ['zoom'], 13, 0, 16, 6] } });
     await expect(map).toHaveFeature({ layer: 'why', id: 1, visible: 'any' });
-    const msg = await failure(map.feature({ layer: 'why', id: 1 }).click({ timeout: 800 }));
+    const msg = await failure(map.feature({ layer: 'why', id: 1 }).click({ timeout: FAIL_FAST_MS }));
     expect(msg).toContain('invisible: feature is rendered but not visible: line-width evaluates to 0');
     expect(msg).toContain('-> why#1 is not visible at zoom 12: line-width is 0 because the interpolate on zoom used its stop at 13 (zoom 12;');
   });

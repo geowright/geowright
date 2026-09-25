@@ -1,6 +1,7 @@
 import { test as base, expect } from './fixtures';
 import { geowright, type MapHandle } from '../src/playwright';
 import type { EntityView } from '../src/inpage/types';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /**
  * Dense map: ~5,000 point assets (70% of them piled into 12 hot spots) and ~1,000 overlapping lots,
@@ -36,7 +37,7 @@ test.describe('dense map', () => {
       await expect(page.getByTestId('selected')).toHaveText(`assets:${e.id}`);
     }
     const buried = ents.find((e) => e.located && !e.pixel && e.blocked?.startsWith('covered-by:assets'))!;
-    const err = await dense.feature({ layer: 'assets', id: buried.id }).click({ timeout: 600 }).then(() => null, (x: Error) => x);
+    const err = await dense.feature({ layer: 'assets', id: buried.id }).click({ timeout: FAIL_FAST_MS }).then(() => null, (x: Error) => x);
     expect(err?.message).toMatch(/occluded: every candidate point is covered by another feature; topmost is assets#\d+/);
   });
 

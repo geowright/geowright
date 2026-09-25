@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /** Real apps mix canvas features with DOM overlays (maplibregl.Marker / Popup). */
 test.describe('DOM markers and popups', () => {
@@ -39,7 +40,7 @@ test.describe('DOM markers and popups', () => {
     await pin.click();
     await expect(page.getByTestId('marker-info')).toHaveText('pin-103 clicked');
 
-    const err = await map.marker({ at: { lng: 34.7, lat: 32.09 } }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    const err = await map.marker({ at: { lng: 34.7, lat: 32.09 } }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/no marker there; 3 marker\(s\) on the map: "HQ"/);
   });
 
@@ -85,7 +86,7 @@ test.describe('DOM markers and popups', () => {
   test('a feature completely under a marker: refused, and the error names the marker', async ({ map, page }) => {
     await page.getByTestId('toggle-markers').check();
     await map.marker({ at: { lng: 34.8, lat: 32.0595 } });
-    const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout: 700 }).then(() => null, (e: Error) => e);
+    const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/dom-covered: every candidate point is covered by DOM element .*<div\.maplibregl-marker.* data-testid="marker-pin-106">/);
     await expect(page.getByTestId('popup')).toHaveCount(0);
   });

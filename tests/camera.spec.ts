@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import type { LngLat } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /** Everything else in the suite is north-up and flat. Real maps are rotated, pitched, or a globe. */
 const SQUARE: LngLat[] = [
@@ -42,7 +43,7 @@ test.describe('camera: rotated + pitched', () => {
 
   test('a location behind the camera is a clear error, not a wrong click', async ({ map }) => {
     // bearing 35: the camera looks north-east, so far to the south-west is behind it
-    const err = await map.clickAt({ lng: 34.0, lat: 31.0 }, { timeout: 600 }).then(() => null, (e: Error) => e);
+    const err = await map.clickAt({ lng: 34.0, lat: 31.0 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/outside the viewport|not on the visible map surface/);
   });
 
@@ -74,7 +75,7 @@ test.describe('camera: globe projection', () => {
   test('far side of the globe: a clear error instead of clicking the near side', async ({ map, page }) => {
     await page.getByTestId('camera-preset').selectOption('globe-2');
     await expect(map).toHaveView({ zoom: 1.8 });
-    const err = await map.clickAt({ lng: -145, lat: -32 }, { timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await map.clickAt({ lng: -145, lat: -32 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/not on the visible map surface/);
     await map.rightClickAt({ lng: 20, lat: 40 }); // visible hemisphere still works
     await expect(page.getByTestId('ctx-coords')).toHaveText(/\d/);

@@ -1,4 +1,5 @@
 import { test, expect } from './fixtures';
+import { FAIL_FAST_MS } from './slow-machine';
 
 test('a hidden zero-sized map explains why actions cannot hit it, then recovers after resize', async ({ map, page }) => {
   await page.evaluate(() => {
@@ -7,7 +8,7 @@ test('a hidden zero-sized map explains why actions cannot hit it, then recovers 
     m.resize();
   });
   const view = await map.viewState();
-  const err = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 750 }).then(() => null, (e: Error) => e);
+  const err = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
   expect(view.size).toEqual({ width: 0, height: 0 });
   expect(err?.message).toContain('map canvas is 0x0');
   expect(await map.snapshot()).toContain('zero-sized canvas');

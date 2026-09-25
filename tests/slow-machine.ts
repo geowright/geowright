@@ -19,3 +19,12 @@ export function cpuSlowdown(): number {
   const rate = Number(process.env.GEOWRIGHT_CPU_THROTTLE || 0);
   return rate > 1 ? rate : 1;
 }
+
+/**
+ * The timeout for an action a spec EXPECTS to fail, when it asserts WHY it failed. An action's timeout is wall-clock:
+ * if the page cannot answer the first round trip in time, the action honestly reports "the page did not answer" and
+ * never reaches the reason the spec asserts. Sub-second budgets did exactly that in a 20x run (5 workers, load ~27:
+ * a globe page answered a first clientPoint in more than 800 ms). Two seconds leaves over 2x that; slower still under
+ * GEOWRIGHT_CPU_THROTTLE.
+ */
+export const FAIL_FAST_MS = 2000 * cpuSlowdown();

@@ -1,5 +1,6 @@
 import { cartoBasemap } from './basemap';
 import { expect, test } from './harness';
+import { FAIL_FAST_MS } from '../slow-machine';
 
 // visgl/react-map-gl example "controls": 20 React-rendered <Marker>s (SVG pins, anchor "bottom"), a <Popup>
 // driven by React state, and the stock MapLibre controls. Nothing is on the canvas except the basemap.
@@ -33,7 +34,7 @@ test.describe('wild: react-map-gl / controls', () => {
   test('all 20 pins are on the map; asking for a marker where there is none says what IS there', async ({ wild, page }) => {
     const map = await wild.open(APP, { routes });
     await expect(page.locator('.maplibregl-marker')).toHaveCount(20);
-    const err = await map.marker({ at: { lng: -100, lat: 48 } }, { timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await map.marker({ at: { lng: -100, lat: 48 } }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/no marker there; 20 marker\(s\) on the map/);
   });
 

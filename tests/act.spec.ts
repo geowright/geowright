@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { geowright } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /** ACT gap: actions that originate ON the map, with real mouse input at projected pixels. */
 test.describe('act gap', () => {
@@ -43,7 +44,7 @@ test.describe('act gap', () => {
     await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Covering 106' } });
 
     const parcel = map.feature({ layer: 'parcels', id: 106 });
-    const err = await parcel.click({ timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await parcel.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('occluded');
     expect(err?.message).toContain('Covering 106');
 
@@ -63,7 +64,7 @@ test.describe('act gap', () => {
     await page.getByTestId('alert-lat').fill('32.060');
     await page.getByTestId('alert-submit').click();
     await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Covering 106' } });
-    const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('occluded');
 
     const lenient = geowright(page, { mapId: map.mapId, ignoreLayers: ['alerts'] });
@@ -73,7 +74,7 @@ test.describe('act gap', () => {
 
   test('off-screen feature: clear error by default, opt-in autoPan', async ({ map, page }) => {
     const far = map.feature({ layer: 'alerts', id: 4 });
-    const err = await far.click({ timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await far.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('not-found');
     expect(err?.message).toContain('exist in the source but are not rendered');
 
@@ -83,7 +84,7 @@ test.describe('act gap', () => {
   });
 
   test('strictness: ambiguous query is an error, like a Playwright locator', async ({ map }) => {
-    const err = await map.feature({ layer: 'parcels' }).click({ timeout: 600 }).then(() => null, (e: Error) => e);
+    const err = await map.feature({ layer: 'parcels' }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('strict mode violation');
     expect(err?.message).toContain('6 features');
   });
@@ -316,7 +317,7 @@ test.describe('act gap', () => {
   });
 
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {
-    const err = await map.clickAt({ lng: 36, lat: 32 }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    const err = await map.clickAt({ lng: 36, lat: 32 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('outside the viewport');
     await map.clickAt({ lng: 36, lat: 32 }, { autoPan: true });
     expect((await map.viewState()).center.lng).toBeCloseTo(36, 2);

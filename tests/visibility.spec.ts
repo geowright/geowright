@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { geowright } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /**
  * "Rendered is not visible": MapLibre's queryRenderedFeatures also returns features that the style
@@ -87,7 +88,7 @@ test.describe('visibility', () => {
   test('actions refuse an invisible feature and say why; force overrides', async ({ map, page }) => {
     const err = await map
       .feature({ layer: 'sensors', id: 502 })
-      .click({ timeout: 700 })
+      .click({ timeout: FAIL_FAST_MS })
       .then(() => null, (e: Error) => e);
     expect(err?.message).toContain('invisible: feature is rendered but not visible: circle-opacity evaluates to 0');
     expect(err?.message).toContain('[NOT VISIBLE: circle-opacity evaluates to 0');
@@ -122,7 +123,7 @@ test.describe('visibility', () => {
     expect(await map.snapshot({ layers: ['parcels'] })).not.toContain('covered-by:cover');
 
     await cover(0.6);
-    const err = await map.feature({ layer: 'parcels', id: 102 }).click({ timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await map.feature({ layer: 'parcels', id: 102 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/covered by another feature; topmost is cover/);
   });
 

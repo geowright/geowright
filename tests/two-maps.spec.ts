@@ -1,5 +1,6 @@
 import { test as base, expect } from './fixtures';
 import { geowright } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /** Several maps on one page: each handle is bound to a mapId; same layer/ids must not cross over. */
 base('two maps on one page are addressed independently', async ({ page }) => {
@@ -18,7 +19,7 @@ base('two maps on one page are addressed independently', async ({ page }) => {
   await expect(page.getByTestId('last-click')).toHaveText('left:Left depot');
 
   // a location that is on the left map is outside the right map's viewport
-  const err = await right.clickAt({ lng: 34.78, lat: 32.08 }, { timeout: 500 }).then(() => null, (e: Error) => e);
+  const err = await right.clickAt({ lng: 34.78, lat: 32.08 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
   expect(err?.message).toContain('outside the viewport');
 
   const unknown = await geowright(page, { mapId: 'middle', timeout: 500 }).waitForIdle().then(() => null, (e: Error) => e);
