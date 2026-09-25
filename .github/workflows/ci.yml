@@ -110,7 +110,7 @@ jobs:
           retention-days: 5
 
   # The @playwright/test peer floor: typecheck + the full suite on EXACTLY the version package.json's
-  # peerDependencies names (">=X.Y.Z" -> X.Y.Z), so the range claims only what CI runs (decision 0014). Lowering the
+  # peerDependencies names (">=X.Y.Z" -> X.Y.Z), so the range claims only what CI runs (decision 0017). Lowering the
   # floor in package.json moves this job with it.
   # Pushes to main and manual runs only (not every pull request): a second full suite on the shared Mac per PR push
   # costs more than it tells us; a floor regression shows up on main's next push.
