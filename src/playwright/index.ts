@@ -215,6 +215,12 @@ const MIN_ANSWER_MS = 500;
  */
 const DIAGNOSTIC_GRACE_MS = 2000;
 
+/**
+ * The time an in-page look (actionPoint) may spend on its own waits — pixel probes and the wait after one: what is
+ * left, less room for its answer to come back, so that it answers with what it found instead of being abandoned.
+ */
+const lookBudget = (deadline: number) => (deadline === Infinity ? undefined : Math.max(0, Math.round(deadline - Date.now() - Math.min(MIN_ANSWER_MS, (deadline - Date.now()) / 4))));
+
 /** The deadline of a timeout. As in Playwright, 0 means no timeout. */
 const deadlineOf = (timeout: number) => (timeout === 0 ? Infinity : Date.now() + timeout);
 
@@ -924,7 +930,7 @@ export class FeatureHandle {
         const arming = armFirst?.();
         const token = arming && (await this.map._armBy(deadline, 'arm', arming));
         // Looking for the pixel has no side effects and may be abandoned at the deadline; real input (below) never is.
-        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), this.pointOpts(opts, aim.leadMs)).catch((e) => {
+        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), { ...this.pointOpts(opts, aim.leadMs), budgetMs: lookBudget(deadline) }).catch((e) => {
           release(token);
           throw e;
         });

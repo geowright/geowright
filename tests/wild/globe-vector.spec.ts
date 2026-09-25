@@ -32,6 +32,33 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     await gabon.click();
   });
 
+  // on a globe: an image layer over Gabon. Opaque: the click is refused and names it; translucent: it lands.
+  test('an image layer drawn over a country on the globe: opaque refused, translucent clicked through', async ({ wild, page }) => {
+    const map = await open(wild);
+    const gabon = map.feature({ layer: 'countries-fill', at: { lng: 11.6, lat: -0.8 } });
+    const veil = (opacity: number) =>
+      page.evaluate((opacity) => {
+        const m = (window as any).__geowright_maps.main;
+        if (m.getLayer('veil')) m.removeLayer('veil');
+        if (m.getSource('veil')) m.removeSource('veil');
+        const c = document.createElement('canvas');
+        c.width = c.height = 64;
+        const g = c.getContext('2d')!;
+        g.fillStyle = '#888';
+        g.fillRect(0, 0, 64, 64);
+        m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[5, 6], [18, 6], [18, -7], [5, -7]] });
+        m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': opacity, 'raster-fade-duration': 0 } });
+      }, opacity);
+    await veil(1);
+    await expect(map, 'the premise: the veil is drawn over Gabon').toHaveLayerPixels('veil', { at: { lng: 11.6, lat: -0.8 }, timeout: map.timeout });
+    // a refusal waits out its timeout, and one look on a globe under software GL can take seconds: the map's own 20s
+    const err = await gabon.click({ timeout: map.timeout }).then(() => null, (e: Error) => e);
+    expect(err?.message.split('\n\n')[0]).toMatch(/occluded: .*raster layer "veil", drawn above "countries-fill"/);
+    await veil(0.5);
+    await expect(map).toHaveLayerPixels('veil', { at: { lng: 11.6, lat: -0.8 }, timeout: map.timeout });
+    await gabon.click();
+  });
+
   test('a country near the limb of the globe is still hit-testable despite heavy foreshortening', async ({ wild }) => {
     const map = await open(wild);
     // India: real centroid ~78E, well past the view's reported east bound (~76.6), so on screen it is

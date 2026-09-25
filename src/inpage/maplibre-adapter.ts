@@ -1,8 +1,8 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
 import { clientFrame, toSurface } from './engine';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, layoutVisible, missingIcon, paintColour, paintVisibility, pixelOccluders, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
-import type { InternalCanvasAdapter, InternalRenderedFeature, ProbeResult, StyleCause } from './types-internal';
+import type { InternalCanvasAdapter, InternalRenderedFeature, PixelOccluder, ProbeResult, StyleCause } from './types-internal';
 
 /** A source that is not loaded right now: its type, whether its GeoJSON is inline (nothing to download), and how long
  *  it has been pending as far as this adapter has seen (the retries of one waitForIdle() share that clock). */
@@ -545,6 +545,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         if (t?.duration === 0 && t.delay === 0) this.map.setPaintProperty(layer, `${s.name}-transition` as any, s.transition);
       }
     };
+    const reloading = (r: ProbeResult): ProbeResult => (!opacity && 'diff' in r ? { ...r, reloads: true } : r);
     if (typeof this.map.redraw === 'function') {
       const read = () => (this.map.redraw(), grab());
       const first = read();
@@ -558,7 +559,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         this.map.redraw();
         restoreTransitions();
       }
-      return verdict(difference(first, withLayer), difference(withLayer, without));
+      return reloading(verdict(difference(first, withLayer), difference(withLayer, without)));
     }
     const deadline = performance.now() + Math.max(0, budgetMs);
     const frame = () =>
@@ -583,8 +584,43 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         if (saved.length) this.map.once('render', restoreTransitions);
         this.map.triggerRepaint();
       }
-      return without ? verdict(difference(first, withLayer), difference(withLayer, without)) : late;
+      return without ? reloading(verdict(difference(first, withLayer), difference(withLayer, without))) : late;
     })();
+  }
+
+  /** `sourcedata` events per source, counted from the first gate on: what an overlay draws may have changed since. */
+  private dataEvents?: Map<string, number>;
+
+  pixelOccluders(layer: string, at: PixelPoint): PixelOccluder[] {
+    if (!this.dataEvents) {
+      const counts = (this.dataEvents = new Map());
+      this.map.on('sourcedata', (e: { sourceId?: string }) => void (e.sourceId && counts.set(e.sourceId, (counts.get(e.sourceId) ?? 0) + 1)));
+    }
+    const counts = this.dataEvents;
+    return pixelOccluders(this.map, layer, at, this.layerIds(), (source) => counts.get(source) ?? 0);
+  }
+
+  /**
+   * After a probe that hid the layer by `visibility` (its opacity is data-driven): MapLibre reloads the layer's source,
+   * and the tiles that come back first lack the layer. On Mapbox GL v1 the reload starts only in the next frame.
+   * So: a frame, then the source loaded again — checked on every rendered frame, within the budget.
+   */
+  settleAfterProbe(layer: string, budgetMs: number): Promise<boolean> {
+    const source = this.map.getLayer(layer)?.source;
+    const loaded = () => {
+      try {
+        return !source || !this.map.getSource(source) || this.map.isSourceLoaded(source);
+      } catch {
+        return true;
+      }
+    };
+    return new Promise((resolve) => {
+      const done = (ok: boolean) => (clearTimeout(timer), this.map.off('render', onRender), resolve(ok));
+      const timer = setTimeout(() => done(false), Math.max(0, budgetMs));
+      const onRender = () => (loaded() ? done(true) : this.map.triggerRepaint());
+      this.map.on('render', onRender);
+      this.map.triggerRepaint();
+    });
   }
 
   /**

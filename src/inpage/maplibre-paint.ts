@@ -620,6 +620,126 @@ export function reloadFreeOpacity(map: MlMap, layerId: string): string[] | undef
 }
 
 /**
+ * The layer types the hit test never returns (they draw pixels, not features), with the paint property that, at 0, makes
+ * each draw nothing (null: none). A heatmap is hit-testable over its radius on MapLibre >= 5 but not before: it is here
+ * on every version, which costs a probe, never a false pass.
+ */
+const PIXEL_ONLY_OPACITY: Record<string, string | null> = {
+  raster: 'raster-opacity',
+  hillshade: 'hillshade-exaggeration',
+  'color-relief': 'color-relief-opacity',
+  background: 'background-opacity',
+  heatmap: 'heatmap-opacity',
+  custom: null,
+};
+
+/** Web Mercator, as MapLibre places an image / video / canvas source: x and y in [0, 1] over the world. */
+export function mercator([lng, lat]: number[]): [number, number] {
+  const y = Math.log(Math.tan(Math.PI / 4 + (Math.max(-89.9999, Math.min(89.9999, lat)) * Math.PI) / 360));
+  return [(lng + 180) / 360, 0.5 - y / (2 * Math.PI)];
+}
+
+/** Is `p` inside the quadrilateral `quad` (any four corners in order, convex or not; even-odd rule)? */
+export function inQuad(p: [number, number], quad: [number, number][]): boolean {
+  let c = false;
+  for (let i = 0, j = quad.length - 1; i < quad.length; j = i++) {
+    const [xi, yi] = quad[i], [xj, yj] = quad[j];
+    if (yi > p[1] !== yj > p[1] && p[0] < ((xj - xi) * (p[1] - yi)) / (yj - yi) + xi) c = !c;
+  }
+  return c;
+}
+
+/** A number per source OBJECT: a source removed and added again under the same id is another one. */
+const serials = new WeakMap<object, number>();
+let lastSerial = 0;
+const serial = (o: object) => serials.get(o) ?? (serials.set(o, ++lastSerial), lastSerial);
+
+/** Is the layer's opacity exactly 0 at the camera zoom? Anything the evaluator cannot read: no (it may draw). */
+function opacityZero(map: MlMap, layerId: string, type: string): boolean {
+  const name = PIXEL_ONLY_OPACITY[type];
+  if (!name) return false;
+  try {
+    const raw = map.getPaintProperty(layerId, name as any) as unknown;
+    if (raw === undefined || raw === null) return false; // the spec's defaults are all > 0
+    if (typeof raw === 'number') return raw === 0;
+    if (Array.isArray(raw) && typeof raw[0] === 'string' && !styleExpression.isExpression(raw)) return false;
+    const e = normalizePropertyExpression(raw as any, name, spec[`paint_${type}`][name]) as { kind?: string; evaluate: (g: unknown) => unknown };
+    return (e.kind === 'constant' || e.kind === 'camera') && e.evaluate({ zoom: map.getZoom() }) === 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The pixel-only layers drawn ABOVE `target` that may draw at the surface pixel `at` (bottom to top): visible, inside
+ * their zoom range, opacity not exactly 0, and — where it can be told — whose source covers `at`: an image / video /
+ * canvas source's `coordinates` (a quad in Mercator, as MapLibre warps it), a tiled source's `bounds` when the style
+ * gives them inline. Under terrain there is no area test (a draped raster is not where `unproject` says). It may say too
+ * much, which costs a probe; it must never say too little, which is a false pass.
+ * `stamp`: changes when what the layer draws may have changed — its source (another object: removed and added again), the
+ * source's data events (`dataEvents`), its `coordinates`, and the layer's opacity.
+ */
+export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: number }, ids: string[], dataEvents: (source: string) => number): { layer: string; type: string; stamp: string }[] {
+  const out: { layer: string; type: string; stamp: string }[] = [];
+  const from = ids.indexOf(target);
+  if (from < 0) return out;
+  const zoom = map.getZoom();
+  let terrain: unknown;
+  try {
+    terrain = (map as any).getTerrain?.();
+  } catch {
+    terrain = undefined;
+  }
+  let where: [number, number][] | undefined; // `at` in Mercator, in this world copy and the ones on either side
+  const here = () => {
+    if (!where) {
+      const ll = map.unproject([at.x, at.y] as any);
+      where = [-360, 0, 360].map((d) => mercator([ll.lng + d, ll.lat]));
+    }
+    return where;
+  };
+  let style: { sources?: Record<string, { coordinates?: number[][]; bounds?: number[] }> } | undefined;
+  const styleSource = (id: string) => (style ??= (map.getStyle() ?? {}) as unknown as typeof style)!.sources?.[id];
+  for (let i = from + 1; i < ids.length; i++) {
+    const id = ids[i];
+    const layer = map.getLayer(id);
+    if (!layer || !(layer.type in PIXEL_ONLY_OPACITY)) continue;
+    if (!layoutVisible(map, id)) continue;
+    if ((layer.minzoom && zoom < layer.minzoom) || (layer.maxzoom && zoom >= layer.maxzoom)) continue;
+    if (opacityZero(map, id, layer.type)) continue;
+    const sourceId = (layer as { source?: string }).source;
+    const src = sourceId ? (map.getSource(sourceId) as { coordinates?: number[][] } | undefined) : undefined;
+    const coordinates = src?.coordinates ?? (sourceId ? styleSource(sourceId)?.coordinates : undefined);
+    if (sourceId && !terrain) {
+      const bounds = styleSource(sourceId)?.bounds;
+      try {
+        if (Array.isArray(coordinates) && coordinates.length === 4) {
+          const quad = coordinates.map(mercator);
+          if (!here().some((p) => inQuad(p, quad))) continue;
+        } else if (Array.isArray(bounds) && bounds.length === 4) {
+          const [w, s, e, n] = bounds;
+          const ll = map.unproject([at.x, at.y] as any);
+          const lng = ((((ll.lng + 180) % 360) + 360) % 360) - 180;
+          const inLng = w <= e ? lng >= w && lng <= e : lng >= w || lng <= e;
+          if (!inLng || ll.lat < s || ll.lat > n) continue;
+        }
+      } catch {
+        /* cannot tell: it may cover `at` */
+      }
+    }
+    const opacity = PIXEL_ONLY_OPACITY[layer.type];
+    let paint: unknown;
+    try {
+      paint = opacity ? map.getPaintProperty(id, opacity as any) : undefined;
+    } catch {
+      paint = undefined;
+    }
+    out.push({ layer: id, type: layer.type, stamp: `${src ? serial(src) : 0}|${sourceId ? dataEvents(sourceId) : 0}|${JSON.stringify(coordinates ?? null)}|${JSON.stringify(paint ?? null)}` });
+  }
+  return out;
+}
+
+/**
  * Why the style draws NOTHING of a layer at the current camera: the zoom is outside minzoom–maxzoom (MapLibre hides
  * a layer when zoom < minzoom or zoom >= maxzoom), or layout `visibility` is "none" — a constant, or (MapLibre
  * >= 5.16) an expression on global state, evaluated by the style-spec's own visibility evaluator. Empty: drawn.

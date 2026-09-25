@@ -16,7 +16,7 @@ import type {
   PixelPoint,
   RenderedFeature,
 } from './types';
-import type { InternalCanvasAdapter, InternalRenderedFeature, StyleBranch, StyleCause } from './types-internal';
+import type { InternalCanvasAdapter, InternalRenderedFeature, PixelOccluder, StyleBranch, StyleCause } from './types-internal';
 
 /** A click-time (or hover-time) check listening in the page: its verdict so far, and how to remove its listeners. */
 export interface ArmedCheck {
@@ -152,6 +152,20 @@ export class Engine<W = unknown> {
    * has the same properties (`alone`; otherwise a rendered piece must also touch the data feature to be it).
    */
   private byDataId = new Map<string, { feature: RenderedFeature; props: string; alone: boolean }[]>();
+
+  /**
+   * Pixel-probe verdicts of actions: does the target show through the pixel-only layers above it at this pixel?
+   * Keyed by the target, the pixel, the camera and those layers with their stamps (pixelKey), so that the aim after a
+   * probe does not probe again (a probe that reloads the source would make the next aim miss, probe, reload… for ever).
+   * Anything that may change the answer changes the key. Bounded like the style caches.
+   */
+  private pixelVerdicts = new Map<string, 'visible' | 'occluded'>();
+
+  /**
+   * For each target (key) its last aim approved: the pixel-only layers drawn over it at the aimed pixel that it was seen
+   * through. The press-time check refuses a press under any OTHER one: it appeared between the aim and the press.
+   */
+  private aimedThrough = new Map<string, Set<string>>();
 
   async learnIdentity(q: FeatureQuery): Promise<void> {
     // A registered map may have been removed (or hidden to 0×0) while Playwright was waiting: nothing to learn from it.
@@ -418,17 +432,94 @@ export class Engine<W = unknown> {
    *  3. the point is ON the feature (polygon interior, not bbox centre/centroid)
    *  4. the feature is the topmost hit at that pixel (not occluded by another feature)
    *  5. the pixel is not covered by a DOM element (popup, control, sidebar overlay)
+   *  6. no layer the hit test cannot see (raster, image, heatmap…) drawn above the target covers the pixel (a probe)
    */
   async actionPoint(q: FeatureQuery, opts: ActionPointOptions = {}): Promise<ActionPointResult> {
     if (opts.moving === 'allow') return this.movingActionPoint(q, opts);
+    const deadline = performance.now() + (opts.budgetMs ?? 5000);
+    // 6. a pixel-only layer drawn above the target at the chosen pixel (the gate, adapter.pixelOccluders): the hit test
+    //    cannot see it, so hide the TARGET's layer there and look (the pixel probe). Nothing changes: the pixel is covered;
+    //    the next candidate is tried, at most MAX_PROBES per aim. Maps without such a layer never probe (the gate is < 0.1 ms).
+    let next: Aimed | undefined;
+    for (let probes = 0; ; ) {
+      const r = next ?? (await this.aimStill(q, opts));
+      next = undefined;
+      if (!r.ok) return r;
+      const { pixels, ...aimed } = r;
+      if (!pixels?.unprobed) {
+        if (pixels) this.aimedThrough.set(pixels.target, new Set(pixels.over.map((o) => o.layer)));
+        return aimed;
+      }
+      const names = pixels.over.map((o) => `${o.type} layer "${o.layer}"`).join(', ');
+      if (probes === MAX_PROBES) {
+        return fail('occluded', `${MAX_PROBES} candidate points were checked and each is covered by a layer the hit test cannot see (now ${names}, drawn above "${aimed.feature.layer}"). If it is see-through there, pass { ignoreLayers: [${pixels.over.map((o) => `'${o.layer}'`).join(', ')}] }; { force: true } acts anyway.`);
+      }
+      // Out of time after a probe: say what is known, rather than be abandoned mid-way by a caller that then knows nothing.
+      // The FIRST probe of an aim always runs (the caller leaves room for its answer): a last attempt that aimed with
+      // little time left would otherwise end on "no time", burying the verdict the earlier attempts reached.
+      if (probes && performance.now() >= deadline) {
+        return fail('occluded', `the ${probes} candidate point(s) checked in the time there was are each covered by a layer the hit test cannot see (now ${names}, drawn above "${aimed.feature.layer}"). If it is see-through there, pass { ignoreLayers: [${pixels.over.map((o) => `'${o.layer}'`).join(', ')}] }; { force: true } acts anyway.`);
+      }
+      probes++;
+      // (a renderer without redraw() needs real frames: at least a few of them)
+      const p = await this.adapter.probePixels!(aimed.feature.layer, aimed.surface, 2, Math.max(PROBE_MIN_MS, deadline - performance.now()));
+      if ('inconclusive' in p) return fail('unstable', `could not tell yet whether ${names} covers the target at (${aimed.surface.x}, ${aimed.surface.y}): ${p.inconclusive}`);
+      if ('unavailable' in p) {
+        // No pixels to read (no WebGL context): as before the check existed, and said in the trace.
+        this.aimedThrough.set(pixels.target, new Set(pixels.over.map((o) => o.layer)));
+        return { ...aimed, why: `${aimed.why}; under ${names}, not checked: ${p.unavailable}` };
+      }
+      this.remember(pixels.key, p.diff === 0 ? 'occluded' : 'visible');
+      if (p.diff === 0) {
+        // the next candidate, from one more look: the map was still a moment ago (aimStill), and is now
+        if (this.adapter.isMoving()) return fail('moving', 'map started moving');
+        next = this.actionPointOnce(q, opts, true, true);
+        continue;
+      }
+      if (!p.reloads) {
+        this.aimedThrough.set(pixels.target, new Set(pixels.over.map((o) => o.layer)));
+        return { ...aimed, why: `${aimed.why}; seen through ${names} (pixel probe)` };
+      }
+      // The target's opacity is data-driven, so the probe hid it by `visibility` and its source reloads: until the second
+      // reload lands the target is missing from the rendering and the hit test (, measured: up to 2 frames; 787 ms at
+      // load ~300). Wait for exactly that — a frame, the source loaded, the target hit-tested there again — then aim anew
+      // (the verdict is kept: no second probe).
+      const settled = (await this.adapter.settleAfterProbe?.(aimed.feature.layer, Math.max(0, deadline - performance.now()))) ?? true;
+      while (settled && performance.now() < deadline && !this.hitsAgain(q, aimed.surface)) await oneFrame();
+      if (performance.now() >= deadline || !settled) return fail('unstable', `the target's layer "${aimed.feature.layer}" is still reloading after the pixel check (its opacity is data-driven, so the check hid it by visibility)`);
+    }
+  }
+
+  /** Remember a pixel verdict (bounded: the oldest goes first). */
+  private remember(key: string, verdict: 'visible' | 'occluded'): void {
+    this.pixelVerdicts.delete(key);
+    this.pixelVerdicts.set(key, verdict);
+    if (this.pixelVerdicts.size > 200) this.pixelVerdicts.delete(this.pixelVerdicts.keys().next().value!);
+  }
+
+  /** The key of a pixel verdict: the target, the pixel, the camera, and the pixel-only layers over it with their stamps. */
+  private pixelKey(pieces: RenderedFeature[], c: PixelPoint, over: PixelOccluder[]): string {
+    const v = this.adapter.getViewState() as { center?: unknown; zoom?: unknown; bearing?: unknown; pitch?: unknown };
+    const size = this.surfaceSize();
+    return JSON.stringify([this.key(pieces[0]), Math.round(c.x), Math.round(c.y), v.center, v.zoom, v.bearing, v.pitch, size.w, size.h, over.map((o) => [o.layer, o.stamp])]);
+  }
+
+  /** Does the one feature the query resolves to hit-test at `at` (again)? */
+  private hitsAgain(q: FeatureQuery, at: PixelPoint): boolean {
+    const pieces = this.resolved(q);
+    return !!pieces && this.adapter.queryFeatures({ at }).some((h) => this.isPieceOf(h, pieces));
+  }
+
+  /** Checks 1–5: map at rest, the same pixel two frames running. */
+  private async aimStill(q: FeatureQuery, opts: ActionPointOptions): Promise<Aimed> {
     if (this.adapter.isMoving()) return fail('moving', 'map is moving (camera animation or user gesture in progress)');
     // Look-alikes, or ONE id-less feature caught in two tile generations? On 'ambiguous', ask the source — now,
     // while the split is visible — and look again.
-    const once = async (): Promise<ActionPointResult> => {
-      const r = this.actionPointOnce(q, opts);
+    const once = async (): Promise<Aimed> => {
+      const r = this.actionPointOnce(q, opts, true, true);
       if (r.ok || r.reason !== 'ambiguous') return r;
       await this.learnIdentity(q);
-      return this.actionPointOnce(q, opts);
+      return this.actionPointOnce(q, opts, true, true);
     };
     const first = await once();
     if (!first.ok) return first;
@@ -505,8 +596,12 @@ export class Engine<W = unknown> {
     if (r.top < 0 || r.left < 0 || r.bottom > window.innerHeight || r.right > window.innerWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
   }
 
-  /** `scroll: false` inside an input event handler: the page must not scroll under an event being delivered. */
-  private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions, scroll = true): ActionPointResult {
+  /**
+   * `scroll: false` inside an input event handler: the page must not scroll under an event being delivered.
+   * `pixels`: also check the pixel-only layers drawn above the target (actions only; see actionPoint): a candidate whose
+   * verdict says covered is skipped, and the first one without a verdict comes back `unprobed`, for actionPoint to probe.
+   */
+  private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions, scroll = true, pixels = false): Aimed {
     if (scroll && this.adapter.surface().isConnected !== false) this.scrollIntoView();
     const problem = this.surfaceProblem();
     if (problem) return fail('offscreen', problem);
@@ -537,7 +632,8 @@ export class Engine<W = unknown> {
     const frame = this.frame();
     let occluder: RenderedFeature | undefined;
     let domCover: Element | undefined;
-    const skipped = { miss: 0, occluded: 0, dom: 0, offview: 0 };
+    let pixelCover: { over: PixelOccluder[]; at: PixelPoint } | undefined;
+    const skipped = { miss: 0, occluded: 0, dom: 0, offview: 0, pixels: 0 };
 
     // WHOLE client pixels only. Real input arrives with fractional coordinates (pointerdown at 339.6, 641.4), but the
     // map library handles `click` / `mousedown` MouseEvents, whose coordinates the browser truncates (339, 641) — so a
@@ -574,13 +670,37 @@ export class Engine<W = unknown> {
         skipped.dom++;
         continue;
       }
+      let px: PixelCheck | undefined;
+      if (pixels && !opts.force) {
+        const over = (this.adapter.pixelOccluders?.(pieces[0].layer, c) ?? []).filter((o) => !ignore.has(o.layer));
+        if (over.length) {
+          const key = this.pixelKey(pieces, c, over);
+          const verdict = this.pixelVerdicts.get(key);
+          if (verdict === 'occluded') {
+            pixelCover ??= { over, at: c };
+            skipped.pixels++;
+            continue;
+          }
+          px = { target: this.key(pieces[0]), over, key, unprobed: !verdict };
+        } else px = { target: this.key(pieces[0]), over, key: '', unprobed: false };
+      }
       const why =
         `candidate ${i + 1} of ${whole.length} (${pieces[0].geometry.type.includes('Polygon') ? `interior points, farthest from the edge first${this.adapter.lift?.(pieces[0], c) ? '; extruded: roof, then walls, then footprint' : ''}` : pieces[0].geometry.type.includes('Line') ? 'middle of the line first' : 'centre first, then a ring around it'})` +
-        (i ? `; skipped before it: ${skipped.occluded} under another feature${occluder ? ` (${occluder.layer}${occluder.id !== undefined ? '#' + occluder.id : ''})` : ''}, ${skipped.dom} under DOM${domCover ? ` (${describeEl(domCover)})` : ''}, ${skipped.miss} not on the feature` : '') +
-        (opts.force ? '; force: occlusion not checked' : '');
-      return { ok: true, client: { x: Math.round(client.x), y: Math.round(client.y) }, surface: round(c), feature: this.summarize(pieces), why };
+        (i ? `; skipped before it: ${skipped.occluded} under another feature${occluder ? ` (${occluder.layer}${occluder.id !== undefined ? '#' + occluder.id : ''})` : ''}, ${skipped.dom} under DOM${domCover ? ` (${describeEl(domCover)})` : ''}, ${skipped.miss} not on the feature${skipped.pixels ? `, ${skipped.pixels} under ${pixelCover!.over.map((o) => o.layer).join(', ')} (pixel probe)` : ''}` : '') +
+        (opts.force ? '; force: occlusion not checked' : '') +
+        (px && px.over.length && !px.unprobed ? `; seen through ${px.over.map((o) => o.layer).join(', ')} (pixel probe, earlier)` : '');
+      return { ok: true, client: { x: Math.round(client.x), y: Math.round(client.y) }, surface: round(c), feature: this.summarize(pieces), why, ...(px && { pixels: px }) };
     }
     if (domCover) return fail('dom-covered', `every candidate point is covered by DOM element ${describeEl(domCover)}`);
+    if (pixelCover) {
+      const { over, at } = pixelCover;
+      const layer = pieces[0].layer;
+      return fail(
+        'occluded',
+        `${whole.length > MAX_TRIES ? `the ${MAX_TRIES} best of ${whole.length} candidate points are all` : 'every candidate point is'} covered${skipped.occluded ? ' (by features, or)' : ''} by ${over.map((o) => `${o.type} layer "${o.layer}"`).join(', ')}, drawn above "${layer}": hiding "${layer}" changes nothing at (${Math.round(at.x)}, ${Math.round(at.y)}). ` +
+          `If it is see-through there, pass { ignoreLayers: [${over.map((o) => `'${o.layer}'`).join(', ')}] }; { force: true } acts anyway.`,
+      );
+    }
     if (occluder) {
       return fail(
         'occluded',
@@ -853,6 +973,7 @@ export class Engine<W = unknown> {
         if (!miss) verdict.ok = true;
         else if (miss.covered) verdict.reason = `target was covered by ${describe({ ...miss.covered, geometryType: miss.covered.geometry.type })} when the click arrived`;
         else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the click arrived (strict mode): not clicking whichever is under the pointer`;
+        else if (miss.pixels) verdict.reason = `${miss.pixels.map((o) => `${o.type} layer "${o.layer}"`).join(', ')} was drawn over the target when the click arrived, and not when it was aimed`;
         else {
           verdict.reason = 'target was no longer under the pointer when the click arrived';
           if (opts.moving === 'allow') verdict.offset = this.offsetFrom(at, q, opts);
@@ -910,6 +1031,7 @@ export class Engine<W = unknown> {
       if (!miss) (verdict.ok = true), (verdict.reason = undefined);
       else if (miss.covered) verdict.reason = 'target was covered by another feature when the pointer arrived';
       else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the pointer arrived (strict mode)`;
+      else if (miss.pixels) verdict.reason = `${miss.pixels.map((o) => `layer "${o.layer}"`).join(', ')} was drawn over the target when the pointer arrived`;
       else {
         verdict.reason = 'target was no longer under the pointer when it arrived';
         verdict.offset = this.offsetFrom(at, q, opts);
@@ -934,7 +1056,7 @@ export class Engine<W = unknown> {
    * without one (a moving target, or none could be resolved then), the ONE feature the query resolves to at this instant
    * — `several` when it matches more than one (strict mode, as when it was aimed at).
    */
-  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature; several?: number } | undefined {
+  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature; several?: number; pixels?: PixelOccluder[] } | undefined {
     let candidates: RenderedFeature[][];
     try {
       candidates = target ? [target] : [...this.group(q).values()];
@@ -948,7 +1070,17 @@ export class Engine<W = unknown> {
       const seen = hits.filter((h) => !ignore.has(h.layer));
       if (!seen.some((h) => this.isPieceOf(h, pieces))) continue;
       const top = this.topVisible(seen)!;
-      return !opts.force && !this.sameEntity(top, pieces) ? { covered: top } : undefined;
+      if (opts.force) return undefined;
+      if (!this.sameEntity(top, pieces)) return { covered: top };
+      // A pixel-only layer over the pointer that the aim did not see through: it appeared (or was shown) since. Only the
+      // gate, never a probe: a probe here would reload the target's source while the app's own handler hit-tests it.
+      // A moving target was never probed at the aim: not checked (a stated gap).
+      if (opts.moving !== 'allow' && this.adapter.pixelOccluders) {
+        const through = this.aimedThrough.get(this.key(pieces[0]));
+        const added = this.adapter.pixelOccluders(pieces[0].layer, at).filter((o) => !ignore.has(o.layer) && !through?.has(o.layer));
+        if (added.length) return { pixels: added };
+      }
+      return undefined;
     }
     return {};
   }
@@ -1879,6 +2011,24 @@ const idKey = (layer: string, id: string | number) => `${layer}\u0000${String(id
 const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : undefined);
 const round = (p: PixelPoint): PixelPoint => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+const oneFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+/** Probes per aim: each is four renders; a user does not hunt through an overlay either. */
+const MAX_PROBES = 3;
+/** The least time a probe is given, even at the deadline: four frames of a renderer without redraw() (Mapbox GL v1). */
+const PROBE_MIN_MS = 250;
+
+/** An action's check of the pixel-only layers over its chosen pixel (actionPointOnce with `pixels`). */
+interface PixelCheck {
+  /** key() of the target */
+  target: string;
+  over: PixelOccluder[];
+  /** pixelKey() */
+  key: string;
+  /** no verdict for this pixel yet: actionPoint probes it */
+  unprobed: boolean;
+}
+type Aimed = ActionPointResult & { pixels?: PixelCheck };
 const fail = (reason: Exclude<ActionPointResult, { ok: true }>['reason'], message: string): ActionPointResult => ({ ok: false, reason, message });
 
 export function describe(f: { layer: string; id?: string | number; properties: Record<string, unknown>; geometryType?: string; pixel?: PixelPoint; visible?: boolean; invisibleBecause?: string }): string {

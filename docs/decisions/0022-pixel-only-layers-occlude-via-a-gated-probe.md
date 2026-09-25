@@ -21,11 +21,13 @@ probing at click time, because the probe would reload the target's source while 
 - easy: an opaque veil or overlay refuses the action and the failure names it. A translucent or gappy overlay does not. Maps without one pay nothing.
 - costs: on a map with an overlay above the features, each action costs a probe (4 renders) and on Mapbox GL v1 a possible
   one-frame flicker. Where the target's opacity is data-driven, each action also waits for the source reload. Pixels that
-  change inside an existing overlay between the aim and the press are not re-checked.
+  change inside an existing overlay between the aim and the press are not re-checked. `moving: 'allow'` is not checked
+  at all (the target's pixel changes between a probe and the press).
 - This widens "topmost" in 0019 to pixel-only layers. It makes the probe of 0005 automatic inside actions, only when gated.
   0005's "opt-in" stands for visibility queries.
 - enforced by: the 66 specs in `tests/act.spec.ts`: opaque veil refused, translucent and gap cases pass, a raster below
-  costs no probe, the reload race, and a sabotage spec for a veil that appears between aim and press.
+  costs no probe, the reload race, and a sabotage spec for a veil that appears between aim and press; the same on every
+  version in `tests/compat/compat.spec.ts`, and on a globe in `tests/wild/globe-vector.spec.ts`.
 
 ## More
 - 66 (the design comment, with evidence); 0005, 0019
