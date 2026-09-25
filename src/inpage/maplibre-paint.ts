@@ -502,10 +502,11 @@ function explainValue(map: MlMap, f: RenderedFeature, ev: ReturnType<typeof eval
     }
   }
   // A zoom-and-data value is drawn from tiles of zoom z (see tileZoom): traced there, not at the camera zoom, where its
-  // branches would not produce it (attribute() checks every branch against the value, so it would name none).
+  // branches would not produce it (attribute() checks every branch against the value, so it would name none). Said in
+  // the message only where it differs from the camera zoom.
   const tileZ = ev.tileZoomOf(group, name);
   const ctx: Ctx = { propSpec, globalState: ev.globalState, globals: { zoom: tileZ ?? zoom }, feature: ev.feature, state: f.state ?? {} };
-  return { ...cause, origin: isFn ? 'function' : 'expression', ...(tileZ === undefined ? {} : { tileZoom: tileZ }), branches: value === undefined ? [] : attribute(json, value, ctx) };
+  return { ...cause, origin: isFn ? 'function' : 'expression', ...(tileZ === undefined || tileZ === zoom ? {} : { tileZoom: tileZ }), branches: value === undefined ? [] : attribute(json, value, ctx) };
 }
 
 /**
