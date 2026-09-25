@@ -44,8 +44,9 @@ issue from the "My map app does not work" template, which asks for everything be
    `docs/RECIPES.md` already cover it ("The map never becomes idle", the wrapper hooks)? Can the failure be shown on the
    demo app or on an app already in `wild/`? If so, fix it there — an app is vendored for a failure only it shows. Ask
    in the issue for whatever is missing: the commit, the failing call, what it fetches.
-2. **The license.** Read the repository's license file at that commit — the file, not the badge. It must be MIT, BSD,
-   ISC, Apache-2.0, CC0, Unlicense or EDL-1.0 ([0015](../docs/decisions/0015-third-party-notices-ship-with-the-copy.md)), and so must
+2. **The license.** Read the repository's license file at that commit — the file, not the badge. It must be MIT, BSD
+   (0BSD too), ISC, Apache-2.0, CC0, Unlicense, EDL-1.0 or the Unicode data license (data from the Unicode Character
+   Database); data may also be in the public domain (Natural Earth, US government works) ([0020](../docs/decisions/0020-third-party-allowlist-adds-0bsd-and-unicode-data.md)), and so must
    everything the app's build bundles into `dist/`. Anything else: see "When the license is not on the list" below.
 3. **Scaffold.** `node wild/scripts/apps.mjs new <name> <repository-url> <full-commit-sha> <path/to/upstream/LICENSE>`
    reads the license text and refuses anything off the list, before writing a byte. Then it writes
@@ -86,5 +87,5 @@ written down in the issue, so the friction is not lost with the app. A dual lice
 (`MIT OR Apache-2.0`, as `apps/svelte-maplibre-gl/`) is fine: keep both files. A choice where only some options are on
 the list (`MIT OR GPL-3.0`) is fine too, for an app as for a dependency inside a bundle: it is used under an option on
 the list, UPSTREAM.md (or the notices) says so, and only that option's license file is vendored — JSTS, `EDL-1.0 OR
-EPL-1.0`, inside the Turf fixture, is used under EDL-1.0 ([0015](../docs/decisions/0015-third-party-notices-ship-with-the-copy.md)).
+EPL-1.0`, inside the Turf fixture, is used under EDL-1.0 ([0020](../docs/decisions/0020-third-party-allowlist-adds-0bsd-and-unicode-data.md)).
 The helper recognises license files, not choices: it refuses a file off the list, so the election is a person's.

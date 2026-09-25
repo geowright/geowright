@@ -1,7 +1,7 @@
 // Vendoring helper for third-party apps under wild/apps/ — the mechanical part of "Bring your app" (wild/README.md).
 //
 //   node wild/scripts/apps.mjs new <name> <upstream-repo-url> <commit> <LICENSE-file>...
-//       Refuse unless every license file is on the allowlist (docs/decisions/0015). Then scaffold, never overwriting:
+//       Refuse unless every license file is on the allowlist (docs/decisions/0020). Then scaffold, never overwriting:
 //       wild/apps/<name>/<LICENSE> (byte-identical), wild/apps/<name>/UPSTREAM.md, wild/fixtures/sources/<name>.md,
 //       a row in wild/fixtures/SOURCES.md and tests/wild/<name>.spec.ts. Every TODO(new-app) is yours to fill in.
 //   node wild/scripts/apps.mjs check
@@ -29,7 +29,7 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = fileURLToPath(new URL('../../', import.meta.url));
 const TODO = 'TODO(new-app)';
-// What a vendored app's dist/ must carry: the license text of everything its build bundles (decision 0015). Vite writes
+// What a vendored app's dist/ must carry: the license text of everything its build bundles (decision 0020). Vite writes
 // it with `build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } }`; a build that only copies files writes the same
 // format itself (wild/apps/pmtiles/scripts/build.mjs): one `## <package> - <version>` section per package, text below.
 const NOTICES = 'dist/THIRD_PARTY_LICENSES.md';
@@ -40,7 +40,7 @@ const MAPLIBRE_BUNDLES = ['@mapbox/point-geometry', '@mapbox/tiny-sdf', '@mapbox
 // wrapper app reaches the map its own way (`e.target`, `e.map`, a ref), so there only the registration itself is fixed.
 const EXAMPLE_HOOK = /^\s*\(window\.__geowright_maps \?\?= \{\}\)\.main = map;(\s*\/\/.*)?$/;
 const APP_HOOK = /__geowright_maps\s*\?\?=\s*\{\}\s*\)\s*\.main\s*=/;
-const ALLOWLIST = 'MIT, BSD, ISC, Apache-2.0, CC0, Unlicense, EDL-1.0 (and OFL for fonts)';
+const ALLOWLIST = 'MIT, BSD (0BSD too), ISC, Apache-2.0, CC0, Unlicense, EDL-1.0, the Unicode data license (and OFL for fonts)';
 
 // Recognised by the license text itself, not by what anyone says it is. Whitespace is normalised first.
 const ALLOWED = [
@@ -94,7 +94,7 @@ function newApp([name, url, commit, ...licenses]) {
     if (!c.ok) {
       fail([
         `REFUSED: ${l}: ${c.why}.`,
-        `Only ${ALLOWLIST} can be vendored under wild/ (docs/decisions/0015). Nothing was written.`,
+        `Only ${ALLOWLIST} can be vendored under wild/ (docs/decisions/0020). Nothing was written.`,
         'The app cannot be vendored, but the report still counts: help in the issue, reproduce with a first-party page if',
         'the problem allows, and write the friction down there. See wild/README.md, "When the license is not on the list".',
       ]);
@@ -276,7 +276,7 @@ function examplePatches(problems, print = false) {
  * `vendor/turf@7/turf.min.js`, and a file name alone names nothing, so a new file cannot pass under a row written for
  * another one with the same name. A directory covers data only (the demotiles/ tiles): code is named by its own path.
  * Each vendored build, wild/fixtures/vendor/<name>/, keeps its license file and a THIRD_PARTY_LICENSES.md beside it:
- * what the build bundles, read from the build, with each text (decision 0015), even when that is only its own code.
+ * what the build bundles, read from the build, with each text (decision 0020), even when that is only its own code.
  */
 const FIXTURE_CODE = /\.(m?js|cjs|css|wasm)$/i;
 /** `path` appears in `text` as a whole path: not as the tail of a longer one, nor as the start of a longer name. */
@@ -305,7 +305,7 @@ function fixturesRecorded(problems) {
   for (const d of existsSync(vendor) ? readdirSync(vendor).filter((f) => statSync(join(vendor, f)).isDirectory()) : []) {
     const files = readdirSync(join(vendor, d));
     if (!files.some(isLicenseFile)) problems.push(`wild/fixtures/vendor/${d}/: no license file (keep the package's own, byte-identical)`);
-    if (!files.includes('THIRD_PARTY_LICENSES.md')) problems.push(`wild/fixtures/vendor/${d}/: no THIRD_PARTY_LICENSES.md (what the build bundles, established by reading it, and each one's license text: decision 0015)`);
+    if (!files.includes('THIRD_PARTY_LICENSES.md')) problems.push(`wild/fixtures/vendor/${d}/: no THIRD_PARTY_LICENSES.md (what the build bundles, established by reading it, and each one's license text: decision 0020)`);
   }
 }
 

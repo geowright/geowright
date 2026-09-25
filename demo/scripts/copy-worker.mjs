@@ -3,7 +3,7 @@
 // same-origin URL at runtime via `setWorkerUrl()`. MapLibre 6 is ESM-only and resolves
 // its worker relative to `import.meta.url`, which does not survive bundling, so we ship
 // the worker files verbatim and point at them explicitly instead, with MapLibre's LICENSE.txt beside them,
-// and THIRD_PARTY_LICENSES.md: the license text of every package MapLibre's build put into them (decision 0015).
+// and THIRD_PARTY_LICENSES.md: the license text of every package MapLibre's build put into them (decision 0020).
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';

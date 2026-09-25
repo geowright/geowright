@@ -5,8 +5,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 /**
- * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0015) and a pinned UPSTREAM.md
- * with its one hook line (0016), its dist/ ships the notices of what it bundles (0015), each MapLibre example's
+ * wild/scripts/apps.mjs: every vendored app keeps an allowlisted license (decision 0020) and a pinned UPSTREAM.md
+ * with its one hook line (0016), its dist/ ships the notices of what it bundles (0020), each MapLibre example's
  * committed patch is the hook and nothing else (0016), and the `new` scaffold refuses a license outside the
  * allowlist. No network.
  */
@@ -396,12 +396,29 @@ for (const [kind, text, named] of [
     expect(r.code).toBe(1);
     expect(r.out).toContain(`REFUSED: ${license}:`);
     expect(r.out).toContain(named);
-    expect(r.out).toContain('Only MIT, BSD, ISC, Apache-2.0, CC0, Unlicense, EDL-1.0 (and OFL for fonts) can be vendored');
+    expect(r.out).toContain('Only MIT, BSD (0BSD too), ISC, Apache-2.0, CC0, Unlicense, EDL-1.0, the Unicode data license (and OFL for fonts) can be vendored');
     expect(r.out).toContain('Nothing was written.');
     expect(existsSync(join(tree, 'wild/apps/fake-app'))).toBe(false);
     expect(existsSync(join(tree, 'wild/fixtures/sources/fake-app.md'))).toBe(false);
     expect(existsSync(join(tree, 'tests/wild/fake-app.spec.ts'))).toBe(false);
     expect(readFileSync(join(tree, 'wild/fixtures/SOURCES.md'), 'utf8')).toBe(sourcesBefore);
+  });
+}
+
+// Decision 0020 adds these two to the list; both texts are recognised by their own wording (0BSD's is ISC's grant without
+// its notice condition, the Unicode data license's opens as MIT's does).
+for (const [kind, text] of [
+  ['0BSD (tslib)', 'Copyright (c) Microsoft Corporation.\n\nPermission to use, copy, modify, and/or distribute this software for any\npurpose with or without fee is hereby granted.\n\nTHE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES.\n'],
+  ['the Unicode data license', 'UNICODE LICENSE V3\n\nCOPYRIGHT AND PERMISSION NOTICE\n\nCopyright © 1991-2024 Unicode, Inc.\n\nPermission is hereby granted, free of charge, to any person obtaining a\ncopy of data files and any associated documentation (the "Data Files") or\nsoftware and any associated documentation (the "Software") to deal in the\nData Files or Software without restriction.\n'],
+] as const) {
+  test(`new accepts ${kind} (decision 0020)`, () => {
+    const tree = scratchTree();
+    const license = test.info().outputPath('upstream/LICENSE');
+    mkdirSync(dirname(license), { recursive: true });
+    writeFileSync(license, text);
+    const r = run(tree, 'new', 'fake-app', 'https://github.com/example/fake-app', SHA, license);
+    expect(r.out).not.toContain('REFUSED');
+    expect(existsSync(join(tree, 'wild/apps/fake-app/LICENSE'))).toBe(true);
   });
 }
 
