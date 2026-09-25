@@ -905,7 +905,7 @@ millisecond, and several thousand of them together still land well under 100 ms.
 density turned out to be correctness (features with no reachable pixel at all), not speed, which is
 why the ring-candidate mechanism described under actionability exists.
 
-The injected in-page script grew from roughly 22 KB to about 380 KB (not minified; 78 KB gzipped, 186 KB if it were
+The injected in-page script grew from roughly 22 KB to about 410 KB (not minified; 88 KB gzipped, 200 KB if it were
 minified — measured on the 0.1.0 build) once the bundled MapLibre style-spec evaluator (used for paint-visibility
 checks) was added, injected once per page load. This is a real, deliberate size-for-correctness trade, and it carries a version-coupling
 risk worth stating plainly: an application on a MapLibre release newer than the bundled evaluator,
