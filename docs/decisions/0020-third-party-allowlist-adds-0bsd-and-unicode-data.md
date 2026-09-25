@@ -1,6 +1,6 @@
 # 0020. Third-party material: the allowlist adds 0BSD and the Unicode data license; notices still ship with every copy
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-25
 - Decided by: Shai Sinai
 - Supersedes: 0015
@@ -27,5 +27,5 @@ Both are as permissive as the licenses already listed. The rest of 0015 is uncha
   fails on a bundled package without a license text or a copied source file with an unknown copyright line
 
 ## More
-- 0015 (superseded when this is accepted), 0008
-- docs/THIRD_PARTY_NOTICES.md, wild/fixtures/SOURCES.md; CONTRIBUTING.md "Licenses" (to be updated on acceptance)
+- 0015 (superseded), 0008
+- docs/THIRD_PARTY_NOTICES.md, wild/fixtures/SOURCES.md; CONTRIBUTING.md "Licenses"
