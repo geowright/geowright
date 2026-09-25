@@ -122,8 +122,7 @@ test.describe('timeouts', () => {
     expect(err?.message).toMatch(/"zoom":12/);
   });
 
-  // ...and reports THAT poll's findings, not what the abandoned poll had reset before its round trip; the map state is
-  // not asked for either, from a page that stopped answering.
+  // ...and reports THAT poll's findings, not what the abandoned poll had reset before its round trip.
   for (const [name, method, look, received] of [
     ['not.toHaveFeature', 'findChecked', (map: MapHandle) => expect(map).not.toHaveFeature({ layer: 'alerts', id: 1 }, { timeout: FAIL_FAST_MS }), 'Received: 1 match(es)'],
     ['toHaveFeatureCount', 'findChecked', (map: MapHandle) => expect(map.features({ layer: 'alerts', id: 1 })).toHaveFeatureCount(3, { timeout: FAIL_FAST_MS }), 'Received: 1\n'],
@@ -136,7 +135,6 @@ test.describe('timeouts', () => {
       expect(err, 'the assertion fails: the page saw the opposite').not.toBeNull();
       expect(err!.message).toContain(received);
       expect(err!.message).not.toContain('never checked');
-      expect(err!.message).toContain('(not inspected: the page was not answering)');
     });
   }
 

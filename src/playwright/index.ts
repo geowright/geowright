@@ -1122,8 +1122,9 @@ interface Poll {
  * round trips at `deadline`. A poll abandoned so after the page answered an earlier one ends the polling with THAT
  * answer: the deadline has come, and what the page last said is the verdict, as for any matcher that times out. So an
  * `attempt` sets the findings its message reports only from an answered round trip, never resets them before one.
- * `unanswered`: the last poll was abandoned at the deadline — the page is not answering, and nothing that follows may
- * wait for it.
+ * `unanswered`: no poll was ever answered — the page is not answering, and nothing that follows may wait for it. (A
+ * page that answered earlier is slow, not stalled: the failure's bounded look at the map still gets its diagnosis —
+ * on a loaded machine the last poll is often the one abandoned.)
  */
 async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number, deadline: number) => Promise<Poll>, backoff: number[] = POLL): Promise<{ pass: boolean; inconclusive?: string; unanswered?: boolean }> {
   const deadline = deadlineOf(timeout);
@@ -1137,7 +1138,6 @@ async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number,
     } catch (e) {
       if (e instanceof DeadlineError && answered) {
         last = answered;
-        unanswered = true;
         break;
       }
       last = { verdict: undefined, why: (e as Error).message.split('\n')[0] };
@@ -1148,7 +1148,7 @@ async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number,
     if (Date.now() + wait >= deadline) break;
     await new Promise((r) => setTimeout(r, wait));
   }
-  return last.verdict === undefined ? { pass: isNot, inconclusive: last.why ?? 'no verdict', unanswered } : { pass: last.verdict, unanswered };
+  return last.verdict === undefined ? { pass: isNot, inconclusive: last.why ?? 'no verdict', unanswered } : { pass: last.verdict };
 }
 
 const NOT_INSPECTED = '(not inspected: the page was not answering)';
