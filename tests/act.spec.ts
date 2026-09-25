@@ -83,6 +83,18 @@ test.describe('act gap', () => {
     await expect(map).toHaveView({ center: { lng: 35.2, lat: 32.08 } });
   });
 
+  // The source holds the feature, but the layer's filter never draws it: autoPan used to jump the camera to it anyway.
+  test("autoPan does not pan to a feature the layer's filter never draws", async ({ map, page }) => {
+    await page.getByTestId('toggle-sensors').check();
+    await map.waitForIdle();
+    const before = (await map.viewState()).center;
+    const ghost = map.feature({ layer: 'sensors', id: 504 }); // kind "ghost": the sensors layer's filter leaves it out
+    const err = await ghost.click({ timeout: FAIL_FAST_MS, autoPan: true }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('not-found');
+    expect(err?.message).toContain("the layer's filter leaves them out");
+    expect((await map.viewState()).center).toEqual(before);
+  });
+
   test('strictness: ambiguous query is an error, like a Playwright locator', async ({ map }) => {
     const err = await map.feature({ layer: 'parcels' }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('strict mode violation');
@@ -239,8 +251,8 @@ test.describe('act gap', () => {
     await page.evaluate(() => (window as any).__geowright_maps.main.resize());
     await map.waitForIdle();
     const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 5000 }).then(() => null, (e: Error) => e);
-    const popupId = await page.getByTestId('popup').getAttribute('data-id', { timeout: 1000 }).catch(() => null);
-    expect({ error: e?.message.split('\n')[0] ?? null, popupId }).toEqual({ error: null, popupId: '1' });
+    expect(e?.message.split('\n')[0] ?? null).toBeNull();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
     // a location, too (clientPoint), and the way back (worldAt)
     const two = await map.feature({ layer: 'alerts', id: 2 }).lngLat();
     await map.clickAt(two);
@@ -279,6 +291,27 @@ test.describe('act gap', () => {
     });
   }
 
+  // a throw from the real input call went into the retry loop — but the input may have left, and the retry clicked again.
+  for (const moving of [undefined, 'allow'] as const) {
+    test(`a click whose real input throws ends with that error and is not sent again (moving: ${moving})`, async ({ map, page }) => {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__alertClicks = 0;
+        w.__geowright_maps.main.on('click', 'alerts', () => w.__alertClicks++);
+      });
+      // The click reaches the page, then the call fails: its answer is lost on the way back.
+      const mouse = page.mouse;
+      const click = mouse.click.bind(mouse);
+      mouse.click = async (...args: Parameters<typeof click>) => {
+        await click(...args);
+        throw new Error('the answer to the click was lost');
+      };
+      const err = await map.feature({ layer: 'alerts', id: 1 }).click({ moving, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      expect(err?.message).toBe('the answer to the click was lost');
+      expect(await page.evaluate(() => (window as any).__alertClicks), 'number of real clicks the app received').toBe(1);
+    });
+  }
+
   test('a visible feature just across the antimeridian can be clicked', async ({ map, page }) => {
     await page.evaluate(() => {
       const w = window as any;
@@ -301,8 +334,9 @@ test.describe('act gap', () => {
 
   // A known limit: occlusion is decided from the map's hit test, which never returns pixel-only layers (raster, image,
   // video, canvas, heatmap, hillshade). An opaque one drawn above a feature does not stop click(). Documented in DESIGN
-  // "Costs and known limitations" and README Limits; this test turns green when the limit is lifted.
-  test.fail('an opaque image layer drawn above a feature occludes it (known limit)', async ({ map, page }) => {
+  // "Costs and known limitations" and README Limits. This test asserts the limit as it is, so it FAILS when the limit is
+  // lifted, and says so; any other failure (the veil never painted, the page did not answer) fails with its own message.
+  test('known limit: an opaque image layer drawn above a feature does not stop click()', async ({ map, page }) => {
     await page.evaluate(() => {
       const m = (window as any).__geowright_maps.main;
       const c = document.createElement('canvas'); c.width = c.height = 4;
@@ -311,9 +345,14 @@ test.describe('act gap', () => {
       m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[b.getWest(), b.getNorth()], [b.getEast(), b.getNorth()], [b.getEast(), b.getSouth()], [b.getWest(), b.getSouth()]] });
       m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 } }); // on top of everything
     });
-    await expect(map).toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 1500 }).then(() => null, (e: Error) => e);
-    expect(e, 'geowright clicked alert 1 although an opaque image layer covers the whole map').not.toBeNull();
+    // the premise: the veil really is drawn over alert 1 (34.77, 32.085)
+    await expect(map, 'the premise: the opaque veil is drawn over alert 1').toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click().then(() => null, (e: Error) => e);
+    if (e && /covered|occlu/.test(e.message)) {
+      throw new Error(`this limit is lifted: click() now refuses a feature under an opaque image layer. Rewrite this test to assert the refusal, and update DESIGN "Costs and known limitations" and README Limits.\n\n${e.message}`);
+    }
+    expect(e?.message ?? null, 'click() on alert 1 under the veil').toBeNull();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1'); // the click went through the veil to the app
   });
 
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {

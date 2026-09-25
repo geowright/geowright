@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>geowright demo — a map inside a shadow root</title>
+    <style>
+      body { margin: 0; font: 14px system-ui; }
+      geo-map { display: block; margin: 12px; }
+      #log { padding: 0 12px; }
+    </style>
+  </head>
+  <body>
+    <geo-map></geo-map>
+    <div id="log">Last click: <span data-testid="last-click"></span></div>
+    <script type="module" src="/src/shadow.ts"></script>
+  </body>
+</html>

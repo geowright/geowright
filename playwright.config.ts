@@ -36,6 +36,9 @@ export default defineConfig({
     baseURL: `http://localhost:${PORT}`,
     trace: 'retain-on-failure',
     viewport: { width: 1280, height: 720 },
+    // Playwright's routes never see a request a service worker answers: the network guard (tests/fixtures.ts) could not
+    // see it either. No app under test needs one.
+    serviceWorkers: 'block',
   },
   projects: [
     {

@@ -1,6 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { cartoBasemap } from './basemap';
 import { expect, test, type Routes } from './harness';
+import { FAIL_FAST_MS } from '../slow-machine';
 
 // MIERUNE/svelte-maplibre-gl examples (Svelte 5). The friction predicted earlier, for real: NO layer or source
 // has an id — the wrapper generates `svmlgl-layer-0, -1, -2` / `svmlgl-source-0` from a global counter, so an id
@@ -39,7 +40,7 @@ test.describe('wild: svelte-maplibre-gl / hover-styles', () => {
 
   test('a query by layer type that matches nothing says which layers exist', async ({ wild }) => {
     const map = await wild.open(APP, { routes: routes([-100.49, 37.83]) });
-    const err = await expect(map).toHaveFeature({ layerType: 'heatmap' }, { timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await expect(map).toHaveFeature({ layerType: 'heatmap' }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/no layer matches \{"layerType":"heatmap"\}\. Layers: .*svmlgl-layer-0\(fill,svmlgl-source-0\)/);
   });
 });

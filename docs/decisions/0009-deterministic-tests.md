@@ -1,6 +1,6 @@
 # 0009. Deterministic tests: no network, no flakes, no fixed sleeps
 
-- Status: Accepted
+- Status: Superseded by 0021
 - Date: 2026-09-20
 - Decided by: Shai Sinai
 

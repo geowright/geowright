@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
-import { geowright } from '../src/playwright';
+import { geowright, type MapHandle } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /** The default action timeout follows the test's timeout; an action's `timeout` is a wall-clock promise. */
 test.describe('timeouts', () => {
@@ -68,6 +69,126 @@ test.describe('timeouts', () => {
     }
     await expect(page.getByTestId('popup')).toHaveCount(0); // and nothing was clicked afterwards
   });
+
+  /**
+   * The page answers every round trip but the first call of `method`, which keeps its main thread busy for `ms` first:
+   * a page that stalls in the middle of an action (after it found the pixel, say).
+   */
+  const stallOnce = (page: Page, method: string, ms: number) =>
+    page.evaluate(([method, ms]) => {
+      const api = (window as any).__geowright;
+      const original = api[method];
+      api[method] = (...args: unknown[]) => {
+        api[method] = original;
+        const end = performance.now() + ms;
+        while (performance.now() < end);
+        return original(...args);
+      };
+    }, [method, ms] as const);
+
+  // The round trips of an action between finding the pixel and sending the input — arming the click-time check, the
+  // autoPan reveal, reading the lng/lat — waited for a page that stalled there for as long as it stalled: the action
+  // then carried on, and succeeded or failed long after its timeout.
+  const STALL = 3 * FAIL_FAST_MS;
+  for (const [name, method, act] of [
+    ['feature().click: arming its click-time check', 'armClick', (map: MapHandle) => map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS })],
+    ['feature().click { moving }: disarming after a miss', 'disarmClick', (map: MapHandle) => map.feature({ layer: 'alerts', id: 999 }).click({ moving: 'allow', timeout: FAIL_FAST_MS })],
+    ['feature().click { autoPan }: the reveal', 'reveal', (map: MapHandle) => map.feature({ layer: 'alerts', id: 4 }).click({ autoPan: true, timeout: FAIL_FAST_MS })],
+    ['clickAt { autoPan }: the reveal', 'revealWorld', (map: MapHandle) => map.clickAt({ lng: 35.2, lat: 32.08 }, { autoPan: true, timeout: FAIL_FAST_MS })],
+    ['feature().lngLat: reading the lng/lat', 'worldAt', (map: MapHandle) => map.feature({ layer: 'alerts', id: 1 }).lngLat({ timeout: FAIL_FAST_MS })],
+    ['feature().dragBy: reading the lng/lat it drags from', 'worldAt', (map: MapHandle) => map.feature({ layer: 'alerts', id: 1 }).dragBy({ dLng: 0.001, dLat: 0 }, { timeout: FAIL_FAST_MS })],
+  ] as const) {
+    test(`${name}: a page that stalls there fails the action at its timeout`, async ({ map, page }) => {
+      await stallOnce(page, method, STALL);
+      const started = Date.now();
+      const err = await act(map).then(() => null, (e: Error) => e);
+      const took = Date.now() - started;
+      expect(err?.message, name).toContain(`timed out after ${FAIL_FAST_MS}ms`);
+      expect(err?.message, name).toMatch(/the page did not answer "\w+" in the time that was left/);
+      expect(took, `${name}: rejected after ${took}ms, with a ${FAIL_FAST_MS}ms timeout and a ${STALL}ms stall`).toBeLessThan(2 * FAIL_FAST_MS);
+    });
+  }
+
+  test.describe('touch', () => {
+    test.use({ hasTouch: true });
+    test('feature().tap: a page that stalls arming its check fails the action at its timeout', async ({ map, page }) => {
+      await stallOnce(page, 'armClick', STALL);
+      const started = Date.now();
+      const err = await map.feature({ layer: 'alerts', id: 1 }).tap({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      const took = Date.now() - started;
+      expect(err?.message).toContain(`timed out after ${FAIL_FAST_MS}ms`);
+      expect(err?.message).toContain('the page did not answer "armClick"');
+      expect(took, `rejected after ${took}ms, with a ${FAIL_FAST_MS}ms timeout and a ${STALL}ms stall`).toBeLessThan(2 * FAIL_FAST_MS);
+    });
+  });
+
+  // an assertion's polls (the settle wait, the query, the camera read) and marker() / popup() waited for a busy page
+  // without a bound: they failed when the page answered (~5 s here), not at their timeout; and a failed assertion then
+  // waited for the page again for its map state and screenshot.
+  for (const [name, look] of [
+    ['toHaveFeature', (map: MapHandle) => expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: TIMEOUT })],
+    ['not.toHaveFeature', (map: MapHandle) => expect(map).not.toHaveFeature({ layer: 'alerts', id: 1 }, { timeout: TIMEOUT })],
+    ['toHaveFeatureCount', (map: MapHandle) => expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(99, { timeout: TIMEOUT })],
+    ['toBeVisibleOnMap', (map: MapHandle) => expect(map.feature({ layer: 'alerts', id: 1 })).toBeVisibleOnMap({ timeout: TIMEOUT })],
+    ['toHaveGeometry', (map: MapHandle) => expect(map.feature({ layer: 'alerts', id: 1 })).toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: TIMEOUT })],
+    ['toHavePopup', (map: MapHandle) => expect(map).toHavePopup({}, { timeout: TIMEOUT })],
+    ['toHaveView', (map: MapHandle) => expect(map).toHaveView({ zoom: 3 }, { timeout: TIMEOUT })],
+    ['marker()', (map: MapHandle) => map.marker({ at: { lng: 34.84, lat: 32.12 } }, { timeout: TIMEOUT })],
+    ['popup()', (map: MapHandle) => map.popup({}, { timeout: TIMEOUT })],
+  ] as const) {
+    test(`${name} on a page that cannot answer fails at its timeout, not when the page answers`, async ({ map, page }) => {
+      block(page, BUSY);
+      const started = Date.now();
+      const err = await look(map).then(() => null, (e: Error) => e);
+      const took = Date.now() - started;
+      expect(err?.message, name).toMatch(/the page did not answer "\w+" in the time that was left/);
+      expect(took, `${name} failed ${took}ms after it started, with a ${TIMEOUT}ms timeout and the page busy for ${BUSY}ms`).toBeLessThan(2 * TIMEOUT);
+    });
+  }
+
+  // A matcher polls until its deadline; the poll still running then is abandoned. When the page answered an earlier poll,
+  // that answer is what the failure reports: "the page did not answer" only when it never did. The page here answers
+  // the first look, then blocks inside the second one past the deadline. (Blocking from a timer the first look set raced
+  // the delivery of the first answer: under load the test then saw no answer at all.)
+  const stopsAfterFirstLook = (page: Page, method: string) =>
+    page.evaluate(([method, ms]) => {
+      const api = (window as any).__geowright;
+      const orig = api[method];
+      let looks = 0;
+      api[method] = (...args: unknown[]) => {
+        if (looks++ === 1) { const end = performance.now() + ms; while (performance.now() < end); }
+        return orig(...args);
+      };
+    }, [method, 2 * FAIL_FAST_MS] as const);
+
+  test('a matcher whose page stops answering after its first look reports what it last saw, not "the page did not answer"', async ({ map, page }) => {
+    await stopsAfterFirstLook(page, 'findChecked');
+    const err = await expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('Received: 0 match(es)');
+  });
+
+  test('toHaveView whose page stops answering after its first look reports the camera it last saw', async ({ map, page }) => {
+    await stopsAfterFirstLook(page, 'viewState');
+    const err = await expect(map).toHaveView({ zoom: 3 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(err?.message).not.toContain('did not answer');
+    expect(err?.message).toMatch(/"zoom":12/);
+  });
+
+  // ...and reports THAT poll's findings, not what the abandoned poll had reset before its round trip.
+  for (const [name, method, look, received] of [
+    ['not.toHaveFeature', 'findChecked', (map: MapHandle) => expect(map).not.toHaveFeature({ layer: 'alerts', id: 1 }, { timeout: FAIL_FAST_MS }), 'Received: 1 match(es)'],
+    ['toHaveFeatureCount', 'findChecked', (map: MapHandle) => expect(map.features({ layer: 'alerts', id: 1 })).toHaveFeatureCount(3, { timeout: FAIL_FAST_MS }), 'Received: 1\n'],
+    ['toHaveGeometry', 'compareGeometry', (map: MapHandle) => expect(map.feature({ layer: 'alerts', id: 1 })).toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: FAIL_FAST_MS }), 'Geometry on the map (data): {"type":"Point"'],
+  ] as const) {
+    test(`${name} whose page stops answering after its first look reports that look`, async ({ map, page }) => {
+      await expect(map).toHaveFeature({ layer: 'alerts', id: 1 });
+      await stopsAfterFirstLook(page, method);
+      const err = await look(map).then(() => null, (e: Error) => e);
+      expect(err, 'the assertion fails: the page saw the opposite').not.toBeNull();
+      expect(err!.message).toContain(received);
+      expect(err!.message).not.toContain('never checked');
+    });
+  }
 
   // a last attempt that started with a few ms left was abandoned for want of them, and the timeout then blamed
   // "a busy main thread" on an idle page, burying the real reason (here: occluded). timeout: 1 makes it certain.

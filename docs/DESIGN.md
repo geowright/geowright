@@ -185,7 +185,10 @@ on every retry:
    `document.elementFromPoint`, so a marker or popup sitting exactly on a feature's best interior
    candidate correctly blocks that candidate and the search moves on to the next one.
 6. **The map is scrolled into the browser viewport** if it is not already, since no pointer can reach
-   a part of the page that is off-screen — the same thing a Locator does before acting.
+   a part of the page that is off-screen — the same thing a Locator does before acting. A map larger
+   than the window cannot be scrolled fully into it: a pixel outside the window is refused (for a
+   location action too, and for a drag's release point, `force` or not — `force` skips the cover
+   checks, not reachability), since input sent there never reaches the application.
 7. **At the instant the real pointer event fires, the hit test is re-run at that exact pixel.** Between
    computing a target pixel in the page and Playwright dispatching input for it a few milliseconds
    later in the test process, the application could have moved the map. An armed, capture-phase
@@ -197,7 +200,9 @@ on every retry:
    resolved to when the check was armed — a piece of it, by key and, for an id-less feature, by
    touching its pieces — not merely something the query matches: an id-less look-alike that slides
    under the pointer is another feature. A moving target (`moving: 'allow'`) is resolved again when
-   the event arrives, since its pieces from before the press no longer touch the ones drawn at it. This closes the same class of race Playwright's own hit-target interception closes for
+   the event arrives, since its pieces from before the press no longer touch the ones drawn at it; the
+   query must then match exactly one feature, as it had to when it was aimed at — with two matches, the
+   one that happens to be under the pointer is not the one that was asked for. This closes the same class of race Playwright's own hit-target interception closes for
    ordinary DOM elements, and it was verified with a targeted mutation test: with the check disabled,
    a spec built to provoke the race fails; with it enabled, the same spec passes.
 
@@ -254,15 +259,37 @@ thousands of candidate pixels to roughly two thousand and well under two seconds
 
 ## Identity: matching a click back to a feature
 
-MapLibre's rendered feature `id` cannot be trusted as a stable key on its own. It coerces non-integer
-ids to numbers (a UUID string id from a drawing library becomes something like `0`, `4`, `75`, or
-`8866` — the leading digits, colliding across genuinely different features), and the same feature
-comes back once per internal tile it happens to be sliced into, each time with a different, clipped
-piece of its geometry. For this reason **identity is `layer + id + properties`, and geometry received
-from the renderer is treated as a possibly-partial piece, never the authoritative shape** — the full
-shape, when it is needed (drawing / geometry assertions), is read from the source's own data instead.
-Property objects are compared by their values with keys in a stable order: tile generations and source data can
-enumerate the same fields differently, and that difference must not split one feature into two identities.
+MapLibre's rendered feature `id` cannot be trusted as a stable key on its own. It keeps an id only if it
+is a non-negative integer: a GeoJSON id goes through its tile encoder, which parses a string id as an
+integer and writes any number as an unsigned integer (a UUID string id from a drawing library becomes
+something like `0`, `4`, `75`, or `8866` — the leading digits, colliding across genuinely different
+features; `'north-gate'` becomes `0`, `-5` becomes 18446744073709552000, `1.5` becomes `1`; Mapbox GL 1
+drops a non-numeric one), and the same feature comes back once per internal tile it happens to be sliced
+into, each time with a different, clipped piece of its geometry. For this reason **identity is
+`layer + id + properties`, and geometry received from the renderer is treated as a possibly-partial
+piece, never the authoritative shape** — the full shape, when it is needed (drawing / geometry
+assertions), is read from the source's own data instead. Property objects are compared by their values
+with keys in a stable order: tile generations and source data can enumerate the same fields differently,
+and that difference must not split one feature into two identities. Ids are unique within one
+source-layer of a vector source only, so a feature's source-layer is part of its identity too.
+
+The key is safe, but not collision-free, and a query is by the app's id, not the renderer's:
+
+- **A query by an id the renderer does not keep** (`{ id: 'north-gate' }`) is resolved through the
+  source's data, for a GeoJSON source: the data features with that id, then the rendered pieces with
+  their properties — and, when a look-alike shares those properties, the pieces that touch the data
+  feature's own geometry. On a tiled source such an id can never be drawn, so the query is an error that
+  names `promoteId` (the id then comes from a property and is kept as it is) instead of matching nothing,
+  which made every negative assertion by it pass. Left as a limit: in a source that mixes both kinds of
+  id, a query by an integer id also matches a feature whose id is drawn as that integer.
+- **Look-alikes whose ids are drawn as one number** (`'north-gate'` and `'south-gate'`, both `0`, same
+  properties) share a key. When the pieces of such a key do not touch, the source is asked how many
+  features it holds with those properties that could have been drawn with that id; if more than one,
+  the key is split by contact like id-less pieces (below).
+- **Data and rendered properties differ in form.** The tile encoder drops a property whose value is
+  `null`, and MapLibre before 6 / Mapbox GL deliver a nested object as its JSON string. Wherever a data
+  feature is matched to rendered ones (full geometry, the snapshot's "not drawn" count, the proofs
+  below), both sides are compared without null values and with JSON strings read as what they hold.
 
 Related layers that draw one logical thing are folded into a single entity for the purposes of a
 handle or a snapshot row — a circle, its label, and its outline, drawn on three separate layers, are
@@ -294,8 +321,11 @@ built around:
 - **World copies.** At low zoom, a web-Mercator map draws the whole world more than once side by
   side. The same id-less feature then appears in each visible copy, and identity keys built purely
   from screen position would treat those as separate features. The adapter can report the pixel
-  period the surface repeats at; x-coordinates are folded by that period before pieces are compared,
-  so multiple on-screen copies of one feature merge back into one identity.
+  period the surface repeats at, and pieces are compared modulo that period, so multiple on-screen
+  copies of one feature merge back into one identity. Compared, not folded one by one: folding each
+  piece by where its own left edge falls tore two touching tile pieces of one line apart whenever their
+  left edges fell on either side of a multiple of the period (one tiled line read as two features, and
+  a click on it as a strict-mode violation).
 
 A residual, unresolved case: under deliberately heavy concurrent load, roughly one time in twenty an
 animated point occasionally reports itself as "ambiguous" rather than the more accurate "unstable" —
@@ -906,9 +936,9 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   own layer still changes the pixels at the aimed point with the overlay drawn. That is a pixel probe per action
   (three renders, and MapLibre reloads the probed layer's source afterwards, so the feature can briefly vanish from
   the very hit test that verifies the click). The contribution of the overlay alone is not enough either: a
-  translucent radar layer contributes pixels and hides nothing. Not done; a test marked as failing
-  (`tests/act.spec.ts`) turns green when it is. Until then, the workaround is an assertion before the action:
-  [RECIPES](RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
+  translucent radar layer contributes pixels and hides nothing. Not done; a test in `tests/act.spec.ts` asserts
+  the limit as it is, and fails saying "this limit is lifted" when it is. Until then, the workaround is an assertion
+  before the action: [RECIPES](RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
 - The globe query workaround is a grid-based heuristic: an extrusion narrower than 16 px whose footprint centre is
   off-screen or on the far side can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
 - A zoom-and-data paint expression on a view whose tile zooms vary (terrain, high pitch, globe) is judged "visible"

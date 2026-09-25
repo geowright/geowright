@@ -17,6 +17,8 @@ const open = (wild: Wild) => wild.open(example('display-a-globe-with-a-fill-extr
 
 test.describe('wild: display-a-globe-with-a-fill-extrusion-layer', () => {
   test.slow(); // globe projection is slow to render under software GL
+  // test.slow() does not touch expect's 7s, and one round trip into a globe page takes seconds on a loaded machine
+  // (measured): a matcher on the globe gets the map's own 20s (`map.timeout`, set above) instead.
 
   test('opens in globe projection, centred at the longitude the example asked for', async ({ wild }) => {
     const map = await open(wild);
@@ -58,8 +60,8 @@ test.describe('wild: display-a-globe-with-a-fill-extrusion-layer', () => {
     const map = await open(wild);
     const rawBox = await page.evaluate(() => (window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['extrude-polygon-layer'] }).length);
     expect(rawBox).toBe(0); // the upstream behaviour this exists for; if it starts failing, MapLibre fixed it
-    await expect(map).toHaveFeature({ layer: 'extrude-polygon-layer', where: { color: '#ff0044' } }); // the red band round the equator
-    await expect(map).toHaveFeature({ layer: 'extrude-polygon-layer', where: { color: '#22ff44' } });
+    await expect(map).toHaveFeature({ layer: 'extrude-polygon-layer', where: { color: '#ff0044' } }, { timeout: map.timeout }); // the red band round the equator
+    await expect(map).toHaveFeature({ layer: 'extrude-polygon-layer', where: { color: '#22ff44' } }, { timeout: map.timeout });
     await page.evaluate(() => {
       const m = (window as any).__geowright_maps.main;
       m.on('click', (e: any) => ((window as any).__clicked = m.queryRenderedFeatures(e.point, { layers: ['extrude-polygon-layer'] })[0]?.properties.color));

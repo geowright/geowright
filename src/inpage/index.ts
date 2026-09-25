@@ -85,15 +85,17 @@ const api = {
   },
   actionPoint: async (mapId: string, q: any, opts: any) => (await engine(mapId).learnIdentity(q), engine(mapId).actionPoint(q, opts)),
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
-  overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
+  // a `feature` query is resolved like any other: learnIdentity first (an id the renderer does not keep is looked up in the data)
+  overlaysAt: async (mapId: string, kind: any, o: any) => (o?.feature && (await engine(mapId).learnIdentity(o.feature)), engine(mapId).overlaysAt(kind, o)),
   /**
    * map.marker() / map.popup(): match AND pin in one call, so the pinned element is the one that matched (in
    * two round trips an overlay inserted in between re-pointed a document index). With exactly one match its element is
    * kept in `window.__geowright_pins` under a token, for the Playwright side's pin selector engine. `docIndex`: its
    * position among the document's matches, for the order-bound fallback (-1 inside a shadow root).
    */
-  pinOverlay: (mapId: string, kind: any, o: any) => {
+  pinOverlay: async (mapId: string, kind: any, o: any) => {
     const e = engine(mapId);
+    if (o?.feature) await e.learnIdentity(o.feature);
     const list = e.overlaysAt(kind, o);
     if (list.length !== 1) return { list };
     const el = e.adapter.overlayElement?.(list[0]);
@@ -118,10 +120,11 @@ const api = {
     if (!info) return { ok: false as const, message: `layer "${layer}" does not exist. Layers: ${a.listLayers().map((l) => l.id).join(', ')}` };
     const el = a.surface();
     if (el.isConnected === false || el.clientWidth < 1 || el.clientHeight < 1) return { ok: false as const, message: el.isConnected === false ? 'map canvas is detached from the document; the map was removed or its container was detached' : `map canvas is ${el.clientWidth}x${el.clientHeight}` };
-    const p = a.project(world);
+    const near = engine(mapId).nearestWorld(world); // just across the antimeridian: the copy in view
+    const p = a.project(near);
     if (p.x < 0 || p.y < 0 || p.x > el.clientWidth || p.y > el.clientHeight) return { ok: false as const, message: 'that location is outside the viewport' };
     // Its pixel shows something else — the near side of a globe, the ridge in front of it: no verdict about it.
-    if (a.isOnSurface?.(world) === false) return { ok: false as const, message: 'that location is not on the visible map surface (the far side of the globe, or hidden behind terrain or beyond the horizon)' };
+    if (a.isOnSurface?.(near) === false) return { ok: false as const, message: 'that location is not on the visible map surface (the far side of the globe, or hidden behind terrain or beyond the horizon)' };
     if (!info.visible) return { ok: true as const, diff: 0, surface: p, hidden: true };
     // an AREA: imagery is often transparent at any one pixel
     const r = a.probePixels ? await a.probePixels(layer, p, radiusPx, budgetMs) : { diff: await a.pixelContribution?.(layer, p, radiusPx) };
@@ -152,27 +155,37 @@ const api = {
     w.__geowright_mirrors[mapId] = startMirror(engine(mapId), mapId, opts);
     return true;
   },
-  snapshot: async (mapId: string, opts?: any) => (await engine(mapId).learnIdentity({ layer: opts?.layers }), engine(mapId).snapshot(opts)),
+  snapshot: async (mapId: string, opts?: any) => {
+    await engine(mapId).learnIdentity({ layer: opts?.layers });
+    if (opts?.filter?.id !== undefined) await engine(mapId).learnIdentity(opts.filter);
+    return engine(mapId).snapshot(opts);
+  },
   explain: (mapId: string, q: any) => engine(mapId).explain(q),
   reveal: (mapId: string, q: any) => engine(mapId).reveal(q),
   viewState: (mapId: string) => engine(mapId).adapter.getViewState(),
   layers: (mapId: string) => engine(mapId).adapter.listLayers(),
   isMoving: (mapId: string) => engine(mapId).adapter.isMoving(),
-  /** world -> client pixel, plus whether that pixel is inside the surface and not DOM-covered */
+  /**
+   * world -> client pixel, plus whether that pixel is inside the surface, inside the browser WINDOW (`offview`: on the
+   * map, but the map is bigger than the window there — no pointer can reach it, as in actionPoint) and not DOM-covered.
+   */
   clientPoint: (mapId: string, world: any) => {
     engine(mapId).scrollIntoView();
     const a = engine(mapId).adapter;
-    const p = a.project(world);
+    const near = engine(mapId).nearestWorld(world); // just across the antimeridian: the copy in view
+    const p = a.project(near);
     const el = a.surface();
     const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
     const client = toClient(clientFrame(el), p); // a CSS-scaled map is not just offset
-    const top = inside ? topElementAt(client.x, client.y) : null;
-    const hidden = inside && a.isOnSurface ? !a.isOnSurface(world) : false;
-    return { client, surface: p, inside, hidden, covered: inside && top !== el, moving: a.isMoving() };
+    const offview = inside && (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight);
+    const top = inside && !offview ? topElementAt(client.x, client.y) : null;
+    const hidden = inside && a.isOnSurface ? !a.isOnSurface(near) : false;
+    return { client, surface: p, inside, offview, hidden, covered: inside && !offview && top !== el, moving: a.isMoving() };
   },
+  /** lng/lat under a client pixel, as REPORTED to the user: lng in [-180, 180] (aiming with it picks the copy in view). */
   worldAt: (mapId: string, client: { x: number; y: number }) => {
-    const a = engine(mapId).adapter;
-    return a.unproject(toSurface(clientFrame(a.surface()), client));
+    const e = engine(mapId);
+    return e.reported(e.adapter.unproject(toSurface(clientFrame(e.adapter.surface()), client)));
   },
   revealWorld: async (mapId: string, world: any) => {
     await engine(mapId).adapter.reveal?.(world);

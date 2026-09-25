@@ -16,7 +16,7 @@ import type {
   PixelPoint,
   RenderedFeature,
 } from './types';
-import type { InternalCanvasAdapter, StyleBranch, StyleCause } from './types-internal';
+import type { InternalCanvasAdapter, InternalRenderedFeature, StyleBranch, StyleCause } from './types-internal';
 
 /** A click-time (or hover-time) check listening in the page: its verdict so far, and how to remove its listeners. */
 export interface ArmedCheck {
@@ -43,7 +43,7 @@ export class Engine<W = unknown> {
 
   /** `rendered: false` for features that come from source DATA: paint visibility does not apply. */
   private matches(f: RenderedFeature, q: FeatureQuery, rendered = true): boolean {
-    if (q.id !== undefined && String(f.id) !== String(q.id)) return false;
+    if (q.id !== undefined && !(rendered ? this.hasId(f, q.id) : String(f.id) === String(q.id))) return false;
     const want = q.visible ?? true; // visible by default: "the map has a feature" means a user can see it
     if (rendered && want !== 'any' && this.visibility(f).visible !== want) return false;
     if (q.where) {
@@ -54,6 +54,24 @@ export class Engine<W = unknown> {
     return true;
   }
 
+  /**
+   * Is this RENDERED feature the one the app's data gives `id`? Where the renderer keeps ids (learnt in resolveId), its
+   * id says so. Where it does not (a GeoJSON id that is not a non-negative integer), the data features with that id,
+   * read from the source, say which rendered pieces are theirs: the same properties — and when a look-alike shares
+   * them, touching the data feature's own geometry.
+   */
+  private hasId(f: RenderedFeature, id: string | number): boolean {
+    const targets = this.byDataId.get(idKey(f.layer, id));
+    if (!targets) return String(f.id) === String(id);
+    const props = comparable(f.properties);
+    return targets.some((t) => t.props === props && (t.alone || this.touch(f, t.feature)));
+  }
+
+  /** Is the renderer's id of this piece the feature's own — not one it made up, shared with look-alikes (learnIdentity)? */
+  private trustsId(f: RenderedFeature): boolean {
+    return f.id !== undefined && !this.coerced.has(this.key(f));
+  }
+
   private visibility(f: RenderedFeature) {
     return this.adapter.visibility?.(f) ?? { visible: true };
   }
@@ -62,7 +80,8 @@ export class Engine<W = unknown> {
    * Identity of a logical feature. Tiling returns the same feature as several pieces, so pieces
    * must merge — but the renderer's `id` alone is NOT trustworthy: MapLibre coerces non-integer
    * ids (terra-draw uses UUID strings) into colliding numbers like 0, 4, 75. Pieces of one feature
-   * always share identical properties, so id + properties is both safe and collision-free.
+   * always share identical properties, so id + properties is safe. It is not collision-free: look-alikes (same
+   * properties) whose ids coerce to one number share a key, and are split by contact (`coerced`, split()).
    */
   private key(f: RenderedFeature): string {
     return `${f.layer}|${f.id ?? ''}|${stableProperties(f.properties)}`;
@@ -74,7 +93,9 @@ export class Engine<W = unknown> {
    * user it is the same thing. Without this, every labelled point is "occluded" by its own label.
    */
   private entityKey(f: RenderedFeature): string {
-    return `${f.source ?? f.layer}|${f.id ?? ''}|${stableProperties(f.properties)}`;
+    // ids are unique within one source-layer of a vector source only: the source-layer is part of what the entity is
+    const sourceLayer = (f as InternalRenderedFeature).sourceLayer;
+    return `${f.source ?? f.layer}${sourceLayer ? '/' + sourceLayer : ''}|${f.id ?? ''}|${stableProperties(f.properties)}`;
   }
 
   /**
@@ -86,16 +107,15 @@ export class Engine<W = unknown> {
    * components of their on-screen boxes. Limit: two id-less, property-identical shapes that touch stay one.
    */
   private split(pieces: RenderedFeature[]): RenderedFeature[][] {
-    if (pieces.length < 2 || pieces[0].id !== undefined || this.single.has(this.key(pieces[0]))) return [pieces];
+    if (pieces.length < 2 || this.trustsId(pieces[0]) || this.single.has(this.key(pieces[0]))) return [pieces];
     // Sweep along x so that thousands of look-alike points cost n·log n, not n².
-    // World copies: the same feature drawn once per visible copy of the world is one feature — fold x by the period.
+    // World copies: the same feature drawn once per visible copy of the world is one feature — pieces touch MODULO the
+    // period (see touching()). In the sweep, each piece is also entered one period to its left and right, under its own
+    // index. (Folding each piece by floor(x0 / period) on its own tore apart two touching pieces whose left edges fell on
+    // either side of a multiple of the period: one tiled line read as two features on a zoomed-out map.)
     const wrap = this.adapter.wrapPx?.();
-    const fold = (b: ReturnType<Engine<W>['box']>) => {
-      if (!wrap) return b;
-      const shift = Math.floor(b.x0 / wrap) * wrap;
-      return { ...b, x0: b.x0 - shift, x1: b.x1 - shift };
-    };
-    const boxes = pieces.map((p, i) => ({ i, ...fold(this.box(p)) })).sort((a, b) => a.x0 - b.x0);
+    const own = pieces.map((p, i) => ({ i, ...this.box(p) }));
+    const boxes = (wrap ? own.flatMap((b) => [b, { ...b, x0: b.x0 - wrap, x1: b.x1 - wrap }, { ...b, x0: b.x0 + wrap, x1: b.x1 + wrap }]) : own).sort((a, b) => a.x0 - b.x0);
     const parent = pieces.map((_, i) => i);
     const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
     for (let m = 0; m < boxes.length; m++) {
@@ -118,39 +138,116 @@ export class Engine<W = unknown> {
    */
   private single = new Set<string>();
 
+  /**
+   * Keys PROVEN to be several features although their pieces carry an id: the renderer made the id up. MapLibre draws a
+   * GeoJSON id that is not a non-negative integer as a coerced number ('north-gate' and 'south-gate' both as 0), so two
+   * look-alikes with such ids share one key; their pieces are split by contact like id-less ones. Learnt from the
+   * source, like `single`, and only when the pieces of one key do not touch.
+   */
+  private coerced = new Set<string>();
+
+  /**
+   * A query id the renderer does not keep (see `coerced`), resolved through the source's data: `layer + id` → the data
+   * features with that id, their properties (as `comparable` puts them), and whether no other feature the layer draws
+   * has the same properties (`alone`; otherwise a rendered piece must also touch the data feature to be it).
+   */
+  private byDataId = new Map<string, { feature: RenderedFeature; props: string; alone: boolean }[]>();
+
   async learnIdentity(q: FeatureQuery): Promise<void> {
     // A registered map may have been removed (or hidden to 0×0) while Playwright was waiting: nothing to learn from it.
     // Not an error HERE — the query that follows reports it (group() refuses such a surface, actionPoint explains it).
     if (this.surfaceProblem()) return;
+    const cache = new Map<string, Promise<RenderedFeature[] | null>>();
+    const dataOf = (layer: string) => {
+      let d = cache.get(layer);
+      if (!d) cache.set(layer, (d = this.adapter.queryData ? this.adapter.queryData(layer).then((v) => v ?? null) : Promise.resolve(null)));
+      return d;
+    };
+    if (q.id !== undefined) await this.resolveId(q, q.id, dataOf);
     if (!this.adapter.queryData || this.hiddenAt(q.at)) return;
-    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    const at = q.at ? this.projectAt(q.at) : undefined;
+    // pieces with an id are looked at only where the renderer may have made the id up: layers the source can answer for
+    let geojson: Set<string> | undefined;
+    const answers = (layer: string) => (geojson ??= new Set(this.adapter.listLayers().filter((l) => l.sourceType === 'geojson').map((l) => l.id))).has(layer);
     const byKey = new Map<string, RenderedFeature[]>();
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
-      if (f.id !== undefined) continue;
+      if (f.id !== undefined && !answers(f.layer)) continue;
       const k = this.key(f);
       byKey.set(k, [...(byKey.get(k) ?? []), f]);
     }
-    const data = new Map<string, RenderedFeature[] | null>();
     for (const [k, pieces] of byKey) {
       // Only a moment in which the pieces do NOT touch can be decided; what was learnt then stays learnt
       // until the data says otherwise (the two-generation instant comes and goes between calls).
       if (pieces.length < 2 || this.splitAlways(pieces).length < 2) continue;
-      const layer = pieces[0].layer;
-      if (!data.has(layer)) data.set(layer, (await this.adapter.queryData(layer)) ?? null);
-      const props = stableProperties(pieces[0].properties);
-      const n = data.get(layer)?.filter((d) => stableProperties(d.properties) === props).length;
-      if (n === 1) this.single.add(k);
-      else this.single.delete(k);
+      const { layer, id } = pieces[0];
+      const data = await dataOf(layer);
+      if (!data) continue;
+      const props = comparable(pieces[0].properties);
+      // id-less: every feature the layer draws with these properties; with an id: those the renderer could have given it
+      const n = data.filter((d) => comparable(d.properties) === props && this.drawnBy(d) && (id === undefined || !this.keepsId(d) || String(d.id) === String(id))).length;
+      if (id === undefined) {
+        if (n === 1) this.single.add(k);
+        else this.single.delete(k);
+      } else if (n > 1) this.coerced.add(k);
+      else this.coerced.delete(k);
+    }
+  }
+
+  /** Does the renderer draw this DATA feature (from queryData) with its own id? */
+  private keepsId(d: RenderedFeature): boolean {
+    return d.id !== undefined && this.adapter.idRoundTrips?.(d.layer, d.id) !== false;
+  }
+
+  /**
+   * A query by an id the renderer does not keep: find the features with that id in each layer's source data (hasId()).
+   * Where no layer of the query can be asked (a tiled source, a GeoJSON URL on an old version) the query could never
+   * match anything, and a negative assertion by it would pass on a feature that is drawn: an error that says what to do.
+   */
+  private async resolveId(q: FeatureQuery, id: string | number, dataOf: (layer: string) => Promise<RenderedFeature[] | null>): Promise<void> {
+    let unanswerable: string | undefined;
+    let answerable = false;
+    for (const layer of this.layersOf(q) ?? this.adapter.listLayers().map((l) => l.id)) {
+      const k = idKey(layer, id);
+      const keeps = this.adapter.idRoundTrips?.(layer, id);
+      if (keeps !== false) {
+        this.byDataId.delete(k);
+        answerable ||= keeps === true;
+        continue;
+      }
+      const data = await dataOf(layer);
+      if (!data) {
+        this.byDataId.delete(k);
+        unanswerable ??= layer;
+        continue;
+      }
+      answerable = true;
+      const drawn = data.filter((d) => this.drawnBy(d));
+      const count = new Map<string, number>();
+      for (const d of drawn) count.set(comparable(d.properties), (count.get(comparable(d.properties)) ?? 0) + 1);
+      const targets = drawn.filter((d) => d.id !== undefined && String(d.id) === String(id)).map((d) => ({ feature: d, props: comparable(d.properties), alone: count.get(comparable(d.properties)) === 1 }));
+      this.byDataId.delete(k); // most recent last: the oldest are dropped first
+      this.byDataId.set(k, targets);
+      if (this.byDataId.size > 64) this.byDataId.delete(this.byDataId.keys().next().value!);
+    }
+    if (unanswerable !== undefined && !answerable) {
+      throw new Error(
+        `geowright: id ${JSON.stringify(id)} can never match a feature of layer "${unanswerable}": the map library draws a feature id that is not a ` +
+          `non-negative integer as another number (or none), and this source's data cannot be read to find the feature by the id it was given ` +
+          `(a tiled source, or GeoJSON given by URL to a map library version without GeoJSONSource.getData()). Set promoteId on the source so that ids come from a property, or query by that property: where: { <property>: ${JSON.stringify(id)} }`,
+      );
     }
   }
 
   private splitAlways(pieces: RenderedFeature[]): RenderedFeature[][] {
     const k = this.key(pieces[0]);
     const was = this.single.delete(k);
+    const wasCoerced = this.coerced.has(k);
+    this.coerced.add(k);
     try {
       return this.split(pieces);
     } finally {
       if (was) this.single.add(k);
+      if (!wasCoerced) this.coerced.delete(k);
     }
   }
 
@@ -164,6 +261,34 @@ export class Engine<W = unknown> {
     const anchor = part.kind === 'point' ? part.coord : part.kind === 'line' ? part.coords[0] : part.rings[0][0];
     const toWorld = (anchor && this.adapter.nearestCopy?.(anchor)) || ((c: number[]) => this.adapter.worldFromCoord(c));
     return (c) => this.adapter.project(toWorld(c));
+  }
+
+  /**
+   * A LOCATION (a query's `at`, a place to act at) in the same copy of the world as `projector()` picks for geometry:
+   * seen from lng 179.5, lng -179.8 is drawn 0.7° east of the centre, not 359° west. Its pixel, and whether that
+   * pixel shows it (a pitched camera sees the far copy beyond the horizon), are those of this copy.
+   */
+  nearestWorld(at: unknown): W {
+    const { lng, lat } = at as { lng: number; lat: number };
+    const c = [lng, lat];
+    return this.adapter.nearestCopy?.(c)?.(c) ?? (at as W);
+  }
+
+  /**
+   * A world position as it is REPORTED to the user (`info().lngLat`, `lngLat()`, `lngLatAt()`): lng in [-180, 180]. The
+   * pixel of the copy in view unprojects to 180.2 for data at -179.8, which compares badly with the data (and with what
+   * the app's own events say, wrapped). Nothing is lost: an action given the wrapped value aims at the copy in view
+   * (nearestWorld). Aiming never goes through here.
+   */
+  reported(w: W): W {
+    const lng = (w as { lng?: unknown } | undefined)?.lng;
+    if (typeof lng !== 'number' || !Number.isFinite(lng) || (lng >= -180 && lng <= 180)) return w;
+    const wrapped = ((((lng + 180) % 360) + 360) % 360) - 180;
+    return { ...w, lng: wrapped === -180 ? 180 : wrapped };
+  }
+
+  projectAt(at: unknown): PixelPoint {
+    return this.adapter.project(this.nearestWorld(at));
   }
 
   /** On-screen bounding box of a piece's geometry. */
@@ -180,20 +305,29 @@ export class Engine<W = unknown> {
   }
 
   private touch(a: RenderedFeature, b: RenderedFeature): boolean {
+    return touching(this.box(a), this.box(b), this.adapter.wrapPx?.());
+  }
+
+  /** touch(), for comparing many against many: each feature's on-screen box is computed once. */
+  private toucher(): (a: RenderedFeature, b: RenderedFeature) => boolean {
     const wrap = this.adapter.wrapPx?.();
-    const fold = (v: ReturnType<Engine<W>['box']>) => (wrap ? { ...v, x0: v.x0 - Math.floor(v.x0 / wrap) * wrap, x1: v.x1 - Math.floor(v.x0 / wrap) * wrap } : v);
-    const p = fold(this.box(a)), q = fold(this.box(b));
-    return p.x0 <= q.x1 + TOUCH_PX && q.x0 <= p.x1 + TOUCH_PX && p.y0 <= q.y1 + TOUCH_PX && q.y0 <= p.y1 + TOUCH_PX;
+    const boxes = new Map<RenderedFeature, ReturnType<Engine<W>['box']>>();
+    const boxOf = (f: RenderedFeature) => {
+      let v = boxes.get(f);
+      if (!v) boxes.set(f, (v = this.box(f)));
+      return v;
+    };
+    return (a, b) => touching(boxOf(a), boxOf(b), wrap);
   }
 
   /** Is this hit a piece of THAT feature? The key decides, plus — for id-less features — touching it. */
   private isPieceOf(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
-    return this.key(h) === this.key(pieces[0]) && (h.id !== undefined || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
+    return this.key(h) === this.key(pieces[0]) && (this.trustsId(h) || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
   }
 
   /** Same DATA entity (whatever layer drew it): a circle and its own label, a fill and its outline. */
   private sameEntity(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
-    return this.entityKey(h) === this.entityKey(pieces[0]) && (h.id !== undefined || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
+    return this.entityKey(h) === this.entityKey(pieces[0]) && (this.trustsId(h) || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
   }
 
   /**
@@ -214,7 +348,7 @@ export class Engine<W = unknown> {
    * refused.
    */
   private hiddenAt(at: unknown): boolean {
-    return at !== undefined && this.adapter.isOnSurface?.(at as W) === false;
+    return at !== undefined && this.adapter.isOnSurface?.(this.nearestWorld(at)) === false;
   }
 
   /** Rendered features matching the query, grouped into logical features (pieces merged). Throws when the surface cannot be looked at. */
@@ -224,7 +358,7 @@ export class Engine<W = unknown> {
     for (const v of Object.values(q.where ?? {})) checkWhere(v); // a malformed `where` is an error even where nothing is rendered
     const groups = new Map<string, RenderedFeature[]>();
     if (this.hiddenAt(q.at)) return groups; // what is drawn at that pixel is something else (explain() says so)
-    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    const at = q.at ? this.projectAt(q.at) : undefined;
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
       if (!this.matches(f, q)) continue;
       const k = this.key(f);
@@ -260,7 +394,7 @@ export class Engine<W = unknown> {
       geometryType: f.geometry.type,
       pixel: best && round(best),
       client: best && round(toClient(frame, best)),
-      world: best && this.adapter.unproject(best),
+      world: best && this.reported(this.adapter.unproject(best)),
       state: f.state && Object.keys(f.state).length ? f.state : undefined,
     };
   }
@@ -552,7 +686,7 @@ export class Engine<W = unknown> {
     const frame = this.frame();
     const size = this.surfaceSize();
     const marks: DebugMark[] = [];
-    if (q.at) marks.push({ ...toClient(frame, this.adapter.project(q.at as W)), kind: 'target', label: this.hiddenAt(q.at) ? 'at (not on the visible surface)' : 'at' });
+    if (q.at) marks.push({ ...toClient(frame, this.projectAt(q.at)), kind: 'target', label: this.hiddenAt(q.at) ? 'at (not on the visible surface)' : 'at' });
     for (const pieces of [...this.group(q).values()].slice(0, 8)) {
       const ignore = this.ignoring(opts, pieces);
       let labelled = false;
@@ -586,7 +720,7 @@ export class Engine<W = unknown> {
     const toBox = (p: PixelPoint, r: Overlay['rect']) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.width)), Math.max(r.y - p.y, 0, p.y - (r.y + r.height)));
     if (o.at && this.hiddenAt(o.at)) return [];
     if (o.at) {
-      const p = this.adapter.project(o.at as W);
+      const p = this.projectAt(o.at);
       list = list.map((v) => ({ ...v, distance: v.anchor ? Math.hypot(v.anchor.x - p.x, v.anchor.y - p.y) : toBox(p, v.rect) })).filter((v) => v.distance! <= tol);
       list.sort((x, y) => x.distance! - y.distance!);
     }
@@ -615,26 +749,38 @@ export class Engine<W = unknown> {
     if (groups.length > 1) return { ok: false, message: `strict mode violation: query resolved to ${groups.length} features` };
     const f = groups[0][0];
     const data = await this.adapter.queryData?.(f.layer);
-    const props = stableProperties(f.properties);
-    const sameProps = data?.filter((d) => stableProperties(d.properties) === props) ?? [];
-    const hit = sameProps.length === 1 ? sameProps[0] : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && String(d.id) === String(f.id));
+    const props = comparable(f.properties);
+    // a data feature the layer's filter leaves out is not the one it drew (asked last: it is the costly test)
+    const sameProps = data?.filter((d) => comparable(d.properties) === props && this.drawnBy(d)) ?? [];
+    // look-alikes: the one with the rendered id, if the renderer kept ids; else the one the pieces touch
+    const hit =
+      sameProps.length === 1
+        ? sameProps[0]
+        : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && this.keepsId(d) && String(d.id) === String(f.id) && this.drawnBy(d)) ??
+          (sameProps.length > 1 ? only(sameProps.filter((d) => groups[0].some((p) => this.touch(p, d)))) : undefined);
     if (hit) return { ok: true, geometry: hit.geometry, from: 'data' };
     return { ok: true, geometry: f.geometry, from: 'rendered' };
   }
 
-  /** Compare in PIXELS (what a user sees, and zoom-independent to reason about), vertex by vertex. */
+  /**
+   * Compare in PIXELS (what a user sees, and zoom-independent to reason about), vertex by vertex. Actual and expected
+   * are projected by the same rule, `projector()`: each part in the copy of the world nearest the view, so a shape just
+   * across the antimeridian is compared where it is drawn, whichever copy its coordinates are written in.
+   */
   async compareGeometry(q: FeatureQuery, expected: GeometryExpectation, tolerancePx: number): Promise<GeometryVerdict> {
     const g = await this.geometry(q);
     if (!g.ok) return { ok: false, reason: g.message };
-    const px = (c: number[]) => this.adapter.project(this.adapter.worldFromCoord(c));
     const base = { actual: g.geometry, from: g.from };
     const clipped = g.from === 'rendered' ? ' (NOTE: compared against RENDERED geometry, which may be clipped at tile borders — the source cannot return its data)' : '';
     if ('circle' in expected) {
       const parts = explode(g.geometry);
       if (parts.length !== 1 || parts[0].kind !== 'polygon') return { ok: false, reason: `expected a circle polygon, got ${g.geometry.type}`, ...base };
-      const c = this.adapter.project(expected.circle.center as W);
-      const e = this.adapter.project(expected.circle.edge as W);
+      const { center, edge } = expected.circle;
+      const around = this.projector({ kind: 'line', coords: [[center.lng, center.lat], [edge.lng, edge.lat]] }); // the edge in the centre's copy
+      const c = around([center.lng, center.lat]);
+      const e = around([edge.lng, edge.lat]);
       const r = Math.hypot(e.x - c.x, e.y - c.y);
+      const px = this.projector(parts[0]);
       const worst = Math.max(...parts[0].rings[0].map((v) => Math.abs(Math.hypot(px(v).x - c.x, px(v).y - c.y) - r)));
       return worst <= tolerancePx ? { ok: true, ...base } : { ok: false, reason: `a vertex is ${worst.toFixed(1)}px off the expected circle of radius ${r.toFixed(1)}px (tolerance ${tolerancePx}px)${clipped}`, ...base };
     }
@@ -643,10 +789,11 @@ export class Engine<W = unknown> {
     if (A.length !== E.length) return { ok: false, reason: `${A.length} part(s), expected ${E.length}${clipped}`, ...base };
     for (let i = 0; i < E.length; i++) {
       const a = A[i], e = E[i];
+      const pa = this.projector(a), pe = this.projector(e);
       const seqs: [PixelPoint[], PixelPoint[], boolean][] =
-        a.kind === 'point' && e.kind === 'point' ? [[[px(a.coord)], [px(e.coord)], false]]
-        : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(px), e.coords.map(px), false]]
-        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(px), openRing(e.rings[k]).map(px), true] as [PixelPoint[], PixelPoint[], boolean]) : [])
+        a.kind === 'point' && e.kind === 'point' ? [[[pa(a.coord)], [pe(e.coord)], false]]
+        : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(pa), e.coords.map(pe), false]]
+        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(pa), openRing(e.rings[k]).map(pe), true] as [PixelPoint[], PixelPoint[], boolean]) : [])
         : [];
       if (!seqs.length) return { ok: false, reason: `part ${i}: ring count or kind differs${clipped}`, ...base };
       for (const [act, exp, cyclic] of seqs) {
@@ -675,8 +822,10 @@ export class Engine<W = unknown> {
    * check is armed — right after the aim was verified — and the hit at the pointer must be a piece of IT: the same
    * key, and for an id-less feature, touching its pieces (isPieceOf; geometry is in world coordinates, so a pan does
    * not move it). A moving target cannot be resolved ahead: its pieces from before the press would not touch the ones
-   * drawn at the press. It is resolved again when the event arrives (`at` included), which is as far as identity goes
-   * for a moving target: a moving id-less look-alike under the pointer is not told apart from it.
+   * drawn at the press. It is resolved again when the event arrives (`at` included) — and must resolve to exactly ONE
+   * feature then, as it had to when it was aimed at: with two matches the press cannot tell which one was meant, and
+   * approving whichever is under the pointer clicked another feature. That is as far as identity goes for a moving
+   * target: a moving id-less look-alike under the pointer, when it is the only match, is not told apart from it.
    */
   armClick(q: FeatureQuery, opts: ActionPointOptions = {}): ArmedCheck {
     const verdict: ClickVerdict = { fired: false, ok: false };
@@ -695,13 +844,15 @@ export class Engine<W = unknown> {
       verdict.fired = true;
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
-      if (me.target !== surface && !isMirrorNode(me.target)) {
-        verdict.reason = `pointer event landed on ${describeEl(me.target as Element)}, not the map canvas`;
+      const landed = eventTarget(e);
+      if (landed !== surface && !isMirrorNode(landed)) {
+        verdict.reason = `pointer event landed on ${describeEl(landed as Element)}, not the map canvas`;
       } else {
         const at = toSurface(clientFrame(surface), { x: me.clientX, y: me.clientY });
         const miss = this.verifyAt(at, q, opts, target);
         if (!miss) verdict.ok = true;
         else if (miss.covered) verdict.reason = `target was covered by ${describe({ ...miss.covered, geometryType: miss.covered.geometry.type })} when the click arrived`;
+        else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the click arrived (strict mode): not clicking whichever is under the pointer`;
         else {
           verdict.reason = 'target was no longer under the pointer when the click arrived';
           if (opts.moving === 'allow') verdict.offset = this.offsetFrom(at, q, opts);
@@ -749,14 +900,16 @@ export class Engine<W = unknown> {
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
       verdict.ok = false;
-      if (me.target !== surface && !isMirrorNode(me.target)) {
-        verdict.reason = `the pointer is over ${describeEl(me.target as Element)}, not the map canvas`;
+      const landed = eventTarget(e);
+      if (landed !== surface && !isMirrorNode(landed)) {
+        verdict.reason = `the pointer is over ${describeEl(landed as Element)}, not the map canvas`;
         return;
       }
       const at = toSurface(clientFrame(surface), { x: me.clientX, y: me.clientY });
       const miss = this.verifyAt(at, q, opts, target);
       if (!miss) (verdict.ok = true), (verdict.reason = undefined);
       else if (miss.covered) verdict.reason = 'target was covered by another feature when the pointer arrived';
+      else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the pointer arrived (strict mode)`;
       else {
         verdict.reason = 'target was no longer under the pointer when it arrived';
         verdict.offset = this.offsetFrom(at, q, opts);
@@ -778,15 +931,17 @@ export class Engine<W = unknown> {
 
   /**
    * Is the target at this surface pixel, on top? Undefined: yes. `target`: the feature resolved when the check was armed;
-   * without one (a moving target, or none could be resolved then), the features the query resolves to at this instant.
+   * without one (a moving target, or none could be resolved then), the ONE feature the query resolves to at this instant
+   * — `several` when it matches more than one (strict mode, as when it was aimed at).
    */
-  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature } | undefined {
+  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature; several?: number } | undefined {
     let candidates: RenderedFeature[][];
     try {
       candidates = target ? [target] : [...this.group(q).values()];
     } catch {
       return {}; // removed or 0×0 since: nothing is under the pointer
     }
+    if (candidates.length > 1) return { several: candidates.length };
     const hits = this.adapter.queryFeatures({ at });
     for (const pieces of candidates) {
       const ignore = this.ignoring(opts, pieces);
@@ -877,8 +1032,17 @@ export class Engine<W = unknown> {
         );
       }
       if (data) {
-        const offscreen = data.filter((f) => this.matches(f, q, false));
-        if (offscreen.length && !this.find(q).length) {
+        const matching = data.filter((f) => this.matches(f, q, false));
+        const found = matching.length > 0 && this.find(q).length > 0;
+        const filtered = found ? [] : matching.filter((f) => !this.drawnBy(f));
+        if (filtered.length) {
+          lines.push(
+            `  ${filtered.length} matching feature(s) exist in the source but the layer's filter leaves them out: layer "${id}" never draws them, wherever the camera is: ` +
+              filtered.slice(0, 3).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; '),
+          );
+        }
+        const offscreen = matching.filter((f) => this.drawnBy(f));
+        if (offscreen.length && !found) {
           lines.push(
             `  ${offscreen.length} matching feature(s) exist in the source but are not rendered ` +
               `(off-screen, hidden layer, filtered out${info.type === 'symbol' ? ', or hidden by label/icon collision' : ''}): ` +
@@ -890,7 +1054,7 @@ export class Engine<W = unknown> {
       }
     }
     if (q.at) {
-      const at = this.adapter.project(q.at as W);
+      const at = this.projectAt(q.at);
       const under = this.adapter.queryFeatures({ at });
       const shown = (n: number) => under.slice(0, n).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; ');
       lines.push(
@@ -927,15 +1091,19 @@ export class Engine<W = unknown> {
     const filterLayers = o.filter && this.layersOf(o.filter);
     for (const v of Object.values(o.filter?.where ?? {})) checkWhere(v);
     // filter.at: only entities drawn AT that location (the hit test there), and none at a location that is not on the visible surface
-    const filterAt = o.filter?.at === undefined ? undefined : this.hiddenAt(o.filter.at) ? [] : a.queryFeatures({ layers: filterLayers, at: a.project(o.filter.at as W) });
+    const filterAt = o.filter?.at === undefined ? undefined : this.hiddenAt(o.filter.at) ? [] : a.queryFeatures({ layers: filterLayers, at: this.projectAt(o.filter.at) });
     const size = this.surfaceSize();
     const centre = { x: size.w / 2, y: size.h / 2 };
     const found = new Map<string, Collected>();
     const matched = new Set<string>();
+    const matchedPieces = new Set<RenderedFeature>(); // look-alikes split below: only the parts the filter matched stay
     for (const f of a.queryFeatures({})) {
       if (skip.has(f.layer) || (only && !only.has(f.layer))) continue;
       const k = this.entityKey(f);
-      if (o.filter && (!filterLayers || filterLayers.includes(f.layer)) && this.matches(f, o.filter) && (!filterAt || filterAt.some((h) => this.entityKey(h) === k))) matched.add(k);
+      if (o.filter && (!filterLayers || filterLayers.includes(f.layer)) && this.matches(f, o.filter) && (!filterAt || filterAt.some((h) => this.entityKey(h) === k))) {
+        matched.add(k);
+        matchedPieces.add(f);
+      }
       let e = found.get(k);
       if (!e) found.set(k, (e = { key: k, owner: f.layer, byLayer: new Map(), d: Infinity }));
       if (!e.byLayer.has(f.layer)) e.byLayer.set(f.layer, []);
@@ -953,6 +1121,7 @@ export class Engine<W = unknown> {
       if (parts.length < 2) continue;
       found.delete(k);
       parts.forEach((part, i) => {
+        if (o.filter && !part.some((f) => matchedPieces.has(f))) return; // a look-alike of the match (an id the renderer did not keep)
         const byLayer = new Map<string, RenderedFeature[]>();
         for (const f of part) byLayer.set(f.layer, [...(byLayer.get(f.layer) ?? []), f]);
         const owner = [...byLayer.keys()].reduce((best, l) => (rank(l) > rank(best) ? l : best));
@@ -975,13 +1144,21 @@ export class Engine<W = unknown> {
     // Candidates come from the GEOMETRY; what is hit-tested is what is DRAWN. They differ for a label placed
     // along a line, an icon with an offset, or a symbol hidden by collision at the pixels we tried.
     let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
-    // whole client pixels, exactly as actionPointOnce() tries them: what the snapshot lists as clickable is what click() uses
+    // whole client pixels, snapped exactly as actionPointOnce() snaps them: what the snapshot lists as clickable is what
+    // click() uses. But fewer of them — the 40 best candidates (at most 200 pixels) against click()'s MAX_TRIES — as this
+    // runs for every listed entity: one almost entirely covered may be listed as covered and still be clickable.
     for (const c of wholePixels((e.cands ?? []).slice(0, 40), frame)) {
       const hits = this.adapter.queryFeatures({ at: c });
       const all = [...e.byLayer.values()].flat();
       if (!hits.some((h) => this.sameEntity(h, all))) continue;
       const client = toClient(frame, c);
-      const el = document.elementsFromPoint(client.x, client.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
+      if (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight) {
+        // the map is bigger than the window: no pointer reaches this pixel (not "covered by DOM", as it read before)
+        coveredPixel ??= round(c);
+        blocked = 'outside-window: that part of the map is outside the browser window';
+        continue;
+      }
+      const el = topElementAt(client.x, client.y, ignoreDom);
       const top = this.topVisible(hits)!;
       if (this.sameEntity(top, all) && el === surface) return { pixel: round(c) };
       coveredPixel ??= round(c);
@@ -1120,7 +1297,8 @@ export class Engine<W = unknown> {
     };
     // Raster, hillshade, heatmap... draw pixels, not features: "empty" would be a lie about them.
     const pixelOnly = visible.filter((l) => PIXEL_ONLY.has(l.type));
-    const empty = visible.filter((l) => !drawn.has(l.id) && l.source && !PIXEL_ONLY.has(l.type));
+    // A layer left out by `layers` / `skipLayers` was not looked at: it is not "empty", it is not in the snapshot.
+    const empty = visible.filter((l) => !drawn.has(l.id) && l.source && !PIXEL_ONLY.has(l.type) && !skip.has(l.id) && (!only || only.has(l.id)));
     const top = out.splice(0);
     const header = (condense: boolean): string[] => [
       ...top,
@@ -1210,11 +1388,23 @@ export class Engine<W = unknown> {
       if (!data) continue;
       seenSources.add(l.source);
       const rendered = a.queryFeatures({}).filter((f) => f.source === l.source);
-      const renderedIds = new Set(rendered.map((f) => this.entityKey(f)));
-      // The renderer's id is not the data's when the data id is not a number: MapLibre renders a string id (terra-draw's
+      // Data and rendered properties are compared as `comparable` puts them: the renderer drops null values.
+      const renderedIds = new Set(rendered.map((f) => `${f.id ?? ''}|${comparable(f.properties)}`));
+      // The renderer's id is not the data's when it does not keep it (keepsId): MapLibre renders a string id (terra-draw's
       // UUIDs) as a coerced number, and gives id-less features generated ones. Those are matched by their properties.
-      const renderedProps = new Set(rendered.map((f) => stableProperties(f.properties)));
-      const isDrawn = (f: RenderedFeature) => renderedIds.has(this.entityKey({ ...f, source: l.source })) || (typeof f.id !== 'number' && renderedProps.has(stableProperties(f.properties)));
+      const renderedProps = new Map<string, RenderedFeature[]>();
+      for (const f of rendered) renderedProps.set(comparable(f.properties), [...(renderedProps.get(comparable(f.properties)) ?? []), f]);
+      // Look-alikes: data features without an id the renderer keeps, and with the same properties. The rendered pieces of
+      // ONE of them match ALL of them by key, so for those a data feature counts as drawn only if a rendered look-alike
+      // piece touches it on screen — the same rule that splits id-less look-alikes everywhere else (split()).
+      const lookAlikes = new Map<string, number>();
+      for (const f of data) if (!this.keepsId(f)) lookAlikes.set(comparable(f.properties), (lookAlikes.get(comparable(f.properties)) ?? 0) + 1);
+      const touching = this.toucher();
+      const isDrawn = (f: RenderedFeature) => {
+        const props = comparable(f.properties);
+        if (!this.keepsId(f) && (lookAlikes.get(props) ?? 0) > 1) return (renderedProps.get(props) ?? []).some((p) => touching(f, p));
+        return renderedIds.has(`${f.id ?? ''}|${props}`) || (!this.keepsId(f) && renderedProps.has(props));
+      };
       // a filter `at` a location asks what is drawn there: nothing elsewhere matches it
       const off = data.filter((f) => !isDrawn(f) && (!o.filter || (o.filter.at === undefined && this.matches(f, o.filter, false))));
       if (!off.length || view.center === undefined) continue;
@@ -1295,7 +1485,7 @@ export class Engine<W = unknown> {
     if (!this.adapter.reveal || !this.adapter.queryData) return false;
     for (const id of this.layersOf(q) ?? []) {
       const data = await this.adapter.queryData(id);
-      const hit = data?.find((f) => this.matches(f, q, false));
+      const hit = data?.find((f) => this.matches(f, q, false) && this.drawnBy(f));
       if (!hit) continue;
       const first = explode(hit.geometry)[0];
       const coords = first.kind === 'point' ? [first.coord] : first.kind === 'line' ? first.coords : first.rings[0];
@@ -1304,6 +1494,15 @@ export class Engine<W = unknown> {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Can the layer of this DATA feature (queryData tags each with the layer asked) draw it at all — does its filter let
+   * it through? For per-layer questions only (where to pan to, which data feature a rendered one is): a SOURCE-level
+   * question (what a source holds that is not drawn) must not apply one layer's filter to the whole source.
+   */
+  private drawnBy(f: RenderedFeature): boolean {
+    return this.adapter.filterAdmits?.(f) !== false;
   }
 }
 
@@ -1318,6 +1517,19 @@ const PIXEL_ONLY = new Set(['raster', 'hillshade', 'heatmap', 'background', 'col
 
 /** Pieces of one id-less feature whose on-screen boxes come this close (px) belong together. */
 const TOUCH_PX = 0.75;
+
+type Box = { x0: number; y0: number; x1: number; y1: number };
+
+/**
+ * Do two on-screen boxes touch — with a world period `wrap` (a zoomed-out map repeats the world), modulo it? Every
+ * piece is projected in the copy nearest the view, so pieces of one feature are at most about a period apart: one
+ * period either way is enough, and matches what split() does in its sweep.
+ */
+function touching(p: Box, q: Box, wrap?: number): boolean {
+  if (p.y0 > q.y1 + TOUCH_PX || q.y0 > p.y1 + TOUCH_PX) return false;
+  const at = (s: number) => p.x0 <= q.x1 + s + TOUCH_PX && q.x0 + s <= p.x1 + TOUCH_PX;
+  return at(0) || (!!wrap && (at(wrap) || at(-wrap)));
+}
 
 /** Hit tests per attempt at finding a clickable pixel on one feature. */
 const MAX_TRIES = 600;
@@ -1547,12 +1759,25 @@ function trackPresses(): void {
   window.addEventListener('pointerdown', () => ((press.previousSwallowed = press.lastSwallowed), (press.lastSwallowed = false)), true);
 }
 
-export function topElementAt(x: number, y: number): Element | null {
-  for (const el of document.elementsFromPoint(x, y)) {
-    if (!el.closest('[data-geowright-mirror]')) return el;
+/**
+ * The element a pointer at this client pixel lands on. The document answers with a shadow HOST for anything inside its
+ * shadow root (a map in a web component): an OPEN root is asked in turn, down to the element itself. A closed root
+ * cannot be looked into — the host is the answer then. `skip`: elements that do not count (the snapshot's ignoreDom).
+ */
+export function topElementAt(x: number, y: number, skip?: (e: Element) => boolean): Element | null {
+  let root: Document | ShadowRoot = document;
+  let top: Element | null = null;
+  for (;;) {
+    const el: Element | undefined = root.elementsFromPoint(x, y).find((e) => !e.closest('[data-geowright-mirror]') && !skip?.(e));
+    if (!el || el === top) return top ?? el ?? null;
+    top = el;
+    if (!el.shadowRoot) return el;
+    root = el.shadowRoot;
   }
-  return null;
 }
+
+/** Where an event really happened: a listener on `window` sees an event from inside a shadow root retargeted to its host. */
+const eventTarget = (e: Event): EventTarget | null => e.composedPath?.()[0] ?? e.target;
 
 const isMirrorNode = (el: EventTarget | null) => el instanceof Element && !!el.closest('[data-geowright-mirror]');
 
@@ -1571,6 +1796,8 @@ const WHERE_OPS = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'matches', 'flags
  * match on a nested value), a misspelt operator — used to test no operator at all and so match EVERY feature: an error.
  */
 export function checkWhere(want: unknown): void {
+  // `undefined` survives Playwright's serialisation, and equals no property value: every negative assertion passed
+  if (want === undefined) throw new Error('geowright: a where value is undefined (to match a property that is absent use { exists: false }, or null)');
   if (want === null || typeof want !== 'object') return;
   if (Array.isArray(want)) throw new Error(`geowright: unknown where operator: an array (to match one of several values use { in: [${want.map((v) => JSON.stringify(v)).join(', ')}] }); valid operators: ${WHERE_OPS.join(', ')}`);
   const unknown = Object.keys(want).filter((k) => !WHERE_OPS.includes(k));
@@ -1578,7 +1805,20 @@ export function checkWhere(want: unknown): void {
 
   // {} (or { flags } alone) names no condition: it would match every feature.
   if (!Object.keys(want).some((k) => k !== 'flags')) throw new Error(`geowright: a where operator object has no operator in it (${JSON.stringify(want)}); valid: ${WHERE_OPS.join(', ')} (a scalar value means eq)`);
+
+  // An operand of the wrong kind does not fail loudly on its own: `in: 'park'` did a substring match, `exists: 'yes'`
+  // and `gt: '4'` matched nothing (so a negative assertion passed).
+  const op = want as Record<string, unknown>;
+  const bad = (k: string, what: string) => new Error(`geowright: where operator "${k}" takes ${what}, got ${showOperand(op[k])}`);
+  for (const k of Object.keys(op)) if (op[k] === undefined) throw new Error(`geowright: where operator "${k}" is undefined`);
+  if ('in' in op && !Array.isArray(op.in)) throw bad('in', 'an array of values');
+  if ('exists' in op && typeof op.exists !== 'boolean') throw bad('exists', 'true or false');
+  for (const k of ['gt', 'gte', 'lt', 'lte']) if (k in op && (typeof op[k] !== 'number' || Number.isNaN(op[k]))) throw bad(k, 'a number');
+  if ('matches' in op && typeof op.matches !== 'string') throw bad('matches', 'a RegExp source string');
+  if ('flags' in op && typeof op.flags !== 'string') throw bad('flags', 'a string of RegExp flags');
 }
+
+const showOperand = (v: unknown) => (typeof v === 'number' && Number.isNaN(v) ? 'NaN' : JSON.stringify(v));
 
 export function testWhere(actual: unknown, want: unknown): boolean {
   checkWhere(want);
@@ -1613,6 +1853,30 @@ function stableProperties(properties: Record<string, unknown>): string {
     return Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   });
 }
+/**
+ * Properties as data and rendered features can both be compared by — for data-vs-rendered comparisons ONLY (a rendered
+ * feature is always compared with other rendered ones by `stableProperties`). The renderer drops a property whose value
+ * is null (vt-pbf skips it), and MapLibre before 6 / Mapbox GL deliver a nested object or array as its JSON string: so
+ * null and undefined values are left out, and a string that holds a JSON object or array is read as one, on both sides.
+ */
+function comparable(properties: Record<string, unknown>): string {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(properties ?? {})) {
+    if (v === null || v === undefined) continue;
+    out[k] = typeof v === 'string' && /^\s*[[{]/.test(v) ? parsedJson(v) : v;
+  }
+  return stableProperties(out);
+}
+const parsedJson = (v: string): unknown => {
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v;
+  }
+};
+/** byDataId's key: an id by its string, as queries compare ids (7 and '7' are one id). */
+const idKey = (layer: string, id: string | number) => `${layer}\u0000${String(id)}`;
+const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : undefined);
 const round = (p: PixelPoint): PixelPoint => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const fail = (reason: Exclude<ActionPointResult, { ok: true }>['reason'], message: string): ActionPointResult => ({ ok: false, reason, message });
@@ -1664,12 +1928,12 @@ export function describeBranch(b: StyleBranch): string {
 
 /** "fill-opacity is 0 because the match on ["get","kind"] took its fallback for kind="park"" — without the zoom. */
 function describeValue(c: StyleCause): string {
-  const what = `${c.property} is ${fmtJson(c.value)}`;
+  const what = `${c.property} is ${fmtJson(c.value)}${c.tileZoom !== undefined ? `, drawn from tiles of zoom ${c.tileZoom}` : ''}`;
   if (c.origin === 'default') return `${what} (not set in the style: the default)`;
   if (c.origin === 'constant') return `${what} (a constant in the style)`;
   const kind = c.origin === 'function' ? 'legacy function' : 'expression';
   if (!c.branches.length) return `${what} (an ${kind}; which of its branches produced this cannot be traced)`;
-  return `${what} because ${c.origin === 'function' ? 'its legacy function, read as an expression: ' : ''}${c.branches.map(describeBranch).join(', then ')}`;
+  return `${what}${c.tileZoom !== undefined ? ',' : ''} because ${c.origin === 'function' ? 'its legacy function, read as an expression: ' : ''}${c.branches.map(describeBranch).join(', then ')}`;
 }
 
 /** Why one feature is painted invisibly: every cause, and the zoom once. */

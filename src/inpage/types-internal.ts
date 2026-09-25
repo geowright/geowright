@@ -46,6 +46,11 @@ export interface StyleCause {
   /** The camera zoom it was evaluated at. */
   zoom: number;
   /**
+   * For a zoom-and-data paint property: the tile zoom the renderer evaluates it at (with the next one, blended by the
+   * camera zoom). Its value and `branches` are from there, not from `zoom`.
+   */
+  tileZoom?: number;
+  /**
    * 'default': not set in the style, the spec's default applies · 'constant': a plain value in the style ·
    * 'expression' · 'function': a legacy `{ stops }` function (traced as the expression the style-spec converts it to).
    */
@@ -61,6 +66,14 @@ export interface StyleCause {
  * no such layer).
  */
 export type ProbeResult = { diff: number } | { inconclusive: string } | { unavailable: string };
+
+/**
+ * A rendered feature with what only some renderers can say. `sourceLayer`: the layer of a vector-tile source it came
+ * from — feature ids are unique within one source-layer only, so it is part of a feature's identity.
+ */
+export interface InternalRenderedFeature extends RenderedFeature {
+  sourceLayer?: string;
+}
 
 /** `CanvasAdapter` plus the internal optional methods. Every `CanvasAdapter` is one (the additions are optional). */
 export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
@@ -94,6 +107,20 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    * for real frames. When present it is used instead of `pixelContribution`.
    */
   probePixels?(layer: string, at: PixelPoint, radiusPx: number, budgetMs: number): ProbeResult | Promise<ProbeResult>;
+  /**
+   * Optional, with `queryData`: does the layer's filter let this data feature (`f.layer` is the layer asked) through,
+   * at the current camera? A source holds features that some of its layers never draw (a filter per kind, clusters).
+   * false only when it certainly does not; undefined when it cannot be told (then: as if it did).
+   */
+  filterAdmits?(f: RenderedFeature): boolean | undefined;
   /** Optional, with `overlays`: the element an overlay stands for, looked up the way `overlays()` found it. */
   overlayElement?(o: Overlay): Element | undefined;
+  /**
+   * Optional: does a feature of `layer` whose id in the app's data is `id` come back from `queryFeatures` with that same
+   * id? MapLibre coerces a GeoJSON id that is not a non-negative integer ('north-gate' is drawn as 0, -5 as
+   * 18446744073709552000), and a vector tile can carry nothing else. false: the rendered id is not the app's — the
+   * engine then finds the feature through `queryData` and its properties, and does not trust the rendered id to tell
+   * look-alikes apart. undefined: the layer has no features to tell (no such layer, no source).
+   */
+  idRoundTrips?(layer: string, id: string | number): boolean | undefined;
 }

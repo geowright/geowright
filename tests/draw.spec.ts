@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import type { LngLat } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /** ACT gap, hard mode: drawing and editing geometry with a real draw library (terra-draw). */
 const SQUARE: LngLat[] = [
@@ -74,7 +75,7 @@ test.describe('drawing', () => {
     await expect(drawn).toHaveGeometry(SQUARE);
     await expect(drawn).toHaveGeometry([SQUARE[2], SQUARE[1], SQUARE[0], SQUARE[3]]); // start vertex and winding are free
     await expect(drawn).not.toHaveGeometry([SQUARE[0], SQUARE[1], SQUARE[2], { lng: 34.83, lat: 32.058 }]);
-    const err = await expect(drawn).toHaveGeometry([SQUARE[0], SQUARE[1], SQUARE[2]], { timeout: 500 }).then(() => null, (e: Error) => e);
+    const err = await expect(drawn).toHaveGeometry([SQUARE[0], SQUARE[1], SQUARE[2]], { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('4 vertices, expected 3');
     expect(err?.message).toContain('Geometry on the map (data)');
     // parcel 105 is concave and spans internal tiles: the renderer returns pieces, the source the whole ring

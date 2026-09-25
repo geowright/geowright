@@ -101,7 +101,17 @@ const queries: FeatureQuery[] = [
 ```
 
 `map.feature(q)` is **strict** (exactly one match, like a Locator); `map.features(q)` is a set.
+`id` is the id MapLibre renders: in a GeoJSON source it keeps only non-negative integer ids and coerces any other (a
+string such as a UUID, a negative or fractional number) to a number, so `{ id: 'north-gate' }` matches nothing. Give such
+features integer ids, or copy the id into a property and name it in the source's `promoteId`, or query that property
+with `where`.
 Handles are lazy: nothing is resolved until an action or assertion runs.
+
+`id` is the id in the app's data. MapLibre keeps a feature id only if it is a non-negative integer and draws any other
+(`'north-gate'`, a UUID, `-5`, `1.5`) as some other number, or none: on a GeoJSON source such an id is found through the source's
+data (look-alikes drawn with one number are told apart by where they are drawn); on a tiled source it can never match,
+and the query is an error that points to `promoteId`. A `where` operand of the wrong kind (`in` that is not an array,
+`exists` that is not a boolean, a bound that is not a number, an `undefined` value) is an error too.
 
 ### Visible by default
 
@@ -131,8 +141,9 @@ is id + properties, and id-less look-alikes are told apart by where they are dra
 
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map; never the target's own layer), `{ autoPan: true }`, `{ timeout }`, and
 `{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
-arrives late is swallowed before the app sees it — it can time out, it never clicks the wrong thing; `dragTo`, `dragBy`
-and `lngLat` have no such check and refuse the option). The reasoning and the measurements:
+arrives late, or when the query matches more than one feature, is swallowed before the app sees it — it can time out, it
+never clicks the wrong thing; `dragTo`, `dragBy`,
+`lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`…) have no such check and refuse the option). The reasoning and the measurements:
 [DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
 
 ### When something fails, it says what WAS on the map
@@ -233,7 +244,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 | `draw.polygon` `draw.line` `(vertices, { finish, vertexDelay? })` | `finish`: `click-last` (default) `click-first` `dblclick` `enter` `none` |
 | `draw.rectangle(a, b, opts?)` · `draw.circle(center, edge, opts?)` · `draw.cancel()` | `gesture`: `click-move-click` (default) or `drag`; Escape |
 | `marker(where)` · `popup(where?)` → `Promise<Locator>` | DOM overlays as normal Locators; `where`: `{ at?, feature?, tolerancePx? }` |
-| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel |
+| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel (waits for a pixel inside the browser window; the lng reported is in [-180, 180]) |
 
 | FeatureHandle (`map.feature(q)`) | |
 |---|---|
@@ -244,7 +255,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 
 `FeatureSetHandle` (`map.features(q)`): `all()`, `count()` — snapshots, no waiting (a removed or 0×0 map is an error, not 0).
 
-Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visible` (default true; `false`; `'any'`). Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `moving: 'allow'` (clicks, `tap`, `hover` on targets that never stop moving) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
+Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visible` (default true; `false`; `'any'`). Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `moving: 'allow'` (feature `click`/`rightClick`/`dblclick`, `tap`, `hover` on targets that never stop moving; refused by `dragTo`, `dragBy`, `lngLat` and every location action such as `clickAt` or `tapAt`) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
 
 | Matcher (all retry; `.not` supported) | |
 |---|---|
@@ -339,7 +350,7 @@ Newer public methods are feature-detected, never version-sniffed; what an old ve
 diagnostics and in the snapshot (`note: …`) instead of being answered wrongly.
 
 **Playwright:** `@playwright/test` 1.49 or later: CI runs the full suite on 1.49.0 (the floor) and on the current
-version ([0014](docs/decisions/0014-claim-only-what-is-tested.md)).
+version ([0017](docs/decisions/0017-the-playwright-floor-is-the-one-ci-runs.md)).
 
 | | Mapbox GL JS 1.13 (BSD) | MapLibre 2 | MapLibre 3 | MapLibre 4 | MapLibre 5 | MapLibre 6 |
 |---|---|---|---|---|---|---|

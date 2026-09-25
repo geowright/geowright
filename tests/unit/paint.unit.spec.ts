@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { describeLayerHidden, describeStyleCauses, nameColour, tally } from '../../src/inpage/engine';
-import { explainLayerHidden, explainPaint, paintColour, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
+import { explainLayerHidden, explainPaint, filterAdmits, paintColour, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
 import type { RenderedFeature } from '../../src/inpage/types';
 
 /** Just enough of maplibregl.Map for the paint evaluator: one layer, its paint/layout, a zoom. */
@@ -52,7 +52,43 @@ test.describe('unsupported expressions (evaluator older than the app\'s MapLibre
     const map = fakeMap('circle', { 'circle-opacity': ['frobnicate-from-the-future', 1] });
     expect(paintVisibility(map, feature({}))).toEqual({ visible: true });
     paintVisibility(map, feature({ other: 1 }));
-    expect(unparseableProperties().filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
+    expect(unparseableProperties(map).filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
+  });
+});
+
+/** Caveats are about ONE map as it is now: not another map's, not a style the app has since changed. */
+test.describe('caveats belong to one map, and to its current style and view', () => {
+  test("another map's unsupported expression is not listed for this one", () => {
+    const a = fakeMap('circle', { 'circle-opacity': ['frobnicate-from-the-future', 2] });
+    const b = fakeMap('circle', { 'circle-opacity': 1 });
+    paintVisibility(a, feature({}));
+    paintVisibility(b, feature({}));
+    expect(unparseableProperties(a)).toContain('l: circle-opacity');
+    expect(unparseableProperties(b)).toEqual([]);
+  });
+
+  test('a caveat goes when the style property that caused it is changed, or its layer is removed', () => {
+    const paint: Record<string, unknown> = { 'circle-opacity': ['frobnicate-from-the-future', 3] };
+    const map = fakeMap('circle', paint);
+    paintVisibility(map, feature({}));
+    expect(unparseableProperties(map)).toEqual(['l: circle-opacity']);
+    paint['circle-opacity'] = 0.5; // the app set a plain value
+    expect(unparseableProperties(map)).toEqual([]);
+    paint['circle-opacity'] = ['frobnicate-from-the-future', 3];
+    paintVisibility(map, feature({}));
+    expect(unparseableProperties(map)).toEqual(['l: circle-opacity']);
+    map.getLayer = () => undefined; // the app removed the layer
+    expect(unparseableProperties(map)).toEqual([]);
+  });
+
+  test('"uncertain" goes when tile zooms no longer vary across the view', () => {
+    const opts = { zoom: 11.7, pitch: 75 };
+    const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, opts);
+    paintVisibility(map, feature({ o: 1 }));
+    expect(zoomUncertainProperties(map)).toEqual(['l: circle-opacity']);
+    expect(zoomUncertainProperties(fakeMap('circle', {}, {}, opts))).toEqual([]); // another map
+    opts.pitch = 0; // the camera levelled out
+    expect(zoomUncertainProperties(map)).toEqual([]);
   });
 });
 
@@ -213,6 +249,17 @@ test.describe('zoom-and-data paint is judged as the renderer draws it', () => {
     expect(paintColour(colour, feature({ c: '#ff0000' }))?.colour).toBe('#ff0000');
   });
 
+  test('why invisible traces a zoom-and-data expression at the tile zoom it is drawn from, not the camera zoom', () => {
+    const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.7 });
+    expect(describeStyleCauses(explainPaint(map, feature({ o: 1 })))).toBe(
+      'at zoom 11.7: circle-opacity is 0, drawn from tiles of zoom 11, because the step on zoom used its base output (zoom 11 is below its first stop, 11.5); and circle-stroke-width is 0 (not set in the style: the default)',
+    );
+    // blended strictly between two tile zooms: no single branch — property and value only, never a wrong branch
+    const blended = fakeMap('circle', { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, ['*', ['get', 'r'], 0], 12, ['*', ['get', 'r'], -1]] }, {}, { zoom: 11.5 });
+    expect(explainPaint(blended, feature({ r: 1 }))[0]).toMatchObject({ property: 'circle-radius', tileZoom: 11, branches: [] });
+    expect(describeStyleCauses(explainPaint(blended, feature({ r: 1 })))).toContain('circle-radius is -0.5, drawn from tiles of zoom 11 (an expression; which of its branches produced this cannot be traced)');
+  });
+
   test('a 256-pixel tile source is one tile zoom deeper', () => {
     const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.2, tileSize: 256 });
     expect(paintVisibility(map, feature({ o: 1 })).visible).toBe(true); // tile zoom 12
@@ -221,18 +268,20 @@ test.describe('zoom-and-data paint is judged as the renderer draws it', () => {
   test('where tile zooms vary across the view (high pitch) it is uncertain: visible, and said once', () => {
     const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.7, pitch: 75 });
     expect(paintVisibility(map, feature({ o: 1 }))).toEqual({ visible: true });
-    expect(zoomUncertainProperties()).toContain('l: circle-opacity');
+    expect(zoomUncertainProperties(map)).toContain('l: circle-opacity');
     // hidden at EVERY tile zoom: still a confident "invisible"
     expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 30, ['get', 'o']] }, {}, { zoom: 11.7, pitch: 75 }), feature({ o: 1 })).visible).toBe(false);
   });
 
   test('`within` and `distance` need the tile geometry: not evaluable, so visible — and said once', () => {
     const area = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
-    expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 1, 0] }), feature({}))).toEqual({ visible: true });
-    expect(paintVisibility(fakeMap('line', { 'line-opacity': ['case', ['<', ['distance', { type: 'Point', coordinates: [0, 0] }], 100], 1, 0] }), feature({}))).toEqual({ visible: true });
+    const within = fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 1, 0] });
+    const distance = fakeMap('line', { 'line-opacity': ['case', ['<', ['distance', { type: 'Point', coordinates: [0, 0] }], 100], 1, 0] });
+    expect(paintVisibility(within, feature({}))).toEqual({ visible: true });
+    expect(paintVisibility(distance, feature({}))).toEqual({ visible: true });
     expect(paintVisibility(fakeMap('circle', { 'circle-opacity': ['case', ['within', area], 0, 1] }), feature({}))).toEqual({ visible: true });
-    expect(unparseableProperties().filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
-    expect(unparseableReasons()).toContainEqual(['l: line-opacity', 'distance']);
+    expect(unparseableProperties(within).filter((p) => p === 'l: circle-opacity')).toHaveLength(1);
+    expect(unparseableReasons(distance)).toContainEqual(['l: line-opacity', 'distance']);
   });
 });
 
@@ -253,3 +302,21 @@ test.describe('outline and SDF icons', () => {
   });
 });
 
+/** autoPan and full geometry read the SOURCE: a feature the layer's filter leaves out is never drawn by that layer. */
+test.describe("filterAdmits: does the layer's filter let a data feature through", () => {
+  const withFilter = (filter: unknown, zoom = 10) => ({ ...fakeMap('circle', {}, {}, { zoom }), getFilter: () => filter });
+  test('expression and legacy filters; no filter lets everything through', () => {
+    expect(filterAdmits(withFilter(['!=', ['get', 'kind'], 'ghost']), feature({ kind: 'ghost' }))).toBe(false);
+    expect(filterAdmits(withFilter(['!=', ['get', 'kind'], 'ghost']), feature({ kind: 'probe' }))).toBe(true);
+    expect(filterAdmits(withFilter(['==', 'kind', 'ghost']), feature({ kind: 'probe' }))).toBe(false); // legacy syntax
+    expect(filterAdmits(withFilter(undefined), feature({}))).toBe(true);
+  });
+
+  test('zoom is the tile zoom; what cannot be evaluated is "cannot tell", never "no"', () => {
+    expect(filterAdmits(withFilter(['>=', ['zoom'], 10.5], 10.7), feature({}))).toBe(false); // tile zoom 10
+    expect(filterAdmits(withFilter(['>=', ['zoom'], 10.5], 11.2), feature({}))).toBe(true);
+    const area = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
+    expect(filterAdmits(withFilter(['within', area]), feature({}))).toBeUndefined();
+    expect(filterAdmits(withFilter(['frobnicate-from-the-future', 1]), feature({}))).toBeUndefined();
+  });
+});
