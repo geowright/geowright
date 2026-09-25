@@ -6,7 +6,8 @@ name: ci
 #
 # WHERE it runs is a repository setting, not something this file knows: by default a GitHub-hosted Linux runner;
 # a repository variable CI_RUNS_ON (a JSON list of runner labels) routes the jobs to another runner, and CI_PORT
-# moves the test servers off the default port when that runner shares a machine with a developer.
+# moves the test servers off the default port when that runner shares a machine with a developer. A pull request from
+# a fork never goes there: its code is a stranger's, and CI_RUNS_ON may name a machine of the maintainers' own.
 on:
   push:
     branches: [main]
@@ -24,7 +25,7 @@ jobs:
   # Everything is developed on macOS; on a hosted Linux runner this validates the SwiftShader flag set where
   # software GL is ~8x slower than on a desktop machine.
   suite:
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((github.event.pull_request.head.repo.fork && '["ubuntu-latest"]') || vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
     # The suite takes ~21 min here (2 workers). A job that hits its limit is CANCELLED, which looks
     # like neither pass nor fail — keep real headroom.
     timeout-minutes: 45
@@ -79,7 +80,7 @@ jobs:
   # The version matrix (Mapbox GL JS 1.13, MapLibre 2-6): one small page, ~85 tests, a few minutes.
   # Its own job and its own Playwright config, so it can never eat into the suite's time limit.
   compat:
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((github.event.pull_request.head.repo.fork && '["ubuntu-latest"]') || vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 20
     env:
       CI: 'true'
@@ -109,13 +110,13 @@ jobs:
           retention-days: 5
 
   # The @playwright/test peer floor: typecheck + the full suite on EXACTLY the version package.json's
-  # peerDependencies names (">=X.Y.Z" -> X.Y.Z), so the range claims only what CI runs (decision 0014). Lowering the
+  # peerDependencies names (">=X.Y.Z" -> X.Y.Z), so the range claims only what CI runs (decision 0017). Lowering the
   # floor in package.json moves this job with it.
   # Pushes to main and manual runs only (not every pull request): a second full suite on the shared Mac per PR push
   # costs more than it tells us; a floor regression shows up on main's next push.
   playwright-floor:
     if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
-    runs-on: ${{ fromJSON(vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
+    runs-on: ${{ fromJSON((github.event.pull_request.head.repo.fork && '["ubuntu-latest"]') || vars.CI_RUNS_ON || '["ubuntu-latest"]') }}
     timeout-minutes: 45
     env:
       CI: 'true'
