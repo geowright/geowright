@@ -7,8 +7,9 @@
 // A package may sit inside another's dist/ (the style-spec vendors quickselect, tinyqueue, unitbezier); its text then
 // comes from the installed copy, found the way Node resolves it from maplibre-gl's directory, as in
 // scripts/third-party-licenses.mjs. Code MapLibre copied into its own source keeps its notice only in a comment, which
-// minifying drops. Each such file is named in `inlined`; any other MapLibre source with a copyright line fails, to be
-// read and added by hand.
+// minifying drops. Each such file is named in `inlined` (its notice is added) or in `covered` (the package it came from
+// is bundled too, so its text is already listed); any other MapLibre source with a copyright line or a note saying where
+// its code came from ("Taken from [X](…)", "Copied from https://…") fails, to be read and added by hand.
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
@@ -54,6 +55,22 @@ OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER
 TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF
 THIS SOFTWARE.`,
   },
+  // parseCacheControl()'s regex: "// Taken from [Wreck](https://github.com/hapijs/wreck)". Every MapLibre 3-6 build.
+  '/src/util/util.ts': {
+    name: 'parseCacheControl() regex from @hapi/wreck', license: 'BSD-3-Clause',
+    note: 'it says "Taken from [Wreck](https://github.com/hapijs/wreck)"; the text below is the LICENSE.md of the @hapi/wreck 18.1.2 npm package',
+    text: `Copyright (c) 2012-2022, Project contributors
+Copyright (c) 2012-2020, Sideway Inc
+Copyright (c) 2012-2014, Walmart.
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+* Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+* Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+* The names of any contributors may not be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDERS AND CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS OFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.`,
+  },
   // DOM.sanitize(), in the main-thread bundle only: "Base on https://javascriptsource.com/sanitize-an-html-string-to-
   // reduce-the-risk-of-xss-attacks/ (c) 2021 Chris Ferdinandi, MIT License, https://gomakethings.com".
   '/src/util/dom.ts': {
@@ -62,6 +79,17 @@ THIS SOFTWARE.`,
     text: MIT('2021 Chris Ferdinandi'),
   },
 };
+
+// Code copied from a package that the same build bundles as a package: that package's section carries the text.
+// "// Copied from https://github.com/mapbox/vector-tile-js/blob/f1457ee…/index.js" (6.x; vector_tile_mlt.ts in 5.x).
+const covered = {
+  '/src/util/vectortile_to_geojson.ts': '@mapbox/vector-tile',
+  '/src/source/vector_tile_mlt.ts': '@mapbox/vector-tile',
+};
+
+// What makes a MapLibre source need a notice: a copyright line, or a note that its code came from elsewhere, with a link.
+// Plain prose ("taken from the style", "copied from the canvas") is not one.
+const NOTICE = /copyright\s+(?:\(c\)|©)|copyright\s+\d{4}|\(c\)\s*\d{4}|©\s*\d{4}|\b(?:taken|copied|adapted|ported|inlined|based?)\s+(?:from|on)\s+(?:\[|<?https?:\/\/)/i;
 
 // Data inside a bundled package that carries its own notice: bidi-js's tables are derived from the Unicode Character
 // Database (Unicode 13.0.0), under the Unicode data license. Its text: the copy in the TypeScript npm package's
@@ -164,6 +192,7 @@ export function bundled(dir, files = distFiles(dir)) {
   const src = join(maplibreDir, 'dist');
   const names = new Set();
   const copied = [];
+  const coveredBy = [];
   for (const f of files) {
     const map = JSON.parse(readFileSync(join(src, `${f}.map`), 'utf8'));
     map.sources.forEach((source, i) => {
@@ -171,14 +200,19 @@ export function bundled(dir, files = distFiles(dir)) {
       for (const rest of parts.map((p) => p.split('/'))) names.add(rest[0].startsWith('@') ? `${rest[0]}/${rest[1]}` : rest[0]);
       if (parts.length) return;
       const content = map.sourcesContent?.[i] ?? '';
-      if (!/copyright \(c\)|\(c\) \d{4}/i.test(content)) return;
+      if (!NOTICE.test(content)) return;
+      const from = Object.entries(covered).find(([file]) => source.endsWith(file));
+      if (from) { coveredBy.push({ source, pkg: from[1] }); return; }
       const known = Object.entries(inlined).find(([file]) => source.endsWith(file));
-      if (!known) throw new Error(`maplibre-notices: ${source} (in ${f}) has a copyright notice that is not in scripts/maplibre-notices.mjs: read it and add it to "inlined"`);
+      if (!known) throw new Error(`maplibre-notices: ${source} (in ${f}) has a copyright notice or a note on where its code came from that is not in scripts/maplibre-notices.mjs: read it and add it to "inlined" or "covered"`);
       const [file, what] = known;
       const text = what.text === 'comment' ? content.match(/^\/\*([\s\S]*?)\*\//)?.[1].trim() : what.text;
       if (!text) throw new Error(`maplibre-notices: ${source}: no leading comment with the notice`);
       if (!copied.some((c) => c.file === file)) copied.push({ file, ...what, text });
     });
+  }
+  for (const { source, pkg } of coveredBy) {
+    if (!names.has(pkg)) throw new Error(`maplibre-notices: ${source} is code copied from ${pkg}, which is not bundled as a package: its text is not listed; add it to "inlined"`);
   }
   const packages = [...names].sort().map((name) => {
     const dir = resolvePackage(name, maplibreDir);
