@@ -688,10 +688,13 @@ export class MapHandle {
    * `deadline`: the look is abandoned then (it has no side effects).
    */
   async _pointNow(at: LngLat, opts: ActionOptions, seen?: (client: { x: number; y: number }) => void, deadline = Infinity): Promise<{ value: { x: number; y: number } } | { retry: string; outside?: true }> {
-    const r = await this._callBy<{ client: { x: number; y: number }; inside: boolean; hidden: boolean; covered: boolean; moving: boolean }>(deadline, 'clientPoint', at);
+    const r = await this._callBy<{ client: { x: number; y: number }; inside: boolean; offview?: boolean; hidden: boolean; covered: boolean; moving: boolean }>(deadline, 'clientPoint', at);
     seen?.(r.client);
     if (r.moving) return { retry: 'map is moving' };
     if (!r.inside) return { retry: `location is outside the viewport${!opts.autoPan ? ' (pass { autoPan: true } to move the camera)' : ''}`, outside: true };
+    // Not reachable by any pointer, `force` or not (force skips the cover check, not this): the input would land outside
+    // the page and the app would never get it. autoPan may bring it into the window, as for a feature action.
+    if (r.offview) return { retry: 'the location is on the map, but that part of the map is outside the browser window (the map is larger than the viewport and cannot be scrolled fully into it)', outside: true };
     if (r.hidden) return { retry: 'location is not on the visible map surface (far side of the globe, beyond the horizon, or behind the camera): its pixel shows something else' };
     if (r.covered && !opts.force) return { retry: 'location is covered by a DOM element (popup, control, overlay)' };
     return { value: r.client };

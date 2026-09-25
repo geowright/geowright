@@ -37,6 +37,18 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
 - Features of a map inside an open shadow root (a web component) can be clicked and are listed as clickable by the
   snapshot; they were refused as covered by the host element.
 - `toHavePopup({ at | feature })`, `marker()` and `popup()` find overlays on a map under a CSS `transform: scale()`.
+- On a map larger than the browser window, a location outside the window is refused as "outside the browser window" by
+  `clickAt` and the other location actions (`force` included: it skips the cover checks, not reachability),
+  `map.clientPoint()`, and the destination of `dragTo` / `dragBy`. They pressed or released there, where the app never
+  got the input, or said "covered by a DOM element". `autoPan` may bring it into the window. The snapshot says
+  `outside-window` for such a feature, not `covered-by-dom`.
+- On a zoomed-out map (a second copy of the world can be on screen), one id-less feature from tiles is no longer counted
+  twice, or refused as a strict-mode violation, when its tile pieces straddle a multiple of the world's width on screen.
+- `lngLat()`, `info().lngLat` and `map.lngLatAt()` report lng in [-180, 180]: a point at lng -179.8 seen from lng 179.5
+  was reported at 180.2. A location action given the reported value still acts on the copy in view.
+- `click()`, `tap()` and `hover()` with `{ moving: 'allow' }` (and any click whose target could not be resolved when its
+  check was armed) swallow a press that arrives when the query matches more than one feature; the press approved
+  whichever match was under the pointer.
 
 ## 0.1.0 — 2026-09-27
 

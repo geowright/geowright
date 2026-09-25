@@ -159,7 +159,10 @@ const api = {
   viewState: (mapId: string) => engine(mapId).adapter.getViewState(),
   layers: (mapId: string) => engine(mapId).adapter.listLayers(),
   isMoving: (mapId: string) => engine(mapId).adapter.isMoving(),
-  /** world -> client pixel, plus whether that pixel is inside the surface and not DOM-covered */
+  /**
+   * world -> client pixel, plus whether that pixel is inside the surface, inside the browser WINDOW (`offview`: on the
+   * map, but the map is bigger than the window there — no pointer can reach it, as in actionPoint) and not DOM-covered.
+   */
   clientPoint: (mapId: string, world: any) => {
     engine(mapId).scrollIntoView();
     const a = engine(mapId).adapter;
@@ -168,13 +171,15 @@ const api = {
     const el = a.surface();
     const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
     const client = toClient(clientFrame(el), p); // a CSS-scaled map is not just offset
-    const top = inside ? topElementAt(client.x, client.y) : null;
+    const offview = inside && (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight);
+    const top = inside && !offview ? topElementAt(client.x, client.y) : null;
     const hidden = inside && a.isOnSurface ? !a.isOnSurface(near) : false;
-    return { client, surface: p, inside, hidden, covered: inside && top !== el, moving: a.isMoving() };
+    return { client, surface: p, inside, offview, hidden, covered: inside && !offview && top !== el, moving: a.isMoving() };
   },
+  /** lng/lat under a client pixel, as REPORTED to the user: lng in [-180, 180] (aiming with it picks the copy in view). */
   worldAt: (mapId: string, client: { x: number; y: number }) => {
-    const a = engine(mapId).adapter;
-    return a.unproject(toSurface(clientFrame(a.surface()), client));
+    const e = engine(mapId);
+    return e.reported(e.adapter.unproject(toSurface(clientFrame(e.adapter.surface()), client)));
   },
   revealWorld: async (mapId: string, world: any) => {
     await engine(mapId).adapter.reveal?.(world);

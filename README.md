@@ -131,7 +131,8 @@ is id + properties, and id-less look-alikes are told apart by where they are dra
 
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map; never the target's own layer), `{ autoPan: true }`, `{ timeout }`, and
 `{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
-arrives late is swallowed before the app sees it — it can time out, it never clicks the wrong thing; `dragTo`, `dragBy`,
+arrives late, or when the query matches more than one feature, is swallowed before the app sees it — it can time out, it
+never clicks the wrong thing; `dragTo`, `dragBy`,
 `lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`…) have no such check and refuse the option). The reasoning and the measurements:
 [DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
 
@@ -233,7 +234,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 | `draw.polygon` `draw.line` `(vertices, { finish, vertexDelay? })` | `finish`: `click-last` (default) `click-first` `dblclick` `enter` `none` |
 | `draw.rectangle(a, b, opts?)` · `draw.circle(center, edge, opts?)` · `draw.cancel()` | `gesture`: `click-move-click` (default) or `drag`; Escape |
 | `marker(where)` · `popup(where?)` → `Promise<Locator>` | DOM overlays as normal Locators; `where`: `{ at?, feature?, tolerancePx? }` |
-| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel |
+| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel (waits for a pixel inside the browser window; the lng reported is in [-180, 180]) |
 
 | FeatureHandle (`map.feature(q)`) | |
 |---|---|

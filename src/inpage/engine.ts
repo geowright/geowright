@@ -88,14 +88,13 @@ export class Engine<W = unknown> {
   private split(pieces: RenderedFeature[]): RenderedFeature[][] {
     if (pieces.length < 2 || pieces[0].id !== undefined || this.single.has(this.key(pieces[0]))) return [pieces];
     // Sweep along x so that thousands of look-alike points cost n·log n, not n².
-    // World copies: the same feature drawn once per visible copy of the world is one feature — fold x by the period.
+    // World copies: the same feature drawn once per visible copy of the world is one feature — pieces touch MODULO the
+    // period (see touching()). In the sweep, each piece is also entered one period to its left and right, under its own
+    // index. (Folding each piece by floor(x0 / period) on its own tore apart two touching pieces whose left edges fell on
+    // either side of a multiple of the period: one tiled line read as two features on a zoomed-out map.)
     const wrap = this.adapter.wrapPx?.();
-    const fold = (b: ReturnType<Engine<W>['box']>) => {
-      if (!wrap) return b;
-      const shift = Math.floor(b.x0 / wrap) * wrap;
-      return { ...b, x0: b.x0 - shift, x1: b.x1 - shift };
-    };
-    const boxes = pieces.map((p, i) => ({ i, ...fold(this.box(p)) })).sort((a, b) => a.x0 - b.x0);
+    const own = pieces.map((p, i) => ({ i, ...this.box(p) }));
+    const boxes = (wrap ? own.flatMap((b) => [b, { ...b, x0: b.x0 - wrap, x1: b.x1 - wrap }, { ...b, x0: b.x0 + wrap, x1: b.x1 + wrap }]) : own).sort((a, b) => a.x0 - b.x0);
     const parent = pieces.map((_, i) => i);
     const root = (i: number): number => (parent[i] === i ? i : (parent[i] = root(parent[i])));
     for (let m = 0; m < boxes.length; m++) {
@@ -177,6 +176,19 @@ export class Engine<W = unknown> {
     return this.adapter.nearestCopy?.(c)?.(c) ?? (at as W);
   }
 
+  /**
+   * A world position as it is REPORTED to the user (`info().lngLat`, `lngLat()`, `lngLatAt()`): lng in [-180, 180]. The
+   * pixel of the copy in view unprojects to 180.2 for data at -179.8, which compares badly with the data (and with what
+   * the app's own events say, wrapped). Nothing is lost: an action given the wrapped value aims at the copy in view
+   * (nearestWorld). Aiming never goes through here.
+   */
+  reported(w: W): W {
+    const lng = (w as { lng?: unknown } | undefined)?.lng;
+    if (typeof lng !== 'number' || !Number.isFinite(lng) || (lng >= -180 && lng <= 180)) return w;
+    const wrapped = ((((lng + 180) % 360) + 360) % 360) - 180;
+    return { ...w, lng: wrapped === -180 ? 180 : wrapped };
+  }
+
   projectAt(at: unknown): PixelPoint {
     return this.adapter.project(this.nearestWorld(at));
   }
@@ -195,10 +207,7 @@ export class Engine<W = unknown> {
   }
 
   private touch(a: RenderedFeature, b: RenderedFeature): boolean {
-    const wrap = this.adapter.wrapPx?.();
-    const fold = (v: ReturnType<Engine<W>['box']>) => (wrap ? { ...v, x0: v.x0 - Math.floor(v.x0 / wrap) * wrap, x1: v.x1 - Math.floor(v.x0 / wrap) * wrap } : v);
-    const p = fold(this.box(a)), q = fold(this.box(b));
-    return p.x0 <= q.x1 + TOUCH_PX && q.x0 <= p.x1 + TOUCH_PX && p.y0 <= q.y1 + TOUCH_PX && q.y0 <= p.y1 + TOUCH_PX;
+    return touching(this.box(a), this.box(b), this.adapter.wrapPx?.());
   }
 
   /** touch(), for comparing many against many: each feature's on-screen box is computed once. */
@@ -207,17 +216,10 @@ export class Engine<W = unknown> {
     const boxes = new Map<RenderedFeature, ReturnType<Engine<W>['box']>>();
     const boxOf = (f: RenderedFeature) => {
       let v = boxes.get(f);
-      if (!v) {
-        v = this.box(f);
-        if (wrap) v = { ...v, x0: v.x0 - Math.floor(v.x0 / wrap) * wrap, x1: v.x1 - Math.floor(v.x0 / wrap) * wrap };
-        boxes.set(f, v);
-      }
+      if (!v) boxes.set(f, (v = this.box(f)));
       return v;
     };
-    return (a, b) => {
-      const p = boxOf(a), q = boxOf(b);
-      return p.x0 <= q.x1 + TOUCH_PX && q.x0 <= p.x1 + TOUCH_PX && p.y0 <= q.y1 + TOUCH_PX && q.y0 <= p.y1 + TOUCH_PX;
-    };
+    return (a, b) => touching(boxOf(a), boxOf(b), wrap);
   }
 
   /** Is this hit a piece of THAT feature? The key decides, plus — for id-less features — touching it. */
@@ -294,7 +296,7 @@ export class Engine<W = unknown> {
       geometryType: f.geometry.type,
       pixel: best && round(best),
       client: best && round(toClient(frame, best)),
-      world: best && this.adapter.unproject(best),
+      world: best && this.reported(this.adapter.unproject(best)),
       state: f.state && Object.keys(f.state).length ? f.state : undefined,
     };
   }
@@ -717,8 +719,10 @@ export class Engine<W = unknown> {
    * check is armed — right after the aim was verified — and the hit at the pointer must be a piece of IT: the same
    * key, and for an id-less feature, touching its pieces (isPieceOf; geometry is in world coordinates, so a pan does
    * not move it). A moving target cannot be resolved ahead: its pieces from before the press would not touch the ones
-   * drawn at the press. It is resolved again when the event arrives (`at` included), which is as far as identity goes
-   * for a moving target: a moving id-less look-alike under the pointer is not told apart from it.
+   * drawn at the press. It is resolved again when the event arrives (`at` included) — and must resolve to exactly ONE
+   * feature then, as it had to when it was aimed at: with two matches the press cannot tell which one was meant, and
+   * approving whichever is under the pointer clicked another feature. That is as far as identity goes for a moving
+   * target: a moving id-less look-alike under the pointer, when it is the only match, is not told apart from it.
    */
   armClick(q: FeatureQuery, opts: ActionPointOptions = {}): ArmedCheck {
     const verdict: ClickVerdict = { fired: false, ok: false };
@@ -745,6 +749,7 @@ export class Engine<W = unknown> {
         const miss = this.verifyAt(at, q, opts, target);
         if (!miss) verdict.ok = true;
         else if (miss.covered) verdict.reason = `target was covered by ${describe({ ...miss.covered, geometryType: miss.covered.geometry.type })} when the click arrived`;
+        else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the click arrived (strict mode): not clicking whichever is under the pointer`;
         else {
           verdict.reason = 'target was no longer under the pointer when the click arrived';
           if (opts.moving === 'allow') verdict.offset = this.offsetFrom(at, q, opts);
@@ -801,6 +806,7 @@ export class Engine<W = unknown> {
       const miss = this.verifyAt(at, q, opts, target);
       if (!miss) (verdict.ok = true), (verdict.reason = undefined);
       else if (miss.covered) verdict.reason = 'target was covered by another feature when the pointer arrived';
+      else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the pointer arrived (strict mode)`;
       else {
         verdict.reason = 'target was no longer under the pointer when it arrived';
         verdict.offset = this.offsetFrom(at, q, opts);
@@ -822,15 +828,17 @@ export class Engine<W = unknown> {
 
   /**
    * Is the target at this surface pixel, on top? Undefined: yes. `target`: the feature resolved when the check was armed;
-   * without one (a moving target, or none could be resolved then), the features the query resolves to at this instant.
+   * without one (a moving target, or none could be resolved then), the ONE feature the query resolves to at this instant
+   * — `several` when it matches more than one (strict mode, as when it was aimed at).
    */
-  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature } | undefined {
+  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature; several?: number } | undefined {
     let candidates: RenderedFeature[][];
     try {
       candidates = target ? [target] : [...this.group(q).values()];
     } catch {
       return {}; // removed or 0×0 since: nothing is under the pointer
     }
+    if (candidates.length > 1) return { several: candidates.length };
     const hits = this.adapter.queryFeatures({ at });
     for (const pieces of candidates) {
       const ignore = this.ignoring(opts, pieces);
@@ -1036,6 +1044,12 @@ export class Engine<W = unknown> {
       const all = [...e.byLayer.values()].flat();
       if (!hits.some((h) => this.sameEntity(h, all))) continue;
       const client = toClient(frame, c);
+      if (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight) {
+        // the map is bigger than the window: no pointer reaches this pixel (not "covered by DOM", as it read before)
+        coveredPixel ??= round(c);
+        blocked = 'outside-window: that part of the map is outside the browser window';
+        continue;
+      }
       const el = topElementAt(client.x, client.y, ignoreDom);
       const top = this.topVisible(hits)!;
       if (this.sameEntity(top, all) && el === surface) return { pixel: round(c) };
@@ -1394,6 +1408,19 @@ const PIXEL_ONLY = new Set(['raster', 'hillshade', 'heatmap', 'background', 'col
 
 /** Pieces of one id-less feature whose on-screen boxes come this close (px) belong together. */
 const TOUCH_PX = 0.75;
+
+type Box = { x0: number; y0: number; x1: number; y1: number };
+
+/**
+ * Do two on-screen boxes touch — with a world period `wrap` (a zoomed-out map repeats the world), modulo it? Every
+ * piece is projected in the copy nearest the view, so pieces of one feature are at most about a period apart: one
+ * period either way is enough, and matches what split() does in its sweep.
+ */
+function touching(p: Box, q: Box, wrap?: number): boolean {
+  if (p.y0 > q.y1 + TOUCH_PX || q.y0 > p.y1 + TOUCH_PX) return false;
+  const at = (s: number) => p.x0 <= q.x1 + s + TOUCH_PX && q.x0 + s <= p.x1 + TOUCH_PX;
+  return at(0) || (!!wrap && (at(wrap) || at(-wrap)));
+}
 
 /** Hit tests per attempt at finding a clickable pixel on one feature. */
 const MAX_TRIES = 600;

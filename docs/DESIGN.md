@@ -185,7 +185,10 @@ on every retry:
    `document.elementFromPoint`, so a marker or popup sitting exactly on a feature's best interior
    candidate correctly blocks that candidate and the search moves on to the next one.
 6. **The map is scrolled into the browser viewport** if it is not already, since no pointer can reach
-   a part of the page that is off-screen — the same thing a Locator does before acting.
+   a part of the page that is off-screen — the same thing a Locator does before acting. A map larger
+   than the window cannot be scrolled fully into it: a pixel outside the window is refused (for a
+   location action too, and for a drag's release point, `force` or not — `force` skips the cover
+   checks, not reachability), since input sent there never reaches the application.
 7. **At the instant the real pointer event fires, the hit test is re-run at that exact pixel.** Between
    computing a target pixel in the page and Playwright dispatching input for it a few milliseconds
    later in the test process, the application could have moved the map. An armed, capture-phase
@@ -197,7 +200,9 @@ on every retry:
    resolved to when the check was armed — a piece of it, by key and, for an id-less feature, by
    touching its pieces — not merely something the query matches: an id-less look-alike that slides
    under the pointer is another feature. A moving target (`moving: 'allow'`) is resolved again when
-   the event arrives, since its pieces from before the press no longer touch the ones drawn at it. This closes the same class of race Playwright's own hit-target interception closes for
+   the event arrives, since its pieces from before the press no longer touch the ones drawn at it; the
+   query must then match exactly one feature, as it had to when it was aimed at — with two matches, the
+   one that happens to be under the pointer is not the one that was asked for. This closes the same class of race Playwright's own hit-target interception closes for
    ordinary DOM elements, and it was verified with a targeted mutation test: with the check disabled,
    a spec built to provoke the race fails; with it enabled, the same spec passes.
 
@@ -294,8 +299,11 @@ built around:
 - **World copies.** At low zoom, a web-Mercator map draws the whole world more than once side by
   side. The same id-less feature then appears in each visible copy, and identity keys built purely
   from screen position would treat those as separate features. The adapter can report the pixel
-  period the surface repeats at; x-coordinates are folded by that period before pieces are compared,
-  so multiple on-screen copies of one feature merge back into one identity.
+  period the surface repeats at, and pieces are compared modulo that period, so multiple on-screen
+  copies of one feature merge back into one identity. Compared, not folded one by one: folding each
+  piece by where its own left edge falls tore two touching tile pieces of one line apart whenever their
+  left edges fell on either side of a multiple of the period (one tiled line read as two features, and
+  a click on it as a strict-mode violation).
 
 A residual, unresolved case: under deliberately heavy concurrent load, roughly one time in twenty an
 animated point occasionally reports itself as "ambiguous" rather than the more accurate "unstable" —
