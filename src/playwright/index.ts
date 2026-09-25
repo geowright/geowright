@@ -1044,9 +1044,9 @@ export class FeatureHandle {
       const dest = { ...opts, autoPan: false, force: true };
       const deadline = deadlineOf(opts.timeout ?? this.map.timeout); // one timeout for both
       await this.map._pointAt(to, dest, `${what} destination`, deadline);
-      await this._withActionPoint(what, opts, async (a) => {
+      await this._withActionPoint(what, opts, async (a, _aim, _token, attempt) => {
         // one round trip, no waiting: the camera may have moved since, so the destination pixel is read afresh
-        const b = await this.map._pointNow(to, dest);
+        const b = await this.map._pointNow(to, dest, undefined, attempt);
         if ('retry' in b) return { retry: `destination: ${b.retry}` };
         await sendInput(() => this.map._drag(a, b.value, opts.steps, opts.modifiers));
       }, undefined, deadline);
@@ -1063,10 +1063,10 @@ export class FeatureHandle {
     refuseMoving('dragBy', opts);
     const what = `${this}.dragBy(${+delta.dLng.toFixed(5)}, ${+delta.dLat.toFixed(5)})`;
     await step(what, () =>
-      this._withActionPoint(what, opts, async (a) => {
-        const from = await this.map.lngLatAt(a);
+      this._withActionPoint(what, opts, async (a, _aim, _token, deadline) => {
+        const from = await this.map._callBy<LngLat>(deadline, 'worldAt', a);
         // no waiting between the verified source and the press: a destination that is not reachable NOW is a retry
-        const b = await this.map._pointNow({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true });
+        const b = await this.map._pointNow({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true }, undefined, deadline);
         if ('retry' in b) return { retry: `destination: ${b.retry}` };
         await sendInput(() => this.map._drag(a, b.value, opts.steps, opts.modifiers));
       }),

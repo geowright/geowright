@@ -96,6 +96,7 @@ test.describe('timeouts', () => {
     ['feature().click { autoPan }: the reveal', 'reveal', (map: MapHandle) => map.feature({ layer: 'alerts', id: 4 }).click({ autoPan: true, timeout: FAIL_FAST_MS })],
     ['clickAt { autoPan }: the reveal', 'revealWorld', (map: MapHandle) => map.clickAt({ lng: 35.2, lat: 32.08 }, { autoPan: true, timeout: FAIL_FAST_MS })],
     ['feature().lngLat: reading the lng/lat', 'worldAt', (map: MapHandle) => map.feature({ layer: 'alerts', id: 1 }).lngLat({ timeout: FAIL_FAST_MS })],
+    ['feature().dragBy: reading the lng/lat it drags from', 'worldAt', (map: MapHandle) => map.feature({ layer: 'alerts', id: 1 }).dragBy({ dLng: 0.001, dLat: 0 }, { timeout: FAIL_FAST_MS })],
   ] as const) {
     test(`${name}: a page that stalls there fails the action at its timeout`, async ({ map, page }) => {
       await stallOnce(page, method, STALL);
