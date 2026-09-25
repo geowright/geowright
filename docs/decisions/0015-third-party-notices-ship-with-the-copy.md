@@ -1,6 +1,6 @@
 # 0015. Third-party material: the allowlist, and its notices ship with every copy
 
-- Status: Accepted
+- Status: Superseded by 0020
 - Date: 2026-09-24
 - Decided by: Shai Sinai
 - Supersedes: 0008

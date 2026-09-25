@@ -8,7 +8,7 @@ file after a dependency bump.
 None of the licenses below are copyleft, and none conflict with distributing the core under
 Apache-2.0. What the package ships is MIT / BSD-2-Clause / BSD-3-Clause / ISC only; the demo app and
 `wild/` add OFL-1.1 (a font), Apache-2.0, Unlicense and EDL-1.0 (a BSD-3-Clause text: JSTS, inside the
-vendored Turf bundle), each with its text kept beside the file (decision 0015, proposed).
+vendored Turf bundle), each with its text kept beside the file (decision 0015).
 
 ---
 
@@ -134,6 +134,14 @@ prebuilt MapLibre GL JS dev bundle served directly to the demo app; the shared f
 header reads `/** MapLibre GL JS * @license 3-Clause BSD ... v6.10.0 ... */`. MapLibre's full `LICENSE.txt`
 is kept beside them as `demo/public/maplibre/LICENSE.txt`; `demo/scripts/copy-worker.mjs` copies all three
 from `node_modules/maplibre-gl`. Demo-only, not in `package.json` `"files"`.
+`LICENSE.txt` covers MapLibre and the code it names (mapbox-gl-js ≤ v1.13, glfx.js, d3-color), not the npm packages
+MapLibre's build bundles into the two files. `copy-worker.mjs` therefore also writes
+`demo/public/maplibre/THIRD_PARTY_LICENSES.md`, from the source maps MapLibre ships beside them: the license text of
+each of those packages (in 6.10.0: `@mapbox/point-geometry`, `@mapbox/unitbezier`, `@mapbox/vector-tile`,
+`@maplibre/geojson-vt`, `@maplibre/maplibre-gl-style-spec`, `@maplibre/mlt` — `(MIT OR Apache-2.0)`, used under MIT —,
+`@maplibre/vt-pbf`, `bidi-js`, `earcut`, `gl-matrix`, `murmurhash-js`, `pbf`, `potpack`, `quickselect`, `tinyqueue`;
+ISC / BSD-2-Clause / BSD-3-Clause / MIT) and of the two files MapLibre copied into its own source with the notice in a
+comment (`grid-index`, `@mapbox/whoots-js`, both ISC). It fails if MapLibre's sources gain another such notice.
 
 ### `wild/` — apps, examples and fixtures we did not write
 
@@ -146,8 +154,16 @@ Every app's committed `dist/` carries `dist/THIRD_PARTY_LICENSES.md`: the licens
 build bundles (React, ReactDOM, Vue, Svelte, `d3-*`, luma.gl / math.gl / loaders.gl, maplibre-gl, …), written by
 Vite's `build.license` (by `scripts/build.mjs` for `pmtiles`, which only copies files). `node wild/scripts/apps.mjs
 check`, run by the unit suite, fails when an app's `dist/` has none, or a package in it has no text.
+Vite lists `maplibre-gl` there as one package; the packages MapLibre's prebuilt dist bundles inside it (for 6.10.0
+the list above plus `kdbush` and `@mapbox/tiny-sdf`, which its main file adds; 5.13.0 and 3.6.2 a similar set, with
+`supercluster`, `geojson-vt`, `@mapbox/geojson-rewind`, `@mapbox/whoots-js` and `tslib`) are not in those files yet.
 `wild/fixtures/vendor/turf@7/turf.min.js` bundles JSTS, licensed `(EDL-1.0 OR EPL-1.0)` and used under EDL-1.0,
 and further MIT / ISC / BSD / Unlicense packages: their texts are in `wild/fixtures/vendor/turf@7/THIRD_PARTY_LICENSES.md`.
+`wild/fixtures/vendor/maplibre-gl-terradraw@1.0.1/` (MIT) bundles terra-draw 1.0.0 and its MapLibre adapter 1.0.1 (MIT)
+and six `@turf/*` 7.2.0 modules (MIT), and its CSS inlines Material Symbols icons (Apache-2.0): the texts, and those
+of the code terra-draw adapted (MIT / ISC), are in its `THIRD_PARTY_LICENSES.md`. Every directory under
+`wild/fixtures/vendor/` keeps a `THIRD_PARTY_LICENSES.md` (for d3 v3: that it bundles only itself), checked by
+`node wild/scripts/apps.mjs check`.
 
 Full inventory and per-item licensing already tracked in `wild/README.md` (the table of
 `maplibre-examples/`, `apps/`, `fixtures/`) and `wild/fixtures/SOURCES.md` (per-fixture origin,
@@ -171,7 +187,9 @@ None of this ships in the npm package (confirmed: `npm pack --dry-run` includes 
   do **not** ship a `LICENSE` file in the installed npm package — there is no copyright-holder line
   to copy verbatim beyond the package.json `author` field (James Milner). Not a blocker (MIT doesn't
   require a bundled LICENSE file to be valid), but if exact attribution text is wanted, pull it from
-  the `JamesLMilner/terra-draw` GitHub repo's root `LICENSE` rather than the npm tarball.
+  the `JamesLMilner/terra-draw` GitHub repo's root `LICENSE` rather than the npm tarball. The notices of the
+  vendored `maplibre-gl-terradraw` bundle, which contains terra-draw 1.0.0, carry that file verbatim
+  (`Copyright 2022 James Milner`, read from the repository's default branch on 2026-09-25).
 - `minimist`'s bundled `LICENSE` text has no named copyright holder (generic "This software is
   released under the MIT license"); the `package.json` `author` is James Halliday. Transitive-only,
   dev-side (style-spec validator, not observed in the built `dist/inpage.js`).
