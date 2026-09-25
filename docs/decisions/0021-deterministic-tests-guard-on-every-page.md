@@ -1,6 +1,6 @@
 # 0021. Deterministic tests: no network, no flakes, no fixed sleeps (the guard covers every page)
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-09-25
 - Decided by: Shai Sinai
 - Supersedes: 0009
@@ -25,5 +25,5 @@ origin as a string prefix (`:41750` passed as `:4175`); it now uses the same gua
   `tests/network-guard.spec.ts`; CONTRIBUTING.md "Ground rules"
 
 ## More
-- 0009 (superseded when this is accepted)
+- 0009 (superseded)
 - CONTRIBUTING.md, docs/RECIPES.md, tests/
