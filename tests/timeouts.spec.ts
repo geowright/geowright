@@ -1,6 +1,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { geowright, type MapHandle } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /** The default action timeout follows the test's timeout; an action's `timeout` is a wall-clock promise. */
 test.describe('timeouts', () => {
@@ -92,6 +93,38 @@ test.describe('timeouts', () => {
       expect(took, `${name} failed ${took}ms after it started, with a ${TIMEOUT}ms timeout and the page busy for ${BUSY}ms`).toBeLessThan(2 * TIMEOUT);
     });
   }
+
+  // A matcher polls until its deadline; the poll still running then is abandoned. When the page answered an earlier poll,
+  // that answer is what the failure reports: "the page did not answer" only when it never did. The page here answers
+  // the first look, then is busy past the deadline (its first findChecked schedules the busy loop).
+  test('a matcher whose page stops answering after its first look reports what it last saw, not "the page did not answer"', async ({ map, page }) => {
+    await page.evaluate((ms) => {
+      const api = (window as any).__geowright;
+      const find = api.findChecked;
+      let looks = 0;
+      api.findChecked = (...args: unknown[]) => {
+        if (looks++ === 0) setTimeout(() => { const end = performance.now() + ms; while (performance.now() < end); }, 0);
+        return find(...args);
+      };
+    }, 2 * FAIL_FAST_MS);
+    const err = await expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('Received: 0 match(es)');
+  });
+
+  test('toHaveView whose page stops answering after its first look reports the camera it last saw', async ({ map, page }) => {
+    await page.evaluate((ms) => {
+      const api = (window as any).__geowright;
+      const view = api.viewState;
+      let looks = 0;
+      api.viewState = (...args: unknown[]) => {
+        if (looks++ === 0) setTimeout(() => { const end = performance.now() + ms; while (performance.now() < end); }, 0);
+        return view(...args);
+      };
+    }, 2 * FAIL_FAST_MS);
+    const err = await expect(map).toHaveView({ zoom: 3 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(err?.message).not.toContain('did not answer');
+    expect(err?.message).toMatch(/"zoom":12/);
+  });
 
   // a last attempt that started with a few ms left was abandoned for want of them, and the timeout then blamed
   // "a busy main thread" on an idle page, burying the real reason (here: occluded). timeout: 1 makes it certain.

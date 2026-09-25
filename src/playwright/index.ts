@@ -1119,18 +1119,24 @@ interface Poll {
  * Polls until a CONCLUSIVE result satisfies the assertion (in its polarity) or the deadline. If the last poll was
  * inconclusive, the assertion fails whichever way it was written (pass = isNot) and `inconclusive` says why — the rule
  * toHaveView has always had for a map that never came to rest. A throw is an inconclusive poll. `attempt` abandons its
- * round trips at `deadline`; `unanswered`: the last poll was abandoned so — the page is not answering, and nothing that
- * follows may wait for it.
+ * round trips at `deadline`. A poll abandoned so after the page answered an earlier one ends the polling with THAT
+ * answer: the deadline has come, and what the page last said is the verdict, as for any matcher that times out.
+ * `unanswered`: no poll was ever answered — the page is not answering, and nothing that follows may wait for it.
  */
 async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number, deadline: number) => Promise<Poll>, backoff: number[] = POLL): Promise<{ pass: boolean; inconclusive?: string; unanswered?: boolean }> {
   const deadline = deadlineOf(timeout);
   let last: Poll = { verdict: undefined, why: 'never checked' };
+  let answered: Poll | undefined; // the last poll the page answered
   let unanswered = false;
   for (let i = 0; ; i++) {
     unanswered = false;
     try {
-      last = await attempt(i, deadline);
+      last = answered = await attempt(i, deadline);
     } catch (e) {
+      if (e instanceof DeadlineError && answered) {
+        last = answered;
+        break;
+      }
       last = { verdict: undefined, why: (e as Error).message.split('\n')[0] };
       unanswered = e instanceof DeadlineError;
     }
@@ -1468,7 +1474,8 @@ ${indent(explain)}`,
     let view: Awaited<ReturnType<MapHandle['viewState']>> | undefined;
     let pass = false;
     let settled = false;
-    let unanswered: string | undefined; // the last poll was abandoned at the deadline: the page did not answer
+    let unanswered: string | undefined; // the last poll was abandoned at the deadline, and no earlier one was answered
+    let answered = false;
     for (let i = 0; ; i++) {
       unanswered = undefined;
       try {
@@ -1485,10 +1492,15 @@ ${indent(explain)}`,
         // A verdict needs the map AT REST, in both polarities. `.not.toHaveView(start)` used to be
         // satisfied by a map that was merely still animating away from `start` — so the next line of
         // the test read a mid-animation camera. Found on Linux CI (slower frames), not on the Mac.
+        answered = true;
         if (settled && pass !== this.isNot) break;
       } catch (e) {
         /* map not registered yet: retry */
-        if (e instanceof DeadlineError) unanswered = e.message;
+        // Abandoned at the deadline after an answered poll: that answer is the verdict (see pollVerdict).
+        if (e instanceof DeadlineError) {
+          if (answered) break;
+          unanswered = e.message;
+        }
       }
       const wait = POLL[Math.min(i, POLL.length - 1)];
       if (Date.now() + wait >= deadline) break;
