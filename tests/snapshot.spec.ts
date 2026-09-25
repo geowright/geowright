@@ -88,6 +88,15 @@ test.describe('map snapshot (agent layer)', () => {
     expect(snap).toMatch(/#1 Point @\(\d+,\d+\) .*name="Gas leak"/);
   });
 
+  // A RegExp `where` value is sent to the page as a pattern, as every other query does; it used to reach the page as a
+  // RegExp object and throw "a where operator object has no operator in it".
+  test('filter takes a RegExp where value, like every other query', async ({ map }) => {
+    const snap = await map.snapshot({ filter: { layer: 'alerts', where: { name: /^gas/i } } });
+    expect(snap).toMatch(/\[alerts\] 1 circle entity/);
+    expect(snap).toContain('name="Gas leak"');
+    expect(snap).not.toContain('name="Road closure"');
+  });
+
   test('is bounded: per-layer cap with a summary of the remainder', async ({ map }) => {
     const snap = await map.snapshot({ perLayer: 2 });
     expect(snap).toMatch(/\[parcels\] 6 fill entities/);
