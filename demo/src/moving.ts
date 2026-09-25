@@ -32,6 +32,12 @@ map.on('click', (e) => {
   const f = map.queryRenderedFeatures(e.point, { layers: ['patrols', 'parked'] })[0];
   el('clicked').textContent = f ? String(f.properties.unit) : 'nothing';
 });
+let dblclicks = 0;
+map.on('dblclick', (e) => {
+  el('dblclick-count').textContent = String(++dblclicks);
+  const f = map.queryRenderedFeatures(e.point, { layers: ['patrols', 'parked'] })[0];
+  el('dblclicked').textContent = f ? String(f.properties.unit) : 'nothing';
+});
 map.on('mousemove', (e) => {
   const f = map.queryRenderedFeatures(e.point, { layers: ['patrols', 'parked'] })[0];
   el('hovered').textContent = f ? String(f.properties.unit) : '';

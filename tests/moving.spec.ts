@@ -1,6 +1,6 @@
 import { expect as baseExpect } from '@playwright/test';
 import { test } from './fixtures'; // the network guard and the slow-machine throttle
-import { geowright, expect } from '../src/playwright';
+import { geowright, expect, type MapHandle } from '../src/playwright';
 import { FAIL_FAST_MS } from './slow-machine';
 
 /**
@@ -23,13 +23,33 @@ test.describe("moving: 'allow'", () => {
     await baseExpect(page.getByTestId('clicked')).toHaveText('P-1');
   });
 
-  test('hover reaches the moving feature; rightClick and dblclick work too', async ({ page }) => {
+  test('hover reaches the moving feature', async ({ page }) => {
     const map = geowright(page);
     await map.feature({ layer: 'patrols', id: 1 }).hover({ moving: 'allow' });
     await baseExpect(page.getByTestId('hovered')).toHaveText('P-1');
-    await map.feature({ layer: 'patrols', id: 2 }).dblclick({ moving: 'allow' });
-    await baseExpect(page.getByTestId('clicked')).toHaveText('P-2');
   });
+
+  // A double-click is two clicks and ONE dblclick, and the app counts both. The control proves the counts tell a
+  // double-click from a click. Only the first press of a double-click is verified, so on a moving target the second
+  // lands a round trip later: which unit the dblclick hit is asserted on the stationary one only.
+  test('the control: click() reaches the app as one click and no dblclick', async ({ page }) => {
+    await geowright(page).feature({ layer: 'parked', id: 9 }).click();
+    await baseExpect(page.getByTestId('click-count')).toHaveText('1');
+    await baseExpect(page.getByTestId('dblclick-count')).toHaveText('0');
+  });
+  const doubles: [string, string | undefined, (map: MapHandle) => Promise<void>][] = [
+    ['dblclick() on a stationary feature', 'P-9', (map) => map.feature({ layer: 'parked', id: 9 }).dblclick()],
+    ["dblclick({ moving: 'allow' }) on a moving feature", undefined, (map) => map.feature({ layer: 'patrols', id: 2 }).dblclick({ moving: 'allow' })],
+    ['click({ clickCount: 2 }) on a stationary feature', 'P-9', (map) => map.feature({ layer: 'parked', id: 9 }).click({ clickCount: 2 })],
+  ];
+  for (const [name, unit, act] of doubles) {
+    test(`${name} reaches the app as two clicks and one dblclick`, async ({ page }) => {
+      await act(geowright(page));
+      await baseExpect(page.getByTestId('click-count')).toHaveText('2');
+      await baseExpect(page.getByTestId('dblclick-count')).toHaveText('1');
+      if (unit) await baseExpect(page.getByTestId('dblclicked')).toHaveText(unit);
+    });
+  }
 
   // 400 px/s: a 9px dot is under any given pixel for ~50ms. An attempt that arrives late must be SWALLOWED (the
   // app sees no click at all), never delivered to whatever is there instead. The same invariant holds WITHOUT the
@@ -39,7 +59,7 @@ test.describe("moving: 'allow'", () => {
     test(`never a silent mis-click, however fast the target moves (moving: ${moving})`, async ({ page }) => {
       const map = geowright(page);
       await page.getByTestId('speed').fill('400');
-      const outcome = await map.feature({ layer: 'patrols', id: 1 }).click({ moving, timeout: moving ? 8000 : 1500 }).then(() => 'clicked', (e: Error) => e.message);
+      const outcome = await map.feature({ layer: 'patrols', id: 1 }).click({ moving, timeout: moving ? 8000 : FAIL_FAST_MS }).then(() => 'clicked', (e: Error) => e.message);
       const count = Number(await page.getByTestId('click-count').textContent());
       if (outcome === 'clicked') {
         expect(count).toBe(1);

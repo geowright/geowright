@@ -17,7 +17,7 @@ export default defineConfig({
   timeout: 30_000,
   expect: { timeout: 7_000 },
   outputDir: 'test-results/compat',
-  use: { baseURL: `http://localhost:${PORT}`, trace: 'retain-on-failure', viewport: { width: 1280, height: 720 } },
+  use: { baseURL: `http://localhost:${PORT}`, trace: 'retain-on-failure', viewport: { width: 1280, height: 720 }, serviceWorkers: 'block' }, // a service worker's requests bypass the network guard
   projects: [{ name: 'compat', use: { ...devices['Desktop Chrome'], viewport: { width: 1280, height: 720 }, launchOptions: { args: WEBGL_SOFTWARE_FLAGS } } }],
   webServer: {
     command: 'node tests/compat/serve.mjs',
