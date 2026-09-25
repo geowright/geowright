@@ -9,7 +9,8 @@
 //       repository, a full commit SHA and the hook line, and is opened by a spec in tests/wild/; its built dist/ ships
 //       dist/THIRD_PARTY_LICENSES.md with a section and a license text for each package it bundles;
 //       wild/maplibre-examples/ keeps its license; every file under wild/fixtures/ is named in SOURCES.md or a
-//       sources/*.md record (by path, by name, or by a directory it is in); no TODO(new-app) is left anywhere.
+//       sources/*.md record (by path, by name, or — data only, not code — by a directory it is in); each vendored build
+//       under wild/fixtures/vendor/ keeps a license file and a THIRD_PARTY_LICENSES.md; no TODO(new-app) is left anywhere.
 //       The one-line rule (docs/decisions/0016), as far as it can be checked offline: each app's sources hold the hook
 //       line UPSTREAM.md shows, at most one per file, in the files UPSTREAM.md marks "+1 line" and in no other vendored
 //       file; each MapLibre example's committed patch is exactly one added line, the hook, and nothing removed (as
@@ -267,7 +268,12 @@ function examplePatches(problems, print = false) {
 /**
  * Every fixture file has a provenance and license row: its path or file name, or a directory it is in (as `dir/…`),
  * appears in wild/fixtures/SOURCES.md or wild/fixtures/sources/*.md. License and notices files are records themselves.
+ * A directory covers data only (the demotiles/ tiles): code is named by its own path or file name, so a bundle cannot
+ * pass under a row written for something else. Each vendored build, wild/fixtures/vendor/<name>/, keeps its license file
+ * and a THIRD_PARTY_LICENSES.md beside it: what the build bundles, read from the build, with each text (decision 0015),
+ * even when that is only its own code.
  */
+const FIXTURE_CODE = /\.(m?js|cjs|css|wasm)$/i;
 function fixturesRecorded(problems) {
   const fixtures = join(ROOT, 'wild/fixtures');
   const sources = join(fixtures, 'sources');
@@ -280,8 +286,18 @@ function fixturesRecorded(problems) {
     if (records.includes(file) || isLicenseFile(name) || name === 'THIRD_PARTY_LICENSES.md' || name === '.DS_Store') continue;
     const dirs = [];
     for (let d = r.split('/').slice(0, -1); d.length; d.pop()) dirs.push(`\`${d.join('/')}/`);
-    if (text.includes(r) || text.includes(name) || dirs.some((d) => text.includes(d))) continue;
-    problems.push(`wild/fixtures/${r}: not named in wild/fixtures/SOURCES.md or a sources/*.md record (origin, license)`);
+    if (text.includes(r) || text.includes(name)) continue;
+    const code = FIXTURE_CODE.test(name);
+    if (!code && dirs.some((d) => text.includes(d))) continue;
+    problems.push(code
+      ? `wild/fixtures/${r}: code, and not named by its path or file name in wild/fixtures/SOURCES.md or a sources/*.md record (a directory row covers data only)`
+      : `wild/fixtures/${r}: not named in wild/fixtures/SOURCES.md or a sources/*.md record (origin, license)`);
+  }
+  const vendor = join(fixtures, 'vendor');
+  for (const d of existsSync(vendor) ? readdirSync(vendor).filter((f) => statSync(join(vendor, f)).isDirectory()) : []) {
+    const files = readdirSync(join(vendor, d));
+    if (!files.some(isLicenseFile)) problems.push(`wild/fixtures/vendor/${d}/: no license file (keep the package's own, byte-identical)`);
+    if (!files.includes('THIRD_PARTY_LICENSES.md')) problems.push(`wild/fixtures/vendor/${d}/: no THIRD_PARTY_LICENSES.md (what the build bundles, established by reading it, and each one's license text: decision 0015)`);
   }
 }
 
