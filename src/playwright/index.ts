@@ -1120,8 +1120,10 @@ interface Poll {
  * inconclusive, the assertion fails whichever way it was written (pass = isNot) and `inconclusive` says why — the rule
  * toHaveView has always had for a map that never came to rest. A throw is an inconclusive poll. `attempt` abandons its
  * round trips at `deadline`. A poll abandoned so after the page answered an earlier one ends the polling with THAT
- * answer: the deadline has come, and what the page last said is the verdict, as for any matcher that times out.
- * `unanswered`: no poll was ever answered — the page is not answering, and nothing that follows may wait for it.
+ * answer: the deadline has come, and what the page last said is the verdict, as for any matcher that times out. So an
+ * `attempt` sets the findings its message reports only from an answered round trip, never resets them before one.
+ * `unanswered`: the last poll was abandoned at the deadline — the page is not answering, and nothing that follows may
+ * wait for it.
  */
 async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number, deadline: number) => Promise<Poll>, backoff: number[] = POLL): Promise<{ pass: boolean; inconclusive?: string; unanswered?: boolean }> {
   const deadline = deadlineOf(timeout);
@@ -1135,6 +1137,7 @@ async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number,
     } catch (e) {
       if (e instanceof DeadlineError && answered) {
         last = answered;
+        unanswered = true;
         break;
       }
       last = { verdict: undefined, why: (e as Error).message.split('\n')[0] };
@@ -1145,7 +1148,7 @@ async function pollVerdict(timeout: number, isNot: boolean, attempt: (i: number,
     if (Date.now() + wait >= deadline) break;
     await new Promise((r) => setTimeout(r, wait));
   }
-  return last.verdict === undefined ? { pass: isNot, inconclusive: last.why ?? 'no verdict', unanswered } : { pass: last.verdict };
+  return last.verdict === undefined ? { pass: isNot, inconclusive: last.why ?? 'no verdict', unanswered } : { pass: last.verdict, unanswered };
 }
 
 const NOT_INSPECTED = '(not inspected: the page was not answering)';
@@ -1216,7 +1219,6 @@ const matchers = {
     let found: FeatureSummary[] = [];
     const settle = new Settle();
     const { pass, inconclusive, unanswered } = await pollVerdict(timeout, this.isNot, async (i, deadline) => {
-      found = [];
       const s = await settle.wait(map, i, deadline, this.isNot);
       const r = await map._findChecked(query, deadline);
       found = r.found;
@@ -1251,7 +1253,6 @@ const matchers = {
     const settle = new Settle();
     // A count is a verdict about what is NOT there too (the rest): it needs a settled map in both polarities.
     const { pass, inconclusive, unanswered } = await pollVerdict(timeout, this.isNot, async (i, deadline) => {
-      found = [];
       const s = await settle.wait(received.map, i, deadline, true);
       const r = await received.map._findChecked(received.query, deadline);
       found = r.found;
@@ -1401,7 +1402,6 @@ ${indent(explain)}`,
     const map = received.map;
     let verdict: GeometryVerdict = { ok: false, reason: 'never checked' };
     const { pass, inconclusive, unanswered } = await pollVerdict(timeout, this.isNot, async (_i, deadline) => {
-      verdict = { ok: false, reason: 'never checked' };
       await map._callBy(deadline, 'waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
       let exp = expected as GeometryExpectation;
       if (Array.isArray(expected)) {

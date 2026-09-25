@@ -209,7 +209,7 @@ test.describe('a verdict needs a map it could look at', () => {
     expect(e, '.not.toHaveGeometry passed for a feature that is not on the map').not.toBeNull();
     expect(e?.message).toContain('no rendered feature matches');
     // ...while a real difference is a verdict
-    await expect(map.feature({ layer: 'alerts', id: 1 })).not.toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: 800 });
+    await expect(map.feature({ layer: 'alerts', id: 1 })).not.toHaveGeometry({ type: 'Point', coordinates: [0, 0] });
   });
 });
 
@@ -257,13 +257,16 @@ test.describe('a negative verdict waits for the map to settle', () => {
 
   // Only absence needs a settled map: a POSITIVE assertion that finds nothing on a loading map simply has not found it
   // yet, and says so — not "no verdict … absence could not be concluded".
-  for (const [name, assertion] of Object.entries({
-    toHaveFeature: (map: MapHandle, timeout: number) => expect(map).toHaveFeature({ layer: 'slow' }, { timeout }),
-    toBeVisibleOnMap: (map: MapHandle, timeout: number) => expect(map.feature({ layer: 'slow' })).toBeVisibleOnMap({ timeout }),
-  })) {
+  // (The source answers well after the assertion's timeout; the timeout is FAIL_FAST_MS, so that the page's first answer
+  // fits in it on a loaded machine: without an answer the honest message IS "no verdict: the page did not answer".)
+  for (const [name, assertion, notFound] of [
+    ['toHaveFeature', (map: MapHandle, timeout: number) => expect(map).toHaveFeature({ layer: 'slow' }, { timeout }), 'Received: 0 match(es)'],
+    ['toBeVisibleOnMap', (map: MapHandle, timeout: number) => expect(map.feature({ layer: 'slow' })).toBeVisibleOnMap({ timeout }), 'no rendered feature matches'],
+  ] as const) {
     test(`a positive ${name} on a still-loading source fails as "not found", not as "no verdict"`, async ({ map, page }) => {
-      await late(page, 'slow', 5000);
-      const e = await rejects(assertion(map, 1000));
+      await late(page, 'slow', 3 * FAIL_FAST_MS);
+      const e = await rejects(assertion(map, FAIL_FAST_MS));
+      expect(e?.message).toContain(notFound);
       expect(e?.message).not.toMatch(/no verdict/);
     });
   }

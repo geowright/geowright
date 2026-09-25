@@ -96,35 +96,49 @@ test.describe('timeouts', () => {
 
   // A matcher polls until its deadline; the poll still running then is abandoned. When the page answered an earlier poll,
   // that answer is what the failure reports: "the page did not answer" only when it never did. The page here answers
-  // the first look, then is busy past the deadline (its first findChecked schedules the busy loop).
-  test('a matcher whose page stops answering after its first look reports what it last saw, not "the page did not answer"', async ({ map, page }) => {
-    await page.evaluate((ms) => {
+  // the first look, then blocks inside the second one past the deadline. (Blocking from a timer the first look set raced
+  // the delivery of the first answer: under load the test then saw no answer at all.)
+  const stopsAfterFirstLook = (page: Page, method: string) =>
+    page.evaluate(([method, ms]) => {
       const api = (window as any).__geowright;
-      const find = api.findChecked;
+      const orig = api[method];
       let looks = 0;
-      api.findChecked = (...args: unknown[]) => {
-        if (looks++ === 0) setTimeout(() => { const end = performance.now() + ms; while (performance.now() < end); }, 0);
-        return find(...args);
+      api[method] = (...args: unknown[]) => {
+        if (looks++ === 1) { const end = performance.now() + ms; while (performance.now() < end); }
+        return orig(...args);
       };
-    }, 2 * FAIL_FAST_MS);
+    }, [method, 2 * FAIL_FAST_MS] as const);
+
+  test('a matcher whose page stops answering after its first look reports what it last saw, not "the page did not answer"', async ({ map, page }) => {
+    await stopsAfterFirstLook(page, 'findChecked');
     const err = await expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('Received: 0 match(es)');
   });
 
   test('toHaveView whose page stops answering after its first look reports the camera it last saw', async ({ map, page }) => {
-    await page.evaluate((ms) => {
-      const api = (window as any).__geowright;
-      const view = api.viewState;
-      let looks = 0;
-      api.viewState = (...args: unknown[]) => {
-        if (looks++ === 0) setTimeout(() => { const end = performance.now() + ms; while (performance.now() < end); }, 0);
-        return view(...args);
-      };
-    }, 2 * FAIL_FAST_MS);
+    await stopsAfterFirstLook(page, 'viewState');
     const err = await expect(map).toHaveView({ zoom: 3 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).not.toContain('did not answer');
     expect(err?.message).toMatch(/"zoom":12/);
   });
+
+  // ...and reports THAT poll's findings, not what the abandoned poll had reset before its round trip; the map state is
+  // not asked for either, from a page that stopped answering.
+  for (const [name, method, look, received] of [
+    ['not.toHaveFeature', 'findChecked', (map: MapHandle) => expect(map).not.toHaveFeature({ layer: 'alerts', id: 1 }, { timeout: FAIL_FAST_MS }), 'Received: 1 match(es)'],
+    ['toHaveFeatureCount', 'findChecked', (map: MapHandle) => expect(map.features({ layer: 'alerts', id: 1 })).toHaveFeatureCount(3, { timeout: FAIL_FAST_MS }), 'Received: 1\n'],
+    ['toHaveGeometry', 'compareGeometry', (map: MapHandle) => expect(map.feature({ layer: 'alerts', id: 1 })).toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: FAIL_FAST_MS }), 'Geometry on the map (data): {"type":"Point"'],
+  ] as const) {
+    test(`${name} whose page stops answering after its first look reports that look`, async ({ map, page }) => {
+      await expect(map).toHaveFeature({ layer: 'alerts', id: 1 });
+      await stopsAfterFirstLook(page, method);
+      const err = await look(map).then(() => null, (e: Error) => e);
+      expect(err, 'the assertion fails: the page saw the opposite').not.toBeNull();
+      expect(err!.message).toContain(received);
+      expect(err!.message).not.toContain('never checked');
+      expect(err!.message).toContain('(not inspected: the page was not answering)');
+    });
+  }
 
   // a last attempt that started with a few ms left was abandoned for want of them, and the timeout then blamed
   // "a busy main thread" on an idle page, burying the real reason (here: occluded). timeout: 1 makes it certain.
