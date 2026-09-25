@@ -11,6 +11,10 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
   they silently ignored. Their options are `SteadyActionOptions`; passing `moving` throws an error pointing to
   `click()` / `tap()` / `hover()` on a feature, which verify a moving target when the input arrives. A value typed
   `ActionOptions` no longer fits them either, even one that never sets `moving`: type it `SteadyActionOptions`.
+- A `where` operand of the wrong kind is an error (TypeScript rejects most of these already): `in` that is not an array
+  (it did a substring match), `exists` that is not a boolean, `gt` / `gte` / `lt` / `lte` that is not a number,
+  `matches` / `flags` that is not a string, and an `undefined` value or operand (they matched nothing, so negative
+  assertions passed).
 
 **Fixed**
 - Locations just across the antimeridian (`clickAt` and the other location actions, `map.clientPoint()`, `draw.*`, a
@@ -58,9 +62,6 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
 - GeoJSON features with a `null` property: `geometry()` and `toHaveGeometry` read the full shape from the source again,
   and the snapshot no longer lists them as "inside the view but not drawn individually" (MapLibre drops null properties
   from what it draws).
-- A `where` operand of the wrong kind is an error: `in` that is not an array (it did a substring match), `exists` that is
-  not a boolean, `gt` / `gte` / `lt` / `lte` that is not a number, `matches` / `flags` that is not a string, and an
-  `undefined` value or operand (they matched nothing, so negative assertions passed).
 - Two features of one vector source with the same id and properties in different source-layers are two features: the one
   drawn on top covers the other instead of counting as the same feature.
 - The "visibility unknown / uncertain for layer …" notes of failure messages and the snapshot are about this map as it is
