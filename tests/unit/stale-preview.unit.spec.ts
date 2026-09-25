@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
+import { createServer } from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { stalePreview } from '../stale-preview';
 
@@ -46,4 +48,29 @@ test('no build in this checkout, yet a server answers: refused', async () => {
   const root = tree();
   rmSync(join(root, 'demo/dist'), { recursive: true });
   expect(await stalePreview(root, URL, async () => HTML)).toContain('demo/dist/index.html does not exist');
+});
+
+/** A real server on one loopback address only, as `vite preview` listens in a Linux container: on ::1 alone. */
+async function serveOn(host: string, body: string): Promise<{ url: string; close: () => Promise<void> }> {
+  const server = createServer((_req, res) => res.end(body));
+  await new Promise<void>((resolve, reject) => server.once('error', reject).listen(0, host, resolve));
+  const { port } = server.address() as AddressInfo;
+  return { url: `http://localhost:${port}`, close: () => new Promise((resolve) => server.close(() => resolve())) };
+}
+
+for (const host of ['::1', '127.0.0.1']) {
+  test(`a server that listens on ${host} only is reached through localhost, as the browser reaches it`, async () => {
+    const server = await serveOn(host, HTML);
+    try {
+      expect(await stalePreview(tree(), server.url)).toBeUndefined();
+    } finally {
+      await server.close();
+    }
+  });
+}
+
+test('no answer: says so, with the error, instead of blaming another checkout', async () => {
+  const server = await serveOn('127.0.0.1', HTML);
+  await server.close(); // a port nothing listens on
+  await expect(stalePreview(tree(), server.url)).rejects.toThrow(`no answer from ${server.url}/`);
 });
