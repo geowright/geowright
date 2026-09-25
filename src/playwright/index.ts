@@ -1316,8 +1316,8 @@ const matchers = {
         if (r.diff > 0) return { verdict: true };
         return s.settled ? { verdict: false } : { verdict: undefined, why: `${notSettled(s.why)}; last probe: ${why}` };
       },
-      // Each probe hides and re-shows the layer, after which MapLibre reloads its source: back off, so that a
-      // slow machine gets to finish that before the next probe knocks it over again.
+      // Each probe re-renders four times, and a layer hidden by `visibility` (data-driven opacity) has its source
+      // reloaded after it: back off, so that a slow machine gets to finish that before the next probe knocks it over again.
       [250, 500, 1000, 2000],
     );
     if (inconclusive) why = undecided(inconclusive);
@@ -1343,7 +1343,7 @@ const matchers = {
    *     point change when its layer is not drawn. Catches transparent icons and same-colour-as-
    *     background; needs an unoccluded point, so an occluded feature is not visible either.
    * The pixel probe re-renders the map four times (with the layer, again as a control, without, restored) and
-   * briefly toggles the layer's visibility within one task (nothing is composited, but 'styledata' fires) — it runs
+   * briefly hides the layer within one task (nothing is composited, but 'styledata' fires) — it runs
    * after the cheap paint check has passed, and its result is reused while the feature does not change.
    */
   async toBeVisibleOnMap(received: FeatureHandle, options?: { timeout?: number; pixels?: boolean }) {
@@ -1353,8 +1353,8 @@ const matchers = {
     const query: FeatureQuery = { ...received.query, visible: 'any' }; // look at it even if invisible: that is the question
     let why = 'never checked';
     const settle = new Settle();
-    // a probe hides and re-shows the layer, and MapLibre then reloads its source — once per verdict, not per
-    // poll. A conclusive result is reused while the feature looks the same (position, properties, state, paint verdict);
+    // a probe re-renders four times (and reloads the source of a layer with data-driven opacity) — once per verdict,
+    // not per poll. A conclusive result is reused while the feature looks the same (position, properties, state, paint verdict);
     // a changed feature is probed again at once, an unchanged one again only after 1, 2, 4… s (pixels can change with
     // nothing else changing: an icon image replaced).
     let last: { key: string; at: number; every: number; probe: { ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } } | undefined;
