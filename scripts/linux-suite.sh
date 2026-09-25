@@ -6,24 +6,31 @@
 #   bash scripts/linux-suite.sh                          # typecheck, build, full suite, compat matrix
 #   bash scripts/linux-suite.sh tests/act.spec.ts -g x   # anything after the script name goes to `playwright test`
 #
-# The working tree is COPIED into a named volume (geowright-linux): node_modules holds platform binaries, so the
-# macOS one cannot be shared, and the copy keeps the container from writing into the repository. `npm ci` is cached
-# in that volume and only re-run when package-lock.json changes. Results: test-results-linux/ (git-ignored).
+# The working tree is COPIED into a named volume (geowright-linux-<hash of this checkout's path>: one per checkout, so
+# two checkouts never run each other's code): node_modules holds platform binaries, so the macOS one cannot be shared,
+# and the copy keeps the container from writing into the repository. `npm ci` is cached in that volume and only re-run
+# when package-lock.json changes. One run per checkout at a time. Results: test-results-linux/ (git-ignored).
 set -euo pipefail
 cd "$(dirname "$0")/.."
+mkdir -p .scratch
+LOCK=.scratch/linux-suite.lock
+mkdir "$LOCK" 2>/dev/null || { echo "linux-suite: already running in this checkout ($PWD/$LOCK; remove it if no run is)" >&2; exit 1; }
+trap 'rmdir "$LOCK"' EXIT
+VOLUME="geowright-linux-$(pwd -P | shasum | cut -c1-12)"
 PW=$(node -p "require('./node_modules/@playwright/test/package.json').version")
 IMAGE="mcr.microsoft.com/playwright:v${PW}-noble"
 OUT="$PWD/test-results-linux"
 rm -rf "$OUT" && mkdir -p "$OUT"
-# The verdict names a commit: the one checked out, with no changes to tracked files, BEFORE the copy is made. (Read after
-# a ~10-minute run, HEAD may be a commit made meanwhile in this checkout, whose code never ran.)
+# The verdict names a commit: the one checked out, with no changes and no untracked files, BEFORE the copy is made. (The
+# copy takes untracked files too: a new module that was never added would run here and be missing from the commit. And
+# read after a ~10-minute run, HEAD may be a commit made meanwhile in this checkout, whose code never ran.)
 RAN_ON=$(git rev-parse HEAD)
-RAN_CLEAN=0; [ -n "$(git status --porcelain --untracked-files=no)" ] || RAN_CLEAN=1
+RAN_CLEAN=0; [ -n "$(git status --porcelain)" ] || RAN_CLEAN=1
 
 # (COPYFILE_DISABLE / --no-mac-metadata: macOS tar otherwise adds an AppleDouble `._name` twin for every file with
 #  extended attributes, and Playwright on Linux then tries to run `._act.spec.ts`)
 git ls-files -z --cached --others --exclude-standard | COPYFILE_DISABLE=1 tar --no-mac-metadata --null -T - -cf - 2>/dev/null | docker run --rm -i --init --ipc=host \
-  -v geowright-linux:/work -v "$OUT":/out -e CI=true -e FORCE_COLOR=0 -e LINUX_WORKERS "$IMAGE" bash -c '
+  -v "$VOLUME":/work -v "$OUT":/out -e CI=true -e FORCE_COLOR=0 -e LINUX_WORKERS "$IMAGE" bash -c '
     set -euo pipefail
     mkdir -p /work/src && cd /work/src
     find . -mindepth 1 -maxdepth 1 ! -name node_modules -exec rm -rf {} +
@@ -46,11 +53,13 @@ git ls-files -z --cached --others --exclude-standard | COPYFILE_DISABLE=1 tar --
   ' bash "$@"
 
 # A full green run on a clean tree leaves a verdict for that commit (git-ignored): release tooling asks for it. Only if
-# the checkout is still exactly what was copied: same commit, still no changes to tracked files.
-if [ "$#" -eq 0 ] && [ "$RAN_CLEAN" -eq 1 ]; then
-  if [ "$(git rev-parse HEAD)" = "$RAN_ON" ] && [ -z "$(git status --porcelain --untracked-files=no)" ]; then
+# the checkout is still exactly what was copied: same commit, still no changes and no untracked files.
+if [ "$#" -eq 0 ] && [ "$RAN_CLEAN" -eq 0 ]; then
+  echo "linux-suite: green, but the copy held changes or untracked files that ${RAN_ON} does not: no verdict written" >&2
+elif [ "$#" -eq 0 ]; then
+  if [ "$(git rev-parse HEAD)" = "$RAN_ON" ] && [ -z "$(git status --porcelain)" ]; then
     mkdir -p .scratch/verdicts && date -u +%Y-%m-%dT%H:%M:%SZ > ".scratch/verdicts/linux-$RAN_ON.ok"
   else
-    echo "linux-suite: green, but the checkout changed during the run (HEAD or tracked files): no verdict written for ${RAN_ON}" >&2
+    echo "linux-suite: green, but the checkout changed during the run (HEAD, changes or untracked files): no verdict written for ${RAN_ON}" >&2
   fi
 fi
