@@ -325,7 +325,8 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   moving target can let a `hover` through, onto where the feature is drawn at that instant. A `click` is still verified
   when the press arrives.
 - **Pixel-only layers never occlude.** Occlusion comes from the map's hit test, which returns features only: an opaque
-  raster, image, video, canvas, heatmap or hillshade layer drawn above a feature does not stop an action on it.
+  raster, image, video, canvas, heatmap or hillshade layer drawn above a feature does not stop an action on it. Where your app can
+  draw one, assert it first: [RECIPES](docs/RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
 - The injected script is about 380 KB, not minified (78 KB gzipped; it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
 
 The full list, with costs measured on a dense map: [DESIGN — Costs and known limitations](docs/DESIGN.md#costs-and-known-limitations).

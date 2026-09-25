@@ -907,7 +907,8 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   (three renders, and MapLibre reloads the probed layer's source afterwards, so the feature can briefly vanish from
   the very hit test that verifies the click). The contribution of the overlay alone is not enough either: a
   translucent radar layer contributes pixels and hides nothing. Not done; a test marked as failing
-  (`tests/act.spec.ts`) turns green when it is.
+  (`tests/act.spec.ts`) turns green when it is. Until then, the workaround is an assertion before the action:
+  [RECIPES](RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
 - The globe query workaround is a grid-based heuristic: an extrusion narrower than 16 px whose footprint centre is
   off-screen or on the far side can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
 - A zoom-and-data paint expression on a view whose tile zooms vary (terrain, high pitch, globe) is judged "visible"
