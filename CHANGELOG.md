@@ -52,8 +52,10 @@ as written (it adds types only).
 - `waitForIdle()`, and when the map never becomes idle, why: an animated source, a source re-set in a loop, continuous
   repainting, tiles still loading, a moving camera, or a dead MapLibre web worker. Timeouts follow the test's own
   timeout (actions a third of it, at least 10 s; `waitForIdle()` two thirds; matchers use Playwright's expect timeout).
-  An action's timeout is wall-clock, its failure report included, even on a page too busy to answer, and an action
-  with several points (a drag, a shape) has one timeout for all of them. As in Playwright, `timeout: 0` means no timeout.
+  An action's timeout is wall-clock while it looks for its pixel, and for its failure report, even on a page too busy
+  to answer; a page that stalls after the pixel was found (arming `click()` / `tap()`'s check, an `autoPan` pan,
+  `lngLat()`, `dragBy()`) or after the input was sent can still hold it past its timeout. An action with several points
+  (a drag, a shape) has one timeout for all of them. As in Playwright, `timeout: 0` means no timeout.
 - DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element. They are found
   inside the map's container, also when a web component hosts the map in its shadow root.
 - **Typings**: `expect` is typed from `@playwright/test` alone (so it keeps its matcher types under pnpm and Yarn PnP),
@@ -80,5 +82,6 @@ as written (it adds types only).
   as `dist/THIRD_PARTY_LICENSES.txt`. In the repository, the third-party code and fonts under `wild/` and `demo/`
   (the test apps' builds, their fixtures, the demo's MapLibre build and glyphs) have their license texts beside them.
 
-Requires Node 22 or newer and `@playwright/test` 1.49 or newer (peer dependency). CI runs the full suite on Chromium
-with Playwright 1.49.0 and with the current version.
+Requires Node 22.12 or newer (the package is ES modules only; `require()` of it works without a flag from 22.12) and
+`@playwright/test` 1.49 or newer (peer dependency). CI runs the full suite on Chromium with Playwright 1.49.0 and with
+the current version.

@@ -101,6 +101,10 @@ const queries: FeatureQuery[] = [
 ```
 
 `map.feature(q)` is **strict** (exactly one match, like a Locator); `map.features(q)` is a set.
+`id` is the id MapLibre renders: in a GeoJSON source it keeps only non-negative integer ids and coerces any other (a
+string such as a UUID, a negative or fractional number) to a number, so `{ id: 'north-gate' }` matches nothing. Give such
+features integer ids, or copy the id into a property and name it in the source's `promoteId`, or query that property
+with `where`.
 Handles are lazy: nothing is resolved until an action or assertion runs.
 
 ### Visible by default

@@ -50,7 +50,7 @@
     "url": "https://github.com/geowright/geowright/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
   "bin": {
     "geowright": "./dist/cli.js"

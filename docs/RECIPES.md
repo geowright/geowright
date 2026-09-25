@@ -121,8 +121,9 @@ a working example; its upstream Firenze archive is ODbL-derived and is never fet
 `test.slow()` — geowright's default timeouts follow the test's timeout: a third of it for actions (at least 10 s), two
 thirds for `waitForIdle()` (the first idle is a page load, not an action). Assertions (`expect(map)…`) use Playwright's
 expect timeout, which `test.slow()` does not change: raise it in the config (`expect: { timeout: 15_000 }`) or per
-assertion (`{ timeout }`). An action's `timeout` is wall-clock, also on a page too busy to answer. As in Playwright,
-`timeout: 0` means no timeout.
+assertion (`{ timeout }`). An action's `timeout` is wall-clock while it looks for its pixel, also on a page too busy
+to answer; a page that stalls after that (arming a click's check, an `autoPan` pan) can hold it longer. As in
+Playwright, `timeout: 0` means no timeout.
 
 ## Old versions
 
