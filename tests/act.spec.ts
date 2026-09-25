@@ -279,6 +279,27 @@ test.describe('act gap', () => {
     });
   }
 
+  // a throw from the real input call went into the retry loop — but the input may have left, and the retry clicked again.
+  for (const moving of [undefined, 'allow'] as const) {
+    test(`a click whose real input throws ends with that error and is not sent again (moving: ${moving})`, async ({ map, page }) => {
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__alertClicks = 0;
+        w.__geowright_maps.main.on('click', 'alerts', () => w.__alertClicks++);
+      });
+      // The click reaches the page, then the call fails: its answer is lost on the way back.
+      const mouse = page.mouse;
+      const click = mouse.click.bind(mouse);
+      mouse.click = async (...args: Parameters<typeof click>) => {
+        await click(...args);
+        throw new Error('the answer to the click was lost');
+      };
+      const err = await map.feature({ layer: 'alerts', id: 1 }).click({ moving, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      expect(err?.message).toBe('the answer to the click was lost');
+      expect(await page.evaluate(() => (window as any).__alertClicks), 'number of real clicks the app received').toBe(1);
+    });
+  }
+
   test('a visible feature just across the antimeridian can be clicked', async ({ map, page }) => {
     await page.evaluate(() => {
       const w = window as any;
