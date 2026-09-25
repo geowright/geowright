@@ -33,6 +33,9 @@ const TODO = 'TODO(new-app)';
 // it with `build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } }`; a build that only copies files writes the same
 // format itself (wild/apps/pmtiles/scripts/build.mjs): one `## <package> - <version>` section per package, text below.
 const NOTICES = 'dist/THIRD_PARTY_LICENSES.md';
+// Bundled into MapLibre GL JS's prebuilt dist by every version the wild apps use (3.6, 5.13, 6.10; read from the source
+// maps). A dist that ships maplibre-gl must list these too; the full list is the build's (scripts/maplibre-notices.mjs).
+const MAPLIBRE_BUNDLES = ['@mapbox/point-geometry', '@mapbox/tiny-sdf', '@mapbox/unitbezier', '@mapbox/vector-tile', '@maplibre/maplibre-gl-style-spec', 'earcut', 'gl-matrix', 'kdbush', 'murmurhash-js', 'pbf', 'potpack', 'tinyqueue'];
 // The hook (docs/decisions/0002). In a MapLibre example it is this exact statement, a line comment allowed after it; a
 // wrapper app reaches the map its own way (`e.target`, `e.map`, a ref), so there only the registration itself is fixed.
 const EXAMPLE_HOOK = /^\s*\(window\.__geowright_maps \?\?= \{\}\)\.main = map;(\s*\/\/.*)?$/;
@@ -314,6 +317,14 @@ function noticesOf(dir, problems) {
   });
   if (!sections.length) problems.push(`${rel(file)}: lists no package (one "## <package> - <version>" section each, license text below)`);
   for (const s of sections) if (!s.text) problems.push(`${rel(file)}: "${s.head}" has no license text (the package ships no license file: add its text to the build)`);
+  // Vite lists maplibre-gl as ONE package, but its prebuilt dist bundles others inside itself. The build adds them
+  // from MapLibre's source maps (scripts/maplibre-notices.mjs); offline, only a floor can be checked: the packages
+  // every MapLibre 3-6 build bundles.
+  if (sections.some((s) => s.head.startsWith('maplibre-gl - '))) {
+    const listed = new Set(sections.map((s) => s.head.split(' ')[0]));
+    const missing = MAPLIBRE_BUNDLES.filter((p) => !listed.has(p));
+    if (missing.length) problems.push(`${rel(file)}: lists maplibre-gl but not what its dist bundles (${missing.join(', ')}): add \`maplibreNotices\` from scripts/maplibre-notices.mjs to the build`);
+  }
   // Not checked: that every package.json dependency is listed. A dependency whose module only re-exports another
   // package (react-map-gl/maplibre re-exports @vis.gl/react-maplibre) contributes no code, and Vite rightly omits it.
 }

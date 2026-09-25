@@ -3,10 +3,13 @@
 // can be served (and committed) as self-contained dist/ output.
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
+import { maplibreNotices } from '../../../scripts/maplibre-notices.mjs';
 
 export default defineConfig({
   root: __dirname,
   base: './',
+  // Vite lists maplibre-gl as one package: add what MapLibre's prebuilt dist bundles inside itself.
+  plugins: [maplibreNotices(__dirname)],
   resolve: {
     // controls/src/app.tsx imports '../../../.data/cities.json' unedited (see UPSTREAM.md).
     // Upstream's own examples/ tree has that file 3 levels up from src/app.tsx; our flat
