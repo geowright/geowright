@@ -131,7 +131,7 @@ build tool that is executed, never copied, modified or distributed by this proje
 
 ### Vendored maplibre-gl build (demo app, checked into git)
 
-`demo/public/maplibre/maplibre-gl-shared.mjs` (514 KB) and `maplibre-gl-worker.mjs` (19 KB) are a
+`demo/public/maplibre/maplibre-gl-shared.mjs` (514 KB) and `demo/public/maplibre/maplibre-gl-worker.mjs` (19 KB) are a
 prebuilt MapLibre GL JS dev bundle served directly to the demo app; the shared file's own embedded
 header reads `/** MapLibre GL JS * @license 3-Clause BSD ... v6.10.0 ... */`. MapLibre's full `LICENSE.txt`
 is kept beside them as `demo/public/maplibre/LICENSE.txt`; `demo/scripts/copy-worker.mjs` copies all three

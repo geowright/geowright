@@ -283,9 +283,45 @@ test('a directory a fixture record names covers the data under it, not code: a s
   writeFileSync(join(tree, 'wild/fixtures/demotiles/planted.min.js'), '!function(){}();\n');
   const r = run(tree, 'check');
   expect(r.code).toBe(1);
-  expect(r.out).toContain('wild/fixtures/demotiles/planted.min.js: code, and not named by its path or file name in wild/fixtures/SOURCES.md');
+  expect(r.out).toContain('wild/fixtures/demotiles/planted.min.js: code, and not named by its path in wild/fixtures/SOURCES.md');
 
   writeFileSync(join(tree, 'wild/fixtures/sources/planted.md'), '| `demotiles/planted.min.js` | synthetic | first-party |\n');
+  expect(run(tree, 'check').code, 'named by its path: passes').toBe(0);
+});
+
+test('a fixture is recorded by its own path: a file name, or the tail of another path, that a record mentions is not enough', () => {
+  const tree = scratchTree();
+  mkdirSync(join(tree, 'wild/fixtures/newapp'), { recursive: true });
+  // Both names appear in the records, for other files: vendor/turf@7/turf.min.js and demotiles/style.json.
+  writeFileSync(join(tree, 'wild/fixtures/newapp/turf.min.js'), '!function(){}();\n');
+  writeFileSync(join(tree, 'wild/fixtures/newapp/style.json'), '{"version":8,"sources":{},"layers":[]}');
+  mkdirSync(join(tree, 'wild/fixtures/turf@7'), { recursive: true });
+  writeFileSync(join(tree, 'wild/fixtures/turf@7/turf.min.js'), '!function(){}();\n'); // the tail of vendor/turf@7/…
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('wild/fixtures/newapp/turf.min.js: code, and not named by its path');
+  expect(r.out).toContain('wild/fixtures/newapp/style.json: not named in wild/fixtures/SOURCES.md');
+  expect(r.out).toContain('wild/fixtures/turf@7/turf.min.js: code, and not named by its path');
+
+  writeFileSync(join(tree, 'wild/fixtures/sources/planted.md'),
+    '| `newapp/turf.min.js`, `newapp/style.json` | synthetic | first-party |\n| `turf@7/turf.min.js` | synthetic | first-party |\n');
+  expect(run(tree, 'check').code, 'each named by its path: passes').toBe(0);
+});
+
+test('every file under demo/public is named by its path in docs/THIRD_PARTY_NOTICES.md', () => {
+  const tree = scratchTree();
+  for (const p of ['demo/public', 'docs/THIRD_PARTY_NOTICES.md']) {
+    mkdirSync(dirname(join(tree, p)), { recursive: true });
+    cpSync(join(ROOT, p), join(tree, p), { recursive: true });
+  }
+  expect(run(tree, 'check').code, 'the committed demo/public: every file recorded').toBe(0);
+
+  writeFileSync(join(tree, 'demo/public/maplibre/planted.mjs'), 'export {};\n');
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('demo/public/maplibre/planted.mjs: not named by its path in docs/THIRD_PARTY_NOTICES.md');
+
+  writeFileSync(join(tree, 'docs/THIRD_PARTY_NOTICES.md'), readFileSync(join(tree, 'docs/THIRD_PARTY_NOTICES.md'), 'utf8') + '\n`demo/public/maplibre/planted.mjs`: synthetic.\n');
   expect(run(tree, 'check').code, 'named by its path: passes').toBe(0);
 });
 

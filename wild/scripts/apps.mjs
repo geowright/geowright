@@ -169,6 +169,7 @@ function check() {
   examplePatches(problems);
 
   fixturesRecorded(problems);
+  demoPublicRecorded(problems);
 
   const scaffolded = [
     ...readdirSync(apps).map((n) => join(apps, n, 'UPSTREAM.md')),
@@ -269,14 +270,18 @@ function examplePatches(problems, print = false) {
 }
 
 /**
- * Every fixture file has a provenance and license row: its path or file name, or a directory it is in (as `dir/…`),
- * appears in wild/fixtures/SOURCES.md or wild/fixtures/sources/*.md. License and notices files are records themselves.
- * A directory covers data only (the demotiles/ tiles): code is named by its own path or file name, so a bundle cannot
- * pass under a row written for something else. Each vendored build, wild/fixtures/vendor/<name>/, keeps its license file
- * and a THIRD_PARTY_LICENSES.md beside it: what the build bundles, read from the build, with each text (decision 0015),
- * even when that is only its own code.
+ * Every fixture file has a provenance and license row: its path (relative to wild/fixtures/, or from the repository
+ * root), or a directory it is in (as `dir/…`), appears in wild/fixtures/SOURCES.md or wild/fixtures/sources/*.md.
+ * License and notices files are records themselves. A path counts only whole: `turf.min.js` is not named by a row for
+ * `vendor/turf@7/turf.min.js`, and a file name alone names nothing, so a new file cannot pass under a row written for
+ * another one with the same name. A directory covers data only (the demotiles/ tiles): code is named by its own path.
+ * Each vendored build, wild/fixtures/vendor/<name>/, keeps its license file and a THIRD_PARTY_LICENSES.md beside it:
+ * what the build bundles, read from the build, with each text (decision 0015), even when that is only its own code.
  */
 const FIXTURE_CODE = /\.(m?js|cjs|css|wasm)$/i;
+/** `path` appears in `text` as a whole path: not as the tail of a longer one, nor as the start of a longer name. */
+const namesPath = (text, path) =>
+  new RegExp(`(?<![\\w.@/-])${path.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?![\\w/-]|\\.\\w)`).test(text);
 function fixturesRecorded(problems) {
   const fixtures = join(ROOT, 'wild/fixtures');
   const sources = join(fixtures, 'sources');
@@ -289,11 +294,11 @@ function fixturesRecorded(problems) {
     if (records.includes(file) || isLicenseFile(name) || name === 'THIRD_PARTY_LICENSES.md' || name === '.DS_Store') continue;
     const dirs = [];
     for (let d = r.split('/').slice(0, -1); d.length; d.pop()) dirs.push(`\`${d.join('/')}/`);
-    if (text.includes(r) || text.includes(name)) continue;
+    if (namesPath(text, r) || namesPath(text, `wild/fixtures/${r}`)) continue;
     const code = FIXTURE_CODE.test(name);
     if (!code && dirs.some((d) => text.includes(d))) continue;
     problems.push(code
-      ? `wild/fixtures/${r}: code, and not named by its path or file name in wild/fixtures/SOURCES.md or a sources/*.md record (a directory row covers data only)`
+      ? `wild/fixtures/${r}: code, and not named by its path in wild/fixtures/SOURCES.md or a sources/*.md record (a directory row covers data only)`
       : `wild/fixtures/${r}: not named in wild/fixtures/SOURCES.md or a sources/*.md record (origin, license)`);
   }
   const vendor = join(fixtures, 'vendor');
@@ -301,6 +306,24 @@ function fixturesRecorded(problems) {
     const files = readdirSync(join(vendor, d));
     if (!files.some(isLicenseFile)) problems.push(`wild/fixtures/vendor/${d}/: no license file (keep the package's own, byte-identical)`);
     if (!files.includes('THIRD_PARTY_LICENSES.md')) problems.push(`wild/fixtures/vendor/${d}/: no THIRD_PARTY_LICENSES.md (what the build bundles, established by reading it, and each one's license text: decision 0015)`);
+  }
+}
+
+/**
+ * Every file the demo app serves from demo/public/ (MapLibre's build, the glyphs) is named by its path in
+ * docs/THIRD_PARTY_NOTICES.md, with its origin and license. License, notices and README files are records themselves.
+ */
+function demoPublicRecorded(problems) {
+  const dir = join(ROOT, 'demo/public');
+  if (!existsSync(dir)) return;
+  const notices = join(ROOT, 'docs/THIRD_PARTY_NOTICES.md');
+  const text = existsSync(notices) ? read(notices) : '';
+  const walk = (d) => readdirSync(d).flatMap((f) => (statSync(join(d, f)).isDirectory() ? walk(join(d, f)) : [join(d, f)]));
+  for (const file of walk(dir)) {
+    const name = basename(file);
+    if (isLicenseFile(name) || name === 'THIRD_PARTY_LICENSES.md' || name === 'README.md' || name === '.DS_Store') continue;
+    const r = rel(file).split('\\').join('/');
+    if (!namesPath(text, r)) problems.push(`${r}: not named by its path in docs/THIRD_PARTY_NOTICES.md (origin, license)`);
   }
 }
 
