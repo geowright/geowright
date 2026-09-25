@@ -65,7 +65,17 @@ export interface StyleCause {
  * within the time budget — ask again later), or why there never will be one here (`unavailable`: no WebGL context,
  * no such layer).
  */
-export type ProbeResult = { diff: number } | { inconclusive: string } | { unavailable: string };
+export type ProbeResult = { diff: number; /** the probe made the layer's source reload: see `settleAfterProbe` */ reloads?: true } | { inconclusive: string } | { unavailable: string };
+
+/**
+ * A layer the hit test cannot see (raster, image, heatmap, …) that is drawn above a target and may draw at a pixel.
+ * `stamp`: opaque; it changes when what the layer draws there may have changed (new data in its source, a new opacity).
+ */
+export interface PixelOccluder {
+  layer: string;
+  type: string;
+  stamp: string;
+}
 
 /**
  * A rendered feature with what only some renderers can say. `sourceLayer`: the layer of a vector-tile source it came
@@ -107,6 +117,17 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    * for real frames. When present it is used instead of `pixelContribution`.
    */
   probePixels?(layer: string, at: PixelPoint, radiusPx: number, budgetMs: number): ProbeResult | Promise<ProbeResult>;
+  /**
+   * Optional, with `probePixels`: the layers the hit test cannot see that are drawn above `layer` and may draw at `at`
+   * (the gate before an action's pixel probe, ). It may list too many (a probe is spent); it must never leave one
+   * out (a click through an opaque overlay passes). Cheap: no rendering. Empty: nothing of the kind can cover `at`.
+   */
+  pixelOccluders?(layer: string, at: PixelPoint): PixelOccluder[];
+  /**
+   * Optional, after a probe that answered `reloads`: resolves once a frame has been rendered since the probe and the
+   * layer's source is loaded again — true then, false when `budgetMs` ran out first.
+   */
+  settleAfterProbe?(layer: string, budgetMs: number): Promise<boolean>;
   /**
    * Optional, with `queryData`: does the layer's filter let this data feature (`f.layer` is the layer asked) through,
    * at the current camera? A source holds features that some of its layers never draw (a filter per kind, clusters).

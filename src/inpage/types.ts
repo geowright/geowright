@@ -246,6 +246,8 @@ export interface ActionPointOptions {
   moving?: 'allow';
   /** @internal with `moving`: aim this many ms ahead along the target's measured velocity (learnt from misses). */
   leadMs?: number;
+  /** @internal the time left for this look, ms: a pixel probe and the wait after it stay within it. */
+  budgetMs?: number;
 }
 
 export interface SnapshotOptions {

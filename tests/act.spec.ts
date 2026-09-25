@@ -332,33 +332,141 @@ test.describe('act gap', () => {
     expect(snap).not.toContain('OUTSIDE the viewport');
   });
 
-  // A known limit: occlusion is decided from the map's hit test, which never returns pixel-only layers (raster, image,
-  // video, canvas, heatmap, hillshade). An opaque one drawn above a feature does not stop click(). Documented in DESIGN
-  // "Costs and known limitations" and README Limits. This test asserts the limit as it is, so it FAILS when the limit is
-  // lifted, and says so; any other failure (the veil never painted, the page did not answer) fails with its own message.
-  test('known limit: an opaque image layer drawn above a feature does not stop click()', async ({ map, page }) => {
-    await page.evaluate(() => {
-      const m = (window as any).__geowright_maps.main;
-      const c = document.createElement('canvas'); c.width = c.height = 4;
-      const g = c.getContext('2d')!; g.fillStyle = '#888'; g.fillRect(0, 0, 4, 4);
-      const b = m.getBounds();
-      m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[b.getWest(), b.getNorth()], [b.getEast(), b.getNorth()], [b.getEast(), b.getSouth()], [b.getWest(), b.getSouth()]] });
-      m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 } }); // on top of everything
-    });
-    // the premise: the veil really is drawn over alert 1 (34.77, 32.085)
-    await expect(map, 'the premise: the opaque veil is drawn over alert 1').toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click().then(() => null, (e: Error) => e);
-    if (e && /covered|occlu/.test(e.message)) {
-      throw new Error(`this limit is lifted: click() now refuses a feature under an opaque image layer. Rewrite this test to assert the refusal, and update DESIGN "Costs and known limitations" and README Limits.\n\n${e.message}`);
-    }
-    expect(e?.message ?? null, 'click() on alert 1 under the veil').toBeNull();
-    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1'); // the click went through the veil to the app
-  });
-
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {
     const err = await map.clickAt({ lng: 36, lat: 32 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('outside the viewport');
     await map.clickAt({ lng: 36, lat: 32 }, { autoPan: true });
     expect((await map.viewState()).center.lng).toBeCloseTo(36, 2);
+  });
+});
+
+/**
+ * the hit test never returns pixel-only layers (raster, image, video, canvas, heatmap, hillshade). An action whose
+ * chosen pixel is under one that is drawn ABOVE the target probes the target's own layer there: hiding it changes
+ * nothing → covered. Decision 0022.
+ */
+test.describe('pixel-only layers above the target', () => {
+  /**
+   * An image layer on top of everything: over the whole view, or over a square of ±`d`° around `around`. Its image is
+   * grey, with a transparent `hole` (the centre quarter, or a corner) — what an opaque-styled raster with gaps is.
+   */
+  const addVeil = (page: import('@playwright/test').Page, o: { opacity: number; around?: { lng: number; lat: number }; d?: number; hole?: 'centre' | 'corner' }) =>
+    page.evaluate((o) => {
+      const m = (window as any).__geowright_maps.main;
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#888';
+      g.fillRect(0, 0, 64, 64);
+      if (o.hole === 'centre') g.clearRect(16, 16, 32, 32);
+      if (o.hole === 'corner') g.clearRect(0, 0, 24, 24);
+      let [w, s, e, n] = [0, 0, 0, 0];
+      if (o.around) [w, s, e, n] = [o.around.lng - o.d!, o.around.lat - o.d!, o.around.lng + o.d!, o.around.lat + o.d!];
+      else {
+        const b = m.getBounds();
+        [w, s, e, n] = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+      }
+      m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[w, n], [e, n], [e, s], [w, s]] });
+      m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': o.opacity, 'raster-fade-duration': 0 } });
+    }, o);
+
+  /** Counts, from now on: the app's own layer-scoped clicks (feature ids), and the map's 'styledata' events (a probe fires them). */
+  const watch = (page: import('@playwright/test').Page, layer: string) =>
+    page.evaluate((layer) => {
+      const w = window as any;
+      const m = w.__geowright_maps.main;
+      w.__layerClicks = [];
+      w.__styledata = 0;
+      m.on('click', layer, (e: any) => w.__layerClicks.push(e.features[0].id));
+      m.on('styledata', () => w.__styledata++);
+    }, layer);
+  const counts = (page: import('@playwright/test').Page) => page.evaluate(() => ({ clicks: (window as any).__layerClicks, styledata: (window as any).__styledata }));
+
+  test('an opaque image layer drawn above a feature: click() is refused, and the message names it', async ({ map, page }) => {
+    await addVeil(page, { opacity: 1 });
+    // the premise: the veil really is drawn over alert 1 (34.77, 32.085)
+    await expect(map, 'the premise: the opaque veil is drawn over alert 1').toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
+    await watch(page, 'alerts');
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(e?.message.split('\n\n')[0]).toMatch(/occluded: .*raster layer "veil", drawn above "alerts".*ignoreLayers: \['veil'\]/);
+    expect((await counts(page)).clicks, 'nothing reached the app').toEqual([]);
+    // it is the user's call that the veil is see-through: then it costs nothing, and the click lands
+    await map.feature({ layer: 'alerts', id: 1 }).click({ ignoreLayers: ['veil'] });
+    expect((await counts(page)).clicks).toEqual([1]);
+  });
+
+  test('a translucent raster above a feature: the click is checked by a probe, and lands', async ({ map, page }) => {
+    await addVeil(page, { opacity: 0.5 });
+    await watch(page, 'alerts');
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    const c = await counts(page);
+    expect(c.clicks, "the app's own click handler on 'alerts' got alert 1").toEqual([1]);
+    expect(c.styledata, 'the pixels were probed (a probe changes the style, and puts it back)').toBeGreaterThan(0);
+  });
+
+  test('an opaque image with a transparent hole over the feature: the click lands; with the hole elsewhere it is refused', async ({ map, page }) => {
+    const alert = { lng: 34.77, lat: 32.085 };
+    await addVeil(page, { opacity: 1, around: alert, d: 0.01, hole: 'centre' });
+    await expect(map, 'the premise: the image is drawn around alert 1').toHaveLayerPixels('veil', { at: { lng: alert.lng - 0.008, lat: alert.lat + 0.008 } });
+    await watch(page, 'alerts');
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    expect((await counts(page)).clicks, 'clicked through the hole').toEqual([1]);
+
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.removeLayer('veil');
+      m.removeSource('veil');
+    });
+    await addVeil(page, { opacity: 1, around: alert, d: 0.01, hole: 'corner' });
+    // the premise: the new image is drawn, over alert 1 (a probe before that sees the target, and is right to)
+    await expect(map, 'the premise: the image, opaque at alert 1, is drawn').toHaveLayerPixels('veil', { at: alert });
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(e?.message.split('\n\n')[0]).toMatch(/occluded: .*raster layer "veil"/);
+    expect((await counts(page)).clicks, 'no second click reached the app').toEqual([1]);
+  });
+
+  test('a raster BELOW the features (the demo basemap) costs nothing: no probe, no style change', async ({ map, page }) => {
+    await watch(page, 'alerts');
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    await map.feature({ layer: 'parcels', id: 105 }).click();
+    const c = await counts(page);
+    expect(c.clicks).toEqual([1]);
+    expect(c.styledata, 'no probe ran').toBe(0);
+  });
+
+  test('a target with data-driven opacity (probed by visibility, its source reloads) under a translucent raster: the click lands', async ({ map, page }) => {
+    await page.getByTestId('toggle-sensors').check();
+    await expect(map).toHaveFeature({ layer: 'sensors', id: 501 });
+    await addVeil(page, { opacity: 0.5 });
+    await watch(page, 'sensors');
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__sensorReloads = 0;
+      w.__geowright_maps.main.on('sourcedataloading', (e: any) => e.sourceId === 'sensors' && w.__sensorReloads++);
+      w.__geowright_maps.main.on('sourcedata', (e: any) => e.sourceId === 'sensors' && e.tile && w.__sensorReloads++);
+    });
+    await map.feature({ layer: 'sensors', id: 501 }).click();
+    expect((await counts(page)).clicks, "the app's own click handler on 'sensors' got sensor 501").toEqual([501]);
+    expect(await page.evaluate(() => (window as any).__sensorReloads), 'the premise: the probe went the visibility route, and the source reloaded').toBeGreaterThan(0);
+  });
+
+  // Sabotage (0019): the aim saw no veil (opacity 0 draws nothing); the app shows it as the pointer arrives. The press
+  // must be swallowed — no probe at click time, only the gate — and the retry, once the veil is gone again, clicks.
+  test('click-time verification: a raster shown over the target as the pointer arrives -> press swallowed, then retried', async ({ map, page }) => {
+    await addVeil(page, { opacity: 0 });
+    await map.waitForIdle();
+    await watch(page, 'alerts');
+    await page.evaluate(() => {
+      const w = window as any;
+      const m = w.__geowright_maps.main;
+      w.__presses = 0;
+      window.addEventListener('mousemove', () => m.setPaintProperty('veil', 'raster-opacity', 1), { capture: true, once: true });
+      window.addEventListener('pointerdown', () => {
+        if (w.__presses++ === 0) setTimeout(() => m.setPaintProperty('veil', 'raster-opacity', 0)); // after the check has looked
+      }, true);
+    });
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    expect(await page.evaluate(() => (window as any).__presses), 'two presses: the first one, under the veil, was swallowed').toBe(2);
+    expect((await counts(page)).clicks).toEqual([1]);
   });
 });

@@ -177,10 +177,23 @@ on every retry:
    *data* feature (source, id, properties), not the rendered layer, so a foreign layer's label still
    occludes correctly. A feature that is rendered but invisible (opacity 0, a transparent color — see
    "Visibility" below) is likewise not counted as an occluder, on the reasoning that occlusion is
-   about what a person can see, not about which layer receives an event first. The limit of this rule: what is
-   "at that pixel" comes from the map's hit test, which returns features only. A raster, image, video, canvas,
-   heatmap or hillshade layer drawn above the feature is never an occluder, even when it is opaque (see "Costs and
-   known limitations").
+   about what a person can see, not about which layer receives an event first. The map's hit test returns
+   features only, so a raster, image, video, canvas, hillshade, color-relief, background, custom or heatmap layer drawn
+   above the feature needs pixels to decide (, decision 0022). A **gate** first: is such a layer drawn above the
+   target, visible, in its zoom range, with an opacity that is not exactly 0, and — where the style says where it draws —
+   does its area hold the chosen pixel (an image, video or canvas source's `coordinates`, a point-in-quad test in
+   Mercator; a tiled source's inline `bounds`; under terrain, no area test)? The gate may say yes too often, which costs
+   a probe, never no too often. It takes < 0.1 ms on the 80-layer dense basemap, so a map without such a layer above its
+   features (most maps; a raster basemap at the bottom) pays nothing. When the gate says yes, the **target's own
+   layer** is probed at that pixel (see "Visibility" below): hiding it changes nothing there → the pixel is covered, and
+   the next candidate is tried, at most three probes per aim; then the action fails `occluded`, naming the layer and
+   offering `ignoreLayers`. Probing the overlay instead does not work: a translucent radar adds pixels and hides
+   nothing. Deciding from the style alone does not either: an opaque-styled raster has transparent gaps. The verdict is
+   kept, keyed by the target, the pixel, the camera, and the gated layers with their sources and opacity, so the retry
+   does not probe again. Where the target's opacity is data-driven the probe hides it by `visibility` and its source
+   reloads: the action then waits for a rendered frame, the source loaded, and the target back in the hit test at that
+   pixel (event-based; measured: at most 2 frames, 115 ms quiet, 787 ms at load ~300), then aims again. `ignoreLayers`
+   covers these layers too; `force` skips the check.
 5. **No DOM element covers the pixel** — a popup, a control, an overlay. Checked with
    `document.elementFromPoint`, so a marker or popup sitting exactly on a feature's best interior
    candidate correctly blocks that candidate and the search moves on to the next one.
@@ -196,7 +209,9 @@ on every retry:
    swallows the whole click sequence (a tap's touch events included) before it reaches the application,
    and the action retries from the top. The browser still counts a swallowed tap, so the retried tap
    arrives as the second of a double tap (a `dblclick`, and MapLibre zooms): that `dblclick` is
-   swallowed as well. What must be under the pointer is the feature the query
+   swallowed as well. A pixel-only layer over the pointer that the aim did not see the target through (a veil shown
+   between the aim and the press) is checked there too, by the gate only: a probe at that instant would reload the
+   target's source while the app's own click handler hit-tests it. What must be under the pointer is the feature the query
    resolved to when the check was armed — a piece of it, by key and, for an id-less feature, by
    touching its pieces — not merely something the query matches: an id-less look-alike that slides
    under the pointer is another feature. A moving target (`moving: 'allow'`) is resolved again when
@@ -944,15 +959,19 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   GeoJSON geometry, which was read as "no features", so nothing could be learnt from it. Fixed; the statistical
   confirmation under contention is still owed.)
 - Two id-less, property-identical shapes that visually touch on screen are still treated as a single feature.
-- Pixel-only layers (raster, image, video, canvas, heatmap, hillshade) never occlude a feature. Occlusion is decided
-  from the hit test, and the hit test returns features only, so an opaque image or raster layer drawn above a feature
-  (a loading veil, an opaque overlay) does not stop an action on it. Deciding it needs pixels: whether the feature's
-  own layer still changes the pixels at the aimed point with the overlay drawn. That is a pixel probe per action
-  (three renders, and MapLibre reloads the probed layer's source afterwards, so the feature can briefly vanish from
-  the very hit test that verifies the click). The contribution of the overlay alone is not enough either: a
-  translucent radar layer contributes pixels and hides nothing. Not done; a test in `tests/act.spec.ts` asserts
-  the limit as it is, and fails saying "this limit is lifted" when it is. Until then, the workaround is an assertion
-  before the action: [RECIPES](RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
+- Pixel-only layers (raster, image, video, canvas, heatmap, hillshade, …) drawn ABOVE a feature are checked by a pixel
+  probe of the feature's layer at the chosen pixel (Actionability, item 4). What that costs and misses:
+  - one probe per action on a map with such a layer over its features (four renders: ~15–45 ms on a quiet Mac by
+    version, more under software GL on Linux), up to three when candidates are covered; none without one.
+  - on Mapbox GL v1 the probe renders real frames: the one without the layer can be seen (a one-frame flicker).
+  - where the target's opacity is data-driven, the probe reloads its source and the action waits for it to come back.
+  - the verdict threshold is the probe's: any difference counts as "shows through", so a 97%-opaque veil lets the
+    click through.
+  - the press-time check sees only a pixel-only layer that was not over the target at the aim; new pixels inside an
+    overlay that was already there (the next radar frame filling a gap) between the aim and the press are not checked.
+  - `moving: 'allow'` is not checked at all: a moving target's pixel changes between a probe and the press.
+  - on MapLibre >= 5 a heatmap is hit-testable over its whole radius, so there a heatmap above a feature occludes it
+    through the hit test, faint fringe included (not checked at runtime yet).
 - The globe query workaround is a grid-based heuristic: an extrusion narrower than 16 px whose footprint centre is
   off-screen or on the far side can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
 - A zoom-and-data paint expression on a view whose tile zooms vary (terrain, high pitch, globe) is judged "visible"

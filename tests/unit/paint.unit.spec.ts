@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { describeLayerHidden, describeStyleCauses, nameColour, tally } from '../../src/inpage/engine';
-import { explainLayerHidden, explainPaint, filterAdmits, paintColour, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
+import { explainLayerHidden, explainPaint, filterAdmits, inQuad, mercator, paintColour, pixelOccluders, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
 import type { RenderedFeature } from '../../src/inpage/types';
 
 /** Just enough of maplibregl.Map for the paint evaluator: one layer, its paint/layout, a zoom. */
@@ -318,5 +318,78 @@ test.describe("filterAdmits: does the layer's filter let a data feature through"
     const area = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
     expect(filterAdmits(withFilter(['within', area]), feature({}))).toBeUndefined();
     expect(filterAdmits(withFilter(['frobnicate-from-the-future', 1]), feature({}))).toBeUndefined();
+  });
+});
+
+test.describe('the pixel-only-layer gate', () => {
+  test('point in quad, in Mercator: a rectangle, a trapezoid, a concave quad', () => {
+    const rect = [[34, 33], [35, 33], [35, 32], [34, 32]].map(mercator);
+    expect(inQuad(mercator([34.5, 32.5]), rect)).toBe(true);
+    expect(inQuad(mercator([35.5, 32.5]), rect)).toBe(false);
+    expect(inQuad(mercator([34.5, 33.01]), rect)).toBe(false);
+    // a trapezoid, wide at the top: a point inside the rectangle of its corners but outside the slanted side
+    const trapezoid = [[0, 10], [10, 10], [7, 0], [3, 0]].map(mercator);
+    expect(inQuad(mercator([5, 5]), trapezoid)).toBe(true);
+    expect(inQuad(mercator([1, 1]), trapezoid)).toBe(false);
+    expect(inQuad(mercator([1, 9]), trapezoid)).toBe(true);
+    // a concave (dart) quad: the notch is outside
+    const dart = [[0, 10], [5, 3], [10, 10], [5, 0]].map(mercator);
+    expect(inQuad(mercator([5, 6]), dart)).toBe(false);
+    expect(inQuad(mercator([5, 2]), dart)).toBe(true);
+    // Mercator, not degrees: the quad's straight edges are straight in Mercator (as MapLibre warps the image)
+    expect(mercator([0, 0])).toEqual([0.5, 0.5]);
+    expect(mercator([180, 0])[0]).toBe(1);
+  });
+
+  /** A style of layers bottom to top, each { type, paint?, layout?, minzoom?, maxzoom?, source? }; sources by id. */
+  const styleMap = (layers: Record<string, any>, sources: Record<string, any> = {}, o: { zoom?: number; terrain?: boolean; at?: [number, number] } = {}) => ({
+    getLayer: (id: string) => (layers[id] ? { id, ...layers[id] } : undefined),
+    getLayoutProperty: (id: string, name: string) => layers[id]?.layout?.[name],
+    getPaintProperty: (id: string, name: string) => layers[id]?.paint?.[name],
+    getSource: (id: string) => sources[id],
+    getStyle: () => ({ sources }),
+    getZoom: () => o.zoom ?? 10,
+    getGlobalState: () => ({}),
+    getTerrain: () => (o.terrain ? { source: 'dem' } : null),
+    unproject: () => ({ lng: o.at?.[0] ?? 34.5, lat: o.at?.[1] ?? 32.5 }),
+  });
+  const gate = (m: ReturnType<typeof styleMap>, layers: string[]) => pixelOccluders(m as any, 'target', { x: 1, y: 1 }, layers, () => 0).map((o) => o.layer);
+
+  test('which layers above the target may cover a pixel', () => {
+    const layers: Record<string, any> = {
+      under: { type: 'raster', source: 'tiles' },
+      target: { type: 'circle', source: 'points' },
+      fill: { type: 'fill', source: 'points' },
+      radar: { type: 'raster', source: 'tiles', paint: { 'raster-opacity': 0.4 } },
+      off: { type: 'raster', source: 'tiles', paint: { 'raster-opacity': 0 } },
+      zoomedOff: { type: 'raster', source: 'tiles', paint: { 'raster-opacity': ['interpolate', ['linear'], ['zoom'], 8, 1, 9, 0] } },
+      hidden: { type: 'raster', source: 'tiles', layout: { visibility: 'none' } },
+      outOfRange: { type: 'hillshade', source: 'dem', minzoom: 12 },
+      heat: { type: 'heatmap', source: 'points' },
+      bg: { type: 'background', paint: { 'background-opacity': 0.2 } },
+      custom: { type: 'custom' },
+      unknownExpr: { type: 'raster', source: 'tiles', paint: { 'raster-opacity': ['frobnicate-from-the-future', 0] } },
+    };
+    const m = styleMap(layers, { tiles: { type: 'raster' }, points: { type: 'geojson' }, dem: { type: 'raster-dem' } });
+    // below the target, not pixel-only, opacity exactly 0 (a constant, or at this zoom), hidden, outside the zoom range: out.
+    // What the evaluator cannot read counts as covering.
+    expect(gate(m, Object.keys(layers))).toEqual(['radar', 'heat', 'bg', 'custom', 'unknownExpr']);
+    expect(gate(m, ['target', 'fill']), 'nothing pixel-only above').toEqual([]);
+  });
+
+  test("an image / video / canvas source covers only its quad; a tiled source only its inline bounds; under terrain, everything", () => {
+    const layers = { target: { type: 'fill', source: 'points' }, img: { type: 'raster', source: 'img' }, tiles: { type: 'raster', source: 'tiles' } };
+    const sources = {
+      points: { type: 'geojson' },
+      img: { type: 'image', coordinates: [[34, 33], [35, 33], [35, 32], [34, 32]] },
+      tiles: { type: 'raster', bounds: [34, 32, 35, 33] },
+    };
+    expect(gate(styleMap(layers, sources, { at: [34.5, 32.5] }), Object.keys(layers))).toEqual(['img', 'tiles']);
+    expect(gate(styleMap(layers, sources, { at: [36, 32.5] }), Object.keys(layers))).toEqual([]);
+    // another world copy of the same place
+    expect(gate(styleMap(layers, sources, { at: [34.5 + 360, 32.5] }), Object.keys(layers))).toEqual(['img', 'tiles']);
+    expect(gate(styleMap(layers, sources, { at: [36, 32.5], terrain: true }), Object.keys(layers)), 'terrain: no area test').toEqual(['img', 'tiles']);
+    // bounds from a TileJSON are not in the style: the source covers everything
+    expect(gate(styleMap(layers, { ...sources, tiles: { type: 'raster', url: 'x.json' } }, { at: [36, 32.5] }), Object.keys(layers))).toEqual(['tiles']);
   });
 });

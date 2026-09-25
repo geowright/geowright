@@ -105,26 +105,25 @@ layer. To say "labels do not count": `geowright(page, { ignoreLayers: [/* label 
 
 ## A raster or image layer is drawn over my features
 
-Occlusion comes from the map's hit test, which returns features only. So an opaque raster, image, video, canvas, heatmap
-or hillshade layer drawn ABOVE a feature (a loading veil, an opaque overlay) does not stop `click()` on it: see the
-README's Limits. Where your app can have one up, assert that it is not painting where the click will land before you
-act:
+The map's hit test returns features only, so for a raster, image, video, canvas, heatmap or hillshade layer drawn ABOVE
+a feature an action looks at pixels: it probes the feature's own layer at the pixel it is about to press, and if
+hiding that layer changes nothing there, the pixel is covered. An opaque veil or overlay then fails the action with
+`occluded`, naming the layer. A translucent layer (a radar), or a transparent gap in an opaque one, lets it through.
+
+If your overlay is see-through where it matters and you do not want to pay for the probe, say so:
 
 ```ts
-const alert = map.feature({ layer: 'alerts', id: 1 });
-const at = await alert.lngLat(); // where click() will press: on a line or a polygon, not just any point of it
-if ((await map.layers()).some((l) => l.id === 'veil')) {
-  await expect(map).not.toHaveLayerPixels('veil', { at }); // hidden, or painting nothing there
-}
-await alert.click();
+// the app draws a translucent radar layer over its alerts
+await map.feature({ layer: 'alerts', id: 1 }).click({ ignoreLayers: ['radar'] });
 ```
 
-The layer must exist to be asked about: an app that takes its overlay away with `removeLayer` leaves nothing to probe,
-and `toHaveLayerPixels` on a missing layer gives no verdict. Hence the `map.layers()` check. This is a pixel probe: a
-few renders, and MapLibre reloads the layer's source after it. Put it where an overlay can be up, not before every
-action. It asks about the overlay only: a translucent layer that paints there fails it too, even though the feature
-shows through. ([`tests/occlusion-recipe.spec.ts`](../tests/occlusion-recipe.spec.ts) runs it with an overlay up,
-hidden and removed.)
+or for every action of that handle: `geowright(page, { ignoreLayers: ['radar'] })`.
+
+What it costs and what it does not see: a probe is four renders (~15–45 ms on a laptop, more under software GL on CI)
+and runs only when such a layer is drawn above the target at that pixel; where the target's opacity is data-driven the
+probe reloads its source, and the action waits for it. `moving: 'allow'` is not checked. Pixels that change inside an
+overlay that was already there between the aim and the press (the next radar frame filling a gap) are not re-checked;
+an overlay that appears in that time is.
 
 ## An offline basemap
 

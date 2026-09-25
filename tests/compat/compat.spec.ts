@@ -137,6 +137,46 @@ for (const lib of LIBS) {
       await baseExpect.poll(paint).toEqual([0.8, { duration: 5000, delay: 0 }]);
     });
 
+    // on every version: an image layer drawn above a feature. (A 64px image: an 8px one with 'raster-resampling': 'nearest'
+    // is drawn solid black by MapLibre 2–5 and Mapbox GL 1, hole and all — and the probe then rightly says covered.) Opaque: refused, and named; translucent, or opaque with a
+    // transparent hole over the feature: the click lands (a pixel probe decides, not the style).
+    test('pixel-only layers above a feature: opaque refused and named; translucent, or a hole, lets the click through', async ({ map, page }) => {
+      const bravo = { lng: 34.8, lat: 32.08 };
+      const veil = (o: { opacity: number; hole?: boolean }) =>
+        page.evaluate(({ o, at }) => {
+          const m = (window as any).__geowright_maps.main;
+          if (m.getLayer('veil')) m.removeLayer('veil');
+          if (m.getSource('veil')) m.removeSource('veil');
+          const c = document.createElement('canvas');
+          c.width = c.height = 64;
+          const g = c.getContext('2d')!;
+          g.fillStyle = '#888';
+          g.fillRect(0, 0, 64, 64);
+          if (o.hole) g.clearRect(16, 16, 32, 32);
+          const d = 0.01;
+          m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[at.lng - d, at.lat + d], [at.lng + d, at.lat + d], [at.lng + d, at.lat - d], [at.lng - d, at.lat - d]] });
+          m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': o.opacity, 'raster-fade-duration': 0 } });
+          document.getElementById('clicked')!.textContent = '-';
+        }, { o, at: bravo });
+      const target = map.feature({ layer: 'places', where: { name: 'Bravo' } });
+
+      await veil({ opacity: 1 });
+      await expect(map, 'the premise: the veil is drawn over Bravo').toHaveLayerPixels('veil', { at: bravo });
+      const err = await target.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      baseExpect(err?.message.split('\n\n')[0]).toMatch(/occluded: .*raster layer "veil", drawn above "places"/);
+      await baseExpect(page.getByTestId('clicked')).toHaveText('-');
+
+      await veil({ opacity: 0.5 });
+      await expect(map).toHaveLayerPixels('veil', { at: bravo });
+      await target.click();
+      await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
+
+      await veil({ opacity: 1, hole: true });
+      await expect(map, 'the premise: the image is drawn around Bravo').toHaveLayerPixels('veil', { at: { lng: bravo.lng - 0.008, lat: bravo.lat + 0.008 } });
+      await target.click();
+      await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
+    });
+
     // style evaluation on every version — zoom- and feature-state-driven paint, a legacy { stops } function, promoteId.
     test('style evaluation: zoom and feature-state paint, legacy stops, promoteId', async ({ map, page }) => {
       await page.evaluate(() => {
