@@ -252,6 +252,37 @@ test('check fails when a file under wild/fixtures has no row in SOURCES.md or a 
   expect(run(tree, 'check').code, 'named in a sources/*.md record: passes').toBe(0);
 });
 
+test('a directory a fixture record names covers the data under it, not code: a script there needs its own row', () => {
+  const tree = scratchTree();
+  mkdirSync(join(tree, 'wild/fixtures/demotiles/tiles/0/0'), { recursive: true });
+  writeFileSync(join(tree, 'wild/fixtures/demotiles/tiles/0/0/0.pbf'), '');
+  expect(run(tree, 'check').code, 'a tile under the recorded demotiles/ directory: passes').toBe(0);
+
+  writeFileSync(join(tree, 'wild/fixtures/demotiles/planted.min.js'), '!function(){}();\n');
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('wild/fixtures/demotiles/planted.min.js: code, and not named by its path or file name in wild/fixtures/SOURCES.md');
+
+  writeFileSync(join(tree, 'wild/fixtures/sources/planted.md'), '| `demotiles/planted.min.js` | synthetic | first-party |\n');
+  expect(run(tree, 'check').code, 'named by its path: passes').toBe(0);
+});
+
+test('check fails on a vendored build under wild/fixtures/vendor/ without its license and its notices beside it', () => {
+  const tree = scratchTree();
+  const vendor = join(tree, 'wild/fixtures/vendor/planted@1');
+  mkdirSync(vendor, { recursive: true });
+  writeFileSync(join(vendor, 'planted.min.js'), '!function(){}();\n');
+  writeFileSync(join(tree, 'wild/fixtures/sources/planted.md'), '| `vendor/planted@1/planted.min.js` | a CDN URL | MIT |\n');
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('wild/fixtures/vendor/planted@1/: no license file');
+  expect(r.out).toContain('wild/fixtures/vendor/planted@1/: no THIRD_PARTY_LICENSES.md');
+
+  writeFileSync(join(vendor, 'LICENSE'), MIT);
+  writeFileSync(join(vendor, 'THIRD_PARTY_LICENSES.md'), '# Licenses\n\n`planted.min.js` bundles nothing but its own code.\n');
+  expect(run(tree, 'check').code, 'license and notices beside it: passes').toBe(0);
+});
+
 test('new scaffolds an MIT app: license byte-identical, UPSTREAM.md, fixture record, SOURCES.md row, spec; check then lists the TODOs', () => {
   const tree = scratchTree();
   const license = test.info().outputPath('upstream/LICENSE');
