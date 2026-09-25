@@ -1,7 +1,7 @@
 # 0022. A pixel-only layer drawn above a target is checked by a pixel probe of the target, run only when one covers the aimed point
 
-- Status: Proposed
-- Date: 2026-09-25
+- Status: Accepted
+- Date: 2026-09-26
 - Decided by: Shai Sinai
 
 ## Decision
