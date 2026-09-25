@@ -107,18 +107,24 @@ layer. To say "labels do not count": `geowright(page, { ignoreLayers: [/* label 
 
 Occlusion comes from the map's hit test, which returns features only. So an opaque raster, image, video, canvas, heatmap
 or hillshade layer drawn ABOVE a feature (a loading veil, an opaque overlay) does not stop `click()` on it: see the
-README's Limits. Where your app can have one up, assert that it is not painting at the place before you act:
+README's Limits. Where your app can have one up, assert that it is not painting where the click will land before you
+act:
 
-<!-- example: skip (needs an app with an overlay layer; the demo has none above its features) -->
 ```ts
-const at = { lng: 34.77, lat: 32.085 };
-await expect(map).not.toHaveLayerPixels('veil', { at }); // hidden, or painting nothing there
-await map.feature({ layer: 'alerts', id: 1 }).click();
+const alert = map.feature({ layer: 'alerts', id: 1 });
+const at = await alert.lngLat(); // where click() will press: on a line or a polygon, not just any point of it
+if ((await map.layers()).some((l) => l.id === 'veil')) {
+  await expect(map).not.toHaveLayerPixels('veil', { at }); // hidden, or painting nothing there
+}
+await alert.click();
 ```
 
-This is a pixel probe: a few renders, and MapLibre reloads the layer's source after it. Put it where an overlay can be
-up, not before every action. It asks about the overlay only: a translucent layer that paints there fails it too, even
-though the feature shows through.
+The layer must exist to be asked about: an app that takes its overlay away with `removeLayer` leaves nothing to probe,
+and `toHaveLayerPixels` on a missing layer gives no verdict. Hence the `map.layers()` check. This is a pixel probe: a
+few renders, and MapLibre reloads the layer's source after it. Put it where an overlay can be up, not before every
+action. It asks about the overlay only: a translucent layer that paints there fails it too, even though the feature
+shows through. ([`tests/occlusion-recipe.spec.ts`](../tests/occlusion-recipe.spec.ts) runs it with an overlay up,
+hidden and removed.)
 
 ## An offline basemap
 
