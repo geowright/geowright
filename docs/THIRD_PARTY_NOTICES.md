@@ -7,8 +7,11 @@ file after a dependency bump.
 
 None of the licenses below are copyleft, and none conflict with distributing the core under
 Apache-2.0. What the package ships is MIT / BSD-2-Clause / BSD-3-Clause / ISC only; the demo app and
-`wild/` add OFL-1.1 (a font), Apache-2.0, Unlicense and EDL-1.0 (a BSD-3-Clause text: JSTS, inside the
-vendored Turf bundle), each with its text kept beside the file (decision 0015).
+`wild/` add OFL-1.1 (a font), Apache-2.0, Unlicense, EDL-1.0 (a BSD-3-Clause text: JSTS, inside the
+vendored Turf bundle) and the Unicode data license (`bidi-js`'s tables, derived from the Unicode Character Database,
+inside MapLibre's dist), each with its text kept beside the file, and 0BSD (`tslib`, inside the MapLibre 5.13 and
+3.6.2 builds in `wild/`), which asks for no notice (decision 0020). The wrapper apps' notices do not list everything
+MapLibre's dist bundles yet: see `wild/` below.
 
 ---
 
@@ -179,10 +182,12 @@ None of this ships in the npm package (confirmed: `npm pack --dry-run` includes 
 
 ## Flags
 
-- **Nothing found outside MIT / BSD-2-Clause / BSD-3-Clause / ISC / Apache-2.0 / SIL OFL-1.1**, plus, in
-  `wild/` only, Unlicense and EDL-1.0 (JSTS inside the Turf bundle, a dual `EDL-1.0 OR EPL-1.0` license used under
-  its BSD-3-Clause option). No GPL/LGPL/AGPL/SSPL/BSL or other copyleft or source-available license anywhere in
-  `node_modules` for the packages audited, nor in `wild/`'s stated licenses.
+- **Nothing found outside MIT / BSD-2-Clause / BSD-3-Clause / ISC / Apache-2.0 / SIL OFL-1.1**, plus the
+  Unicode data license (`bidi-js`'s tables, inside MapLibre's dist), and, in `wild/` only,
+  0BSD (`tslib` inside the MapLibre 5.13 and 3.6.2 builds), Unlicense and EDL-1.0 (JSTS inside the Turf bundle, a
+  dual `EDL-1.0 OR EPL-1.0` license used under its BSD-3-Clause option). All are on decision 0020's list. No
+  GPL/LGPL/AGPL/SSPL/BSL or other copyleft or source-available license anywhere in `node_modules` for the packages
+  audited, nor in `wild/`'s stated licenses.
 - `terra-draw` and `terra-draw-maplibre-gl-adapter` declare `"license": "MIT"` in `package.json` but
   do **not** ship a `LICENSE` file in the installed npm package — there is no copyright-holder line
   to copy verbatim beyond the package.json `author` field (James Milner). Not a blocker (MIT doesn't
