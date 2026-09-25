@@ -259,15 +259,37 @@ thousands of candidate pixels to roughly two thousand and well under two seconds
 
 ## Identity: matching a click back to a feature
 
-MapLibre's rendered feature `id` cannot be trusted as a stable key on its own. It coerces non-integer
-ids to numbers (a UUID string id from a drawing library becomes something like `0`, `4`, `75`, or
-`8866` — the leading digits, colliding across genuinely different features), and the same feature
-comes back once per internal tile it happens to be sliced into, each time with a different, clipped
-piece of its geometry. For this reason **identity is `layer + id + properties`, and geometry received
-from the renderer is treated as a possibly-partial piece, never the authoritative shape** — the full
-shape, when it is needed (drawing / geometry assertions), is read from the source's own data instead.
-Property objects are compared by their values with keys in a stable order: tile generations and source data can
-enumerate the same fields differently, and that difference must not split one feature into two identities.
+MapLibre's rendered feature `id` cannot be trusted as a stable key on its own. It keeps an id only if it
+is a non-negative integer: a GeoJSON id goes through its tile encoder, which parses a string id as an
+integer and writes any number as an unsigned integer (a UUID string id from a drawing library becomes
+something like `0`, `4`, `75`, or `8866` — the leading digits, colliding across genuinely different
+features; `'north-gate'` becomes `0`, `-5` becomes 18446744073709552000, `1.5` becomes `1`; Mapbox GL 1
+drops a non-numeric one), and the same feature comes back once per internal tile it happens to be sliced
+into, each time with a different, clipped piece of its geometry. For this reason **identity is
+`layer + id + properties`, and geometry received from the renderer is treated as a possibly-partial
+piece, never the authoritative shape** — the full shape, when it is needed (drawing / geometry
+assertions), is read from the source's own data instead. Property objects are compared by their values
+with keys in a stable order: tile generations and source data can enumerate the same fields differently,
+and that difference must not split one feature into two identities. Ids are unique within one
+source-layer of a vector source only, so a feature's source-layer is part of its identity too.
+
+The key is safe, but not collision-free, and a query is by the app's id, not the renderer's:
+
+- **A query by an id the renderer does not keep** (`{ id: 'north-gate' }`) is resolved through the
+  source's data, for a GeoJSON source: the data features with that id, then the rendered pieces with
+  their properties — and, when a look-alike shares those properties, the pieces that touch the data
+  feature's own geometry. On a tiled source such an id can never be drawn, so the query is an error that
+  names `promoteId` (the id then comes from a property and is kept as it is) instead of matching nothing,
+  which made every negative assertion by it pass. Left as a limit: in a source that mixes both kinds of
+  id, a query by an integer id also matches a feature whose id is drawn as that integer.
+- **Look-alikes whose ids are drawn as one number** (`'north-gate'` and `'south-gate'`, both `0`, same
+  properties) share a key. When the pieces of such a key do not touch, the source is asked how many
+  features it holds with those properties that could have been drawn with that id; if more than one,
+  the key is split by contact like id-less pieces (below).
+- **Data and rendered properties differ in form.** The tile encoder drops a property whose value is
+  `null`, and MapLibre before 6 / Mapbox GL deliver a nested object as its JSON string. Wherever a data
+  feature is matched to rendered ones (full geometry, the snapshot's "not drawn" count, the proofs
+  below), both sides are compared without null values and with JSON strings read as what they hold.
 
 Related layers that draw one logical thing are folded into a single entity for the purposes of a
 handle or a snapshot row — a circle, its label, and its outline, drawn on three separate layers, are

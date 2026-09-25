@@ -16,7 +16,7 @@ import type {
   PixelPoint,
   RenderedFeature,
 } from './types';
-import type { InternalCanvasAdapter, StyleBranch, StyleCause } from './types-internal';
+import type { InternalCanvasAdapter, InternalRenderedFeature, StyleBranch, StyleCause } from './types-internal';
 
 /** A click-time (or hover-time) check listening in the page: its verdict so far, and how to remove its listeners. */
 export interface ArmedCheck {
@@ -43,7 +43,7 @@ export class Engine<W = unknown> {
 
   /** `rendered: false` for features that come from source DATA: paint visibility does not apply. */
   private matches(f: RenderedFeature, q: FeatureQuery, rendered = true): boolean {
-    if (q.id !== undefined && String(f.id) !== String(q.id)) return false;
+    if (q.id !== undefined && !(rendered ? this.hasId(f, q.id) : String(f.id) === String(q.id))) return false;
     const want = q.visible ?? true; // visible by default: "the map has a feature" means a user can see it
     if (rendered && want !== 'any' && this.visibility(f).visible !== want) return false;
     if (q.where) {
@@ -54,6 +54,24 @@ export class Engine<W = unknown> {
     return true;
   }
 
+  /**
+   * Is this RENDERED feature the one the app's data gives `id`? Where the renderer keeps ids (learnt in resolveId), its
+   * id says so. Where it does not (a GeoJSON id that is not a non-negative integer), the data features with that id,
+   * read from the source, say which rendered pieces are theirs: the same properties — and when a look-alike shares
+   * them, touching the data feature's own geometry.
+   */
+  private hasId(f: RenderedFeature, id: string | number): boolean {
+    const targets = this.byDataId.get(idKey(f.layer, id));
+    if (!targets) return String(f.id) === String(id);
+    const props = comparable(f.properties);
+    return targets.some((t) => t.props === props && (t.alone || this.touch(f, t.feature)));
+  }
+
+  /** Is the renderer's id of this piece the feature's own — not one it made up, shared with look-alikes (learnIdentity)? */
+  private trustsId(f: RenderedFeature): boolean {
+    return f.id !== undefined && !this.coerced.has(this.key(f));
+  }
+
   private visibility(f: RenderedFeature) {
     return this.adapter.visibility?.(f) ?? { visible: true };
   }
@@ -62,7 +80,8 @@ export class Engine<W = unknown> {
    * Identity of a logical feature. Tiling returns the same feature as several pieces, so pieces
    * must merge — but the renderer's `id` alone is NOT trustworthy: MapLibre coerces non-integer
    * ids (terra-draw uses UUID strings) into colliding numbers like 0, 4, 75. Pieces of one feature
-   * always share identical properties, so id + properties is both safe and collision-free.
+   * always share identical properties, so id + properties is safe. It is not collision-free: look-alikes (same
+   * properties) whose ids coerce to one number share a key, and are split by contact (`coerced`, split()).
    */
   private key(f: RenderedFeature): string {
     return `${f.layer}|${f.id ?? ''}|${stableProperties(f.properties)}`;
@@ -74,7 +93,9 @@ export class Engine<W = unknown> {
    * user it is the same thing. Without this, every labelled point is "occluded" by its own label.
    */
   private entityKey(f: RenderedFeature): string {
-    return `${f.source ?? f.layer}|${f.id ?? ''}|${stableProperties(f.properties)}`;
+    // ids are unique within one source-layer of a vector source only: the source-layer is part of what the entity is
+    const sourceLayer = (f as InternalRenderedFeature).sourceLayer;
+    return `${f.source ?? f.layer}${sourceLayer ? '/' + sourceLayer : ''}|${f.id ?? ''}|${stableProperties(f.properties)}`;
   }
 
   /**
@@ -86,7 +107,7 @@ export class Engine<W = unknown> {
    * components of their on-screen boxes. Limit: two id-less, property-identical shapes that touch stay one.
    */
   private split(pieces: RenderedFeature[]): RenderedFeature[][] {
-    if (pieces.length < 2 || pieces[0].id !== undefined || this.single.has(this.key(pieces[0]))) return [pieces];
+    if (pieces.length < 2 || this.trustsId(pieces[0]) || this.single.has(this.key(pieces[0]))) return [pieces];
     // Sweep along x so that thousands of look-alike points cost n·log n, not n².
     // World copies: the same feature drawn once per visible copy of the world is one feature — pieces touch MODULO the
     // period (see touching()). In the sweep, each piece is also entered one period to its left and right, under its own
@@ -117,39 +138,116 @@ export class Engine<W = unknown> {
    */
   private single = new Set<string>();
 
+  /**
+   * Keys PROVEN to be several features although their pieces carry an id: the renderer made the id up. MapLibre draws a
+   * GeoJSON id that is not a non-negative integer as a coerced number ('north-gate' and 'south-gate' both as 0), so two
+   * look-alikes with such ids share one key; their pieces are split by contact like id-less ones. Learnt from the
+   * source, like `single`, and only when the pieces of one key do not touch.
+   */
+  private coerced = new Set<string>();
+
+  /**
+   * A query id the renderer does not keep (see `coerced`), resolved through the source's data: `layer + id` → the data
+   * features with that id, their properties (as `comparable` puts them), and whether no other feature the layer draws
+   * has the same properties (`alone`; otherwise a rendered piece must also touch the data feature to be it).
+   */
+  private byDataId = new Map<string, { feature: RenderedFeature; props: string; alone: boolean }[]>();
+
   async learnIdentity(q: FeatureQuery): Promise<void> {
     // A registered map may have been removed (or hidden to 0×0) while Playwright was waiting: nothing to learn from it.
     // Not an error HERE — the query that follows reports it (group() refuses such a surface, actionPoint explains it).
     if (this.surfaceProblem()) return;
+    const cache = new Map<string, Promise<RenderedFeature[] | null>>();
+    const dataOf = (layer: string) => {
+      let d = cache.get(layer);
+      if (!d) cache.set(layer, (d = this.adapter.queryData ? this.adapter.queryData(layer).then((v) => v ?? null) : Promise.resolve(null)));
+      return d;
+    };
+    if (q.id !== undefined) await this.resolveId(q, q.id, dataOf);
     if (!this.adapter.queryData || this.hiddenAt(q.at)) return;
     const at = q.at ? this.projectAt(q.at) : undefined;
+    // pieces with an id are looked at only where the renderer may have made the id up: layers the source can answer for
+    let geojson: Set<string> | undefined;
+    const answers = (layer: string) => (geojson ??= new Set(this.adapter.listLayers().filter((l) => l.sourceType === 'geojson').map((l) => l.id))).has(layer);
     const byKey = new Map<string, RenderedFeature[]>();
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
-      if (f.id !== undefined) continue;
+      if (f.id !== undefined && !answers(f.layer)) continue;
       const k = this.key(f);
       byKey.set(k, [...(byKey.get(k) ?? []), f]);
     }
-    const data = new Map<string, RenderedFeature[] | null>();
     for (const [k, pieces] of byKey) {
       // Only a moment in which the pieces do NOT touch can be decided; what was learnt then stays learnt
       // until the data says otherwise (the two-generation instant comes and goes between calls).
       if (pieces.length < 2 || this.splitAlways(pieces).length < 2) continue;
-      const layer = pieces[0].layer;
-      if (!data.has(layer)) data.set(layer, (await this.adapter.queryData(layer)) ?? null);
-      const props = stableProperties(pieces[0].properties);
-      const n = data.get(layer)?.filter((d) => stableProperties(d.properties) === props && this.drawnBy(d)).length;
-      if (n === 1) this.single.add(k);
-      else this.single.delete(k);
+      const { layer, id } = pieces[0];
+      const data = await dataOf(layer);
+      if (!data) continue;
+      const props = comparable(pieces[0].properties);
+      // id-less: every feature the layer draws with these properties; with an id: those the renderer could have given it
+      const n = data.filter((d) => comparable(d.properties) === props && this.drawnBy(d) && (id === undefined || !this.keepsId(d) || String(d.id) === String(id))).length;
+      if (id === undefined) {
+        if (n === 1) this.single.add(k);
+        else this.single.delete(k);
+      } else if (n > 1) this.coerced.add(k);
+      else this.coerced.delete(k);
+    }
+  }
+
+  /** Does the renderer draw this DATA feature (from queryData) with its own id? */
+  private keepsId(d: RenderedFeature): boolean {
+    return d.id !== undefined && this.adapter.idRoundTrips?.(d.layer, d.id) !== false;
+  }
+
+  /**
+   * A query by an id the renderer does not keep: find the features with that id in each layer's source data (hasId()).
+   * Where no layer of the query can be asked (a tiled source, a GeoJSON URL on an old version) the query could never
+   * match anything, and a negative assertion by it would pass on a feature that is drawn: an error that says what to do.
+   */
+  private async resolveId(q: FeatureQuery, id: string | number, dataOf: (layer: string) => Promise<RenderedFeature[] | null>): Promise<void> {
+    let unanswerable: string | undefined;
+    let answerable = false;
+    for (const layer of this.layersOf(q) ?? this.adapter.listLayers().map((l) => l.id)) {
+      const k = idKey(layer, id);
+      const keeps = this.adapter.idRoundTrips?.(layer, id);
+      if (keeps !== false) {
+        this.byDataId.delete(k);
+        answerable ||= keeps === true;
+        continue;
+      }
+      const data = await dataOf(layer);
+      if (!data) {
+        this.byDataId.delete(k);
+        unanswerable ??= layer;
+        continue;
+      }
+      answerable = true;
+      const drawn = data.filter((d) => this.drawnBy(d));
+      const count = new Map<string, number>();
+      for (const d of drawn) count.set(comparable(d.properties), (count.get(comparable(d.properties)) ?? 0) + 1);
+      const targets = drawn.filter((d) => d.id !== undefined && String(d.id) === String(id)).map((d) => ({ feature: d, props: comparable(d.properties), alone: count.get(comparable(d.properties)) === 1 }));
+      this.byDataId.delete(k); // most recent last: the oldest are dropped first
+      this.byDataId.set(k, targets);
+      if (this.byDataId.size > 64) this.byDataId.delete(this.byDataId.keys().next().value!);
+    }
+    if (unanswerable !== undefined && !answerable) {
+      throw new Error(
+        `geowright: id ${JSON.stringify(id)} can never match a feature of layer "${unanswerable}": the map library draws a feature id that is not a ` +
+          `non-negative integer as another number (or none), and this source's data cannot be read to find the feature by the id it was given ` +
+          `(a tiled source, or GeoJSON given by URL to a map library version without GeoJSONSource.getData()). Set promoteId on the source so that ids come from a property, or query by that property: where: { <property>: ${JSON.stringify(id)} }`,
+      );
     }
   }
 
   private splitAlways(pieces: RenderedFeature[]): RenderedFeature[][] {
     const k = this.key(pieces[0]);
     const was = this.single.delete(k);
+    const wasCoerced = this.coerced.has(k);
+    this.coerced.add(k);
     try {
       return this.split(pieces);
     } finally {
       if (was) this.single.add(k);
+      if (!wasCoerced) this.coerced.delete(k);
     }
   }
 
@@ -224,12 +322,12 @@ export class Engine<W = unknown> {
 
   /** Is this hit a piece of THAT feature? The key decides, plus — for id-less features — touching it. */
   private isPieceOf(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
-    return this.key(h) === this.key(pieces[0]) && (h.id !== undefined || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
+    return this.key(h) === this.key(pieces[0]) && (this.trustsId(h) || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
   }
 
   /** Same DATA entity (whatever layer drew it): a circle and its own label, a fill and its outline. */
   private sameEntity(h: RenderedFeature, pieces: RenderedFeature[]): boolean {
-    return this.entityKey(h) === this.entityKey(pieces[0]) && (h.id !== undefined || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
+    return this.entityKey(h) === this.entityKey(pieces[0]) && (this.trustsId(h) || this.single.has(this.key(h)) || pieces.some((p) => this.touch(h, p)));
   }
 
   /**
@@ -651,10 +749,15 @@ export class Engine<W = unknown> {
     if (groups.length > 1) return { ok: false, message: `strict mode violation: query resolved to ${groups.length} features` };
     const f = groups[0][0];
     const data = await this.adapter.queryData?.(f.layer);
-    const props = stableProperties(f.properties);
+    const props = comparable(f.properties);
     // a data feature the layer's filter leaves out is not the one it drew (asked last: it is the costly test)
-    const sameProps = data?.filter((d) => stableProperties(d.properties) === props && this.drawnBy(d)) ?? [];
-    const hit = sameProps.length === 1 ? sameProps[0] : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && String(d.id) === String(f.id) && this.drawnBy(d));
+    const sameProps = data?.filter((d) => comparable(d.properties) === props && this.drawnBy(d)) ?? [];
+    // look-alikes: the one with the rendered id, if the renderer kept ids; else the one the pieces touch
+    const hit =
+      sameProps.length === 1
+        ? sameProps[0]
+        : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && this.keepsId(d) && String(d.id) === String(f.id) && this.drawnBy(d)) ??
+          (sameProps.length > 1 ? only(sameProps.filter((d) => groups[0].some((p) => this.touch(p, d)))) : undefined);
     if (hit) return { ok: true, geometry: hit.geometry, from: 'data' };
     return { ok: true, geometry: f.geometry, from: 'rendered' };
   }
@@ -993,10 +1096,14 @@ export class Engine<W = unknown> {
     const centre = { x: size.w / 2, y: size.h / 2 };
     const found = new Map<string, Collected>();
     const matched = new Set<string>();
+    const matchedPieces = new Set<RenderedFeature>(); // look-alikes split below: only the parts the filter matched stay
     for (const f of a.queryFeatures({})) {
       if (skip.has(f.layer) || (only && !only.has(f.layer))) continue;
       const k = this.entityKey(f);
-      if (o.filter && (!filterLayers || filterLayers.includes(f.layer)) && this.matches(f, o.filter) && (!filterAt || filterAt.some((h) => this.entityKey(h) === k))) matched.add(k);
+      if (o.filter && (!filterLayers || filterLayers.includes(f.layer)) && this.matches(f, o.filter) && (!filterAt || filterAt.some((h) => this.entityKey(h) === k))) {
+        matched.add(k);
+        matchedPieces.add(f);
+      }
       let e = found.get(k);
       if (!e) found.set(k, (e = { key: k, owner: f.layer, byLayer: new Map(), d: Infinity }));
       if (!e.byLayer.has(f.layer)) e.byLayer.set(f.layer, []);
@@ -1014,6 +1121,7 @@ export class Engine<W = unknown> {
       if (parts.length < 2) continue;
       found.delete(k);
       parts.forEach((part, i) => {
+        if (o.filter && !part.some((f) => matchedPieces.has(f))) return; // a look-alike of the match (an id the renderer did not keep)
         const byLayer = new Map<string, RenderedFeature[]>();
         for (const f of part) byLayer.set(f.layer, [...(byLayer.get(f.layer) ?? []), f]);
         const owner = [...byLayer.keys()].reduce((best, l) => (rank(l) > rank(best) ? l : best));
@@ -1280,21 +1388,22 @@ export class Engine<W = unknown> {
       if (!data) continue;
       seenSources.add(l.source);
       const rendered = a.queryFeatures({}).filter((f) => f.source === l.source);
-      const renderedIds = new Set(rendered.map((f) => this.entityKey(f)));
-      // The renderer's id is not the data's when the data id is not a number: MapLibre renders a string id (terra-draw's
+      // Data and rendered properties are compared as `comparable` puts them: the renderer drops null values.
+      const renderedIds = new Set(rendered.map((f) => `${f.id ?? ''}|${comparable(f.properties)}`));
+      // The renderer's id is not the data's when it does not keep it (keepsId): MapLibre renders a string id (terra-draw's
       // UUIDs) as a coerced number, and gives id-less features generated ones. Those are matched by their properties.
       const renderedProps = new Map<string, RenderedFeature[]>();
-      for (const f of rendered) renderedProps.set(stableProperties(f.properties), [...(renderedProps.get(stableProperties(f.properties)) ?? []), f]);
-      // Look-alikes: data features without a (numeric) id and with the same properties. The rendered pieces of ONE of
-      // them match ALL of them by key, so for those a data feature counts as drawn only if a rendered look-alike piece
-      // touches it on screen — the same rule that splits id-less look-alikes everywhere else (split()).
+      for (const f of rendered) renderedProps.set(comparable(f.properties), [...(renderedProps.get(comparable(f.properties)) ?? []), f]);
+      // Look-alikes: data features without an id the renderer keeps, and with the same properties. The rendered pieces of
+      // ONE of them match ALL of them by key, so for those a data feature counts as drawn only if a rendered look-alike
+      // piece touches it on screen — the same rule that splits id-less look-alikes everywhere else (split()).
       const lookAlikes = new Map<string, number>();
-      for (const f of data) if (typeof f.id !== 'number') lookAlikes.set(stableProperties(f.properties), (lookAlikes.get(stableProperties(f.properties)) ?? 0) + 1);
+      for (const f of data) if (!this.keepsId(f)) lookAlikes.set(comparable(f.properties), (lookAlikes.get(comparable(f.properties)) ?? 0) + 1);
       const touching = this.toucher();
       const isDrawn = (f: RenderedFeature) => {
-        const props = stableProperties(f.properties);
-        if (typeof f.id !== 'number' && (lookAlikes.get(props) ?? 0) > 1) return (renderedProps.get(props) ?? []).some((p) => touching(f, p));
-        return renderedIds.has(this.entityKey({ ...f, source: l.source })) || (typeof f.id !== 'number' && renderedProps.has(props));
+        const props = comparable(f.properties);
+        if (!this.keepsId(f) && (lookAlikes.get(props) ?? 0) > 1) return (renderedProps.get(props) ?? []).some((p) => touching(f, p));
+        return renderedIds.has(`${f.id ?? ''}|${props}`) || (!this.keepsId(f) && renderedProps.has(props));
       };
       // a filter `at` a location asks what is drawn there: nothing elsewhere matches it
       const off = data.filter((f) => !isDrawn(f) && (!o.filter || (o.filter.at === undefined && this.matches(f, o.filter, false))));
@@ -1687,6 +1796,8 @@ const WHERE_OPS = ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'matches', 'flags
  * match on a nested value), a misspelt operator — used to test no operator at all and so match EVERY feature: an error.
  */
 export function checkWhere(want: unknown): void {
+  // `undefined` survives Playwright's serialisation, and equals no property value: every negative assertion passed
+  if (want === undefined) throw new Error('geowright: a where value is undefined (to match a property that is absent use { exists: false }, or null)');
   if (want === null || typeof want !== 'object') return;
   if (Array.isArray(want)) throw new Error(`geowright: unknown where operator: an array (to match one of several values use { in: [${want.map((v) => JSON.stringify(v)).join(', ')}] }); valid operators: ${WHERE_OPS.join(', ')}`);
   const unknown = Object.keys(want).filter((k) => !WHERE_OPS.includes(k));
@@ -1694,7 +1805,20 @@ export function checkWhere(want: unknown): void {
 
   // {} (or { flags } alone) names no condition: it would match every feature.
   if (!Object.keys(want).some((k) => k !== 'flags')) throw new Error(`geowright: a where operator object has no operator in it (${JSON.stringify(want)}); valid: ${WHERE_OPS.join(', ')} (a scalar value means eq)`);
+
+  // An operand of the wrong kind does not fail loudly on its own: `in: 'park'` did a substring match, `exists: 'yes'`
+  // and `gt: '4'` matched nothing (so a negative assertion passed).
+  const op = want as Record<string, unknown>;
+  const bad = (k: string, what: string) => new Error(`geowright: where operator "${k}" takes ${what}, got ${showOperand(op[k])}`);
+  for (const k of Object.keys(op)) if (op[k] === undefined) throw new Error(`geowright: where operator "${k}" is undefined`);
+  if ('in' in op && !Array.isArray(op.in)) throw bad('in', 'an array of values');
+  if ('exists' in op && typeof op.exists !== 'boolean') throw bad('exists', 'true or false');
+  for (const k of ['gt', 'gte', 'lt', 'lte']) if (k in op && (typeof op[k] !== 'number' || Number.isNaN(op[k]))) throw bad(k, 'a number');
+  if ('matches' in op && typeof op.matches !== 'string') throw bad('matches', 'a RegExp source string');
+  if ('flags' in op && typeof op.flags !== 'string') throw bad('flags', 'a string of RegExp flags');
 }
+
+const showOperand = (v: unknown) => (typeof v === 'number' && Number.isNaN(v) ? 'NaN' : JSON.stringify(v));
 
 export function testWhere(actual: unknown, want: unknown): boolean {
   checkWhere(want);
@@ -1729,6 +1853,30 @@ function stableProperties(properties: Record<string, unknown>): string {
     return Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)));
   });
 }
+/**
+ * Properties as data and rendered features can both be compared by — for data-vs-rendered comparisons ONLY (a rendered
+ * feature is always compared with other rendered ones by `stableProperties`). The renderer drops a property whose value
+ * is null (vt-pbf skips it), and MapLibre before 6 / Mapbox GL deliver a nested object or array as its JSON string: so
+ * null and undefined values are left out, and a string that holds a JSON object or array is read as one, on both sides.
+ */
+function comparable(properties: Record<string, unknown>): string {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(properties ?? {})) {
+    if (v === null || v === undefined) continue;
+    out[k] = typeof v === 'string' && /^\s*[[{]/.test(v) ? parsedJson(v) : v;
+  }
+  return stableProperties(out);
+}
+const parsedJson = (v: string): unknown => {
+  try {
+    return JSON.parse(v);
+  } catch {
+    return v;
+  }
+};
+/** byDataId's key: an id by its string, as queries compare ids (7 and '7' are one id). */
+const idKey = (layer: string, id: string | number) => `${layer}\u0000${String(id)}`;
+const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : undefined);
 const round = (p: PixelPoint): PixelPoint => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const fail = (reason: Exclude<ActionPointResult, { ok: true }>['reason'], message: string): ActionPointResult => ({ ok: false, reason, message });

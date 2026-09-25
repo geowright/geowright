@@ -85,15 +85,17 @@ const api = {
   },
   actionPoint: async (mapId: string, q: any, opts: any) => (await engine(mapId).learnIdentity(q), engine(mapId).actionPoint(q, opts)),
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
-  overlaysAt: (mapId: string, kind: any, o: any) => engine(mapId).overlaysAt(kind, o),
+  // a `feature` query is resolved like any other: learnIdentity first (an id the renderer does not keep is looked up in the data)
+  overlaysAt: async (mapId: string, kind: any, o: any) => (o?.feature && (await engine(mapId).learnIdentity(o.feature)), engine(mapId).overlaysAt(kind, o)),
   /**
    * map.marker() / map.popup(): match AND pin in one call, so the pinned element is the one that matched (in
    * two round trips an overlay inserted in between re-pointed a document index). With exactly one match its element is
    * kept in `window.__geowright_pins` under a token, for the Playwright side's pin selector engine. `docIndex`: its
    * position among the document's matches, for the order-bound fallback (-1 inside a shadow root).
    */
-  pinOverlay: (mapId: string, kind: any, o: any) => {
+  pinOverlay: async (mapId: string, kind: any, o: any) => {
     const e = engine(mapId);
+    if (o?.feature) await e.learnIdentity(o.feature);
     const list = e.overlaysAt(kind, o);
     if (list.length !== 1) return { list };
     const el = e.adapter.overlayElement?.(list[0]);
@@ -153,7 +155,11 @@ const api = {
     w.__geowright_mirrors[mapId] = startMirror(engine(mapId), mapId, opts);
     return true;
   },
-  snapshot: async (mapId: string, opts?: any) => (await engine(mapId).learnIdentity({ layer: opts?.layers }), engine(mapId).snapshot(opts)),
+  snapshot: async (mapId: string, opts?: any) => {
+    await engine(mapId).learnIdentity({ layer: opts?.layers });
+    if (opts?.filter?.id !== undefined) await engine(mapId).learnIdentity(opts.filter);
+    return engine(mapId).snapshot(opts);
+  },
   explain: (mapId: string, q: any) => engine(mapId).explain(q),
   reveal: (mapId: string, q: any) => engine(mapId).reveal(q),
   viewState: (mapId: string) => engine(mapId).adapter.getViewState(),

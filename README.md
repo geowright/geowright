@@ -103,6 +103,12 @@ const queries: FeatureQuery[] = [
 `map.feature(q)` is **strict** (exactly one match, like a Locator); `map.features(q)` is a set.
 Handles are lazy: nothing is resolved until an action or assertion runs.
 
+`id` is the id in the app's data. MapLibre keeps a feature id only if it is a non-negative integer and draws any other
+(`'north-gate'`, a UUID, `-5`, `1.5`) as some other number, or none: on a GeoJSON source such an id is found through the source's
+data (look-alikes drawn with one number are told apart by where they are drawn); on a tiled source it can never match,
+and the query is an error that points to `promoteId`. A `where` operand of the wrong kind (`in` that is not an array,
+`exists` that is not a boolean, a bound that is not a number, an `undefined` value) is an error too.
+
 ### Visible by default
 
 MapLibre's `queryRenderedFeatures` also returns features painted with opacity 0, a transparent colour or zero size — so a

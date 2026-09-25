@@ -96,6 +96,18 @@ test.describe('testWhere', () => {
     expect(() => testWhere('park', {})).toThrow(/where operator object has no operator/);
     expect(() => testWhere('park', { flags: 'i' })).toThrow(/where operator object has no operator/);
   });
+
+  test('an operator given a value of the wrong kind is an error, not a substring match or "matches nothing"', () => {
+    // `in` on a string did a substring match ('park'.includes('a')); a non-boolean `exists` and a non-number bound
+    // matched nothing, so a negative assertion passed; `undefined` (it survives Playwright's serialisation) matched nothing
+    expect(() => testWhere('a', { in: 'park' })).toThrow('where operator "in" takes an array of values, got "park"');
+    expect(() => testWhere('x', { exists: 'yes' })).toThrow('where operator "exists" takes true or false, got "yes"');
+    for (const op of ['gt', 'gte', 'lt', 'lte']) expect(() => testWhere(5, { [op]: '4' })).toThrow(`where operator "${op}" takes a number, got "4"`);
+    expect(() => testWhere(5, { gt: NaN })).toThrow('where operator "gt" takes a number, got NaN');
+    expect(() => testWhere('x', undefined)).toThrow('a where value is undefined');
+    expect(() => testWhere('x', { eq: undefined })).toThrow('where operator "eq" is undefined');
+    expect(() => testWhere('x', { matches: 5 })).toThrow('where operator "matches" takes a RegExp source string, got 5');
+  });
 });
 
 test.describe('explode', () => {

@@ -49,6 +49,22 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
 - `click()`, `tap()` and `hover()` with `{ moving: 'allow' }` (and any click whose target could not be resolved when its
   check was armed) swallow a press that arrives when the query matches more than one feature; the press approved
   whichever match was under the pointer.
+- A query by a GeoJSON feature id that is not a non-negative integer (a string id such as a UUID, a negative or
+  fractional number) finds that feature. MapLibre draws such an id as another number, so the query matched nothing and
+  `.not.toHaveFeature({ id })` passed on a feature that is drawn; the same for `snapshot({ filter })`, `marker()`,
+  `popup()` and `toHavePopup({ feature })`. Look-alikes (same properties) whose ids MapLibre draws as one number are
+  counted, queried and clicked apart. On a tiled source, whose features can only have such ids through
+  `promoteId`, a query by one is an error that says so.
+- GeoJSON features with a `null` property: `geometry()` and `toHaveGeometry` read the full shape from the source again,
+  and the snapshot no longer lists them as "inside the view but not drawn individually" (MapLibre drops null properties
+  from what it draws).
+- A `where` operand of the wrong kind is an error: `in` that is not an array (it did a substring match), `exists` that is
+  not a boolean, `gt` / `gte` / `lt` / `lte` that is not a number, `matches` / `flags` that is not a string, and an
+  `undefined` value or operand (they matched nothing, so negative assertions passed).
+- Two features of one vector source with the same id and properties in different source-layers are two features: the one
+  drawn on top covers the other instead of counting as the same feature.
+- The "visibility unknown / uncertain for layer …" notes of failure messages and the snapshot are about this map as it is
+  now: not another map's, and not about a style value or a camera the app has changed since.
 
 ## 0.1.0 — 2026-09-27
 
