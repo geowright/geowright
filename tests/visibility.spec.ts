@@ -51,7 +51,7 @@ test.describe('visibility', () => {
     expect((await ghost.info()).visible).toBe(true); // the style does ask for an icon
     await expect(ghost).toBeVisibleOnMap({ pixels: false });
     await expect(ghost).not.toBeVisibleOnMap();
-    const err = await expect(ghost).toBeVisibleOnMap({ timeout: 800 }).then(() => null, (e: Error) => e);
+    const err = await expect(ghost).toBeVisibleOnMap({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('hiding layer "sensors-ghost" changes nothing');
   });
 
@@ -98,7 +98,7 @@ test.describe('visibility', () => {
 
   test('failure message explains that a match exists but cannot be seen', async ({ map }) => {
     const err = await expect(map)
-      .toHaveFeature({ layer: 'sensors', where: { name: 'Sensor Birch' } }, { timeout: 600 })
+      .toHaveFeature({ layer: 'sensors', where: { name: 'Sensor Birch' } }, { timeout: FAIL_FAST_MS })
       .then(() => null, (e: Error) => e);
     expect(err?.message).toContain('1 feature(s) match but are NOT VISIBLE: sensors#502 (circle-opacity evaluates to 0');
     // …and WHY: the property, its value, the expression branch, the zoom (tests/why-invisible.spec.ts has one per kind)
@@ -138,7 +138,7 @@ test.describe('visibility', () => {
     await expect(map).not.toHaveFeature({ layer: 'parcels', id: 101 });
     await expect(map).not.toHaveFeature({ layer: 'parcels-outline', id: 101 });
     await expect(map).toHaveFeature({ layer: 'parcels', id: 101, visible: false });
-    const err = await expect(map).toHaveFeature({ layer: 'parcels', id: 101 }, { timeout: 600 }).then(() => null, (e: Error) => e);
+    const err = await expect(map).toHaveFeature({ layer: 'parcels', id: 101 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('NOT VISIBLE: parcels#101 (fill-layer-opacity evaluates to 0');
     const [outline] = await map.features({ layer: 'parcels-outline', id: 101, visible: 'any' }).all();
     expect(outline.invisibleBecause).toContain('line-layer-opacity evaluates to 0');
@@ -174,13 +174,13 @@ test.describe('visibility', () => {
   // "could not decide" is not "not visible"
   test('.not.toBeVisibleOnMap on a query matching several VISIBLE features fails (strict mode)', async ({ map }) => {
     await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3);
-    const e = await expect(map.feature({ layer: 'alerts' })).not.toBeVisibleOnMap({ timeout: 800 }).then(() => null, (e: Error) => e);
+    const e = await expect(map.feature({ layer: 'alerts' })).not.toBeVisibleOnMap({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e, '.not.toBeVisibleOnMap passed while 3 alerts are visible').not.toBeNull();
     expect(e?.message).toContain('strict mode violation: 3 features match');
   });
 
   test('.not.toHaveLayerPixels on a layer that does not exist fails, and says so', async ({ map }) => {
-    const e = await expect(map).not.toHaveLayerPixels('no-such-layer', { at: { lng: 34.78, lat: 32.08 }, timeout: 800 }).then(() => null, (e: Error) => e);
+    const e = await expect(map).not.toHaveLayerPixels('no-such-layer', { at: { lng: 34.78, lat: 32.08 }, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e, '.not.toHaveLayerPixels passed for a layer that does not exist').not.toBeNull();
     expect(e?.message).toContain('layer "no-such-layer" does not exist');
   });

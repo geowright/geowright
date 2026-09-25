@@ -1,5 +1,6 @@
 import { brightBasemap } from './basemap';
 import { example, expect, test } from './harness';
+import { FAIL_FAST_MS } from '../slow-machine';
 
 // MapLibre example "Filter symbols by toggling a list": one symbol layer per icon TYPE
 // (poi-theatre, poi-bar, poi-bicycle, poi-music), a checkbox per layer built from the data. The
@@ -72,6 +73,6 @@ test('wild: filter-symbols-by-toggling-a-list › a missing sprite icon is named
   // the sprite lacks "bar_11": MapLibre silently draws nothing for that layer
   const broken = brightBasemap([-77.04, 38.907], { icons: ['theatre_11', 'bicycle_11', 'music_11'] });
   const map = await wild.open(example('filter-symbols-by-toggling-a-list'), { routes: broken });
-  const err = await expect(map).toHaveFeature({ layer: 'poi-bar' }, { timeout: 1500 }).then(() => null, (e: Error) => e);
+  const err = await expect(map).toHaveFeature({ layer: 'poi-bar' }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
   expect(err?.message).toContain('its icon image "bar_11" is not in the style');
 });

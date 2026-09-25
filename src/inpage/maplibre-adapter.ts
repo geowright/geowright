@@ -1,5 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
+import { clientFrame, toSurface } from './engine';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, layoutVisible, missingIcon, paintColour, paintVisibility, projectionOf, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
 import type { InternalCanvasAdapter, ProbeResult, StyleCause } from './types-internal';
 
@@ -377,6 +378,10 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     return paintColour(this.map, f);
   }
 
+  filterAdmits(f: RenderedFeature): boolean | undefined {
+    return filterAdmits(this.map, f);
+  }
+
   /**
    * A vertical metre at a ground point appears as (local scale across the view direction) x sin(pitch)
    * pixels. The scale is measured along the screen's horizontal, which pitch does not foreshorten.
@@ -545,7 +550,8 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
    */
   overlays(): Overlay[] {
     const container = this.map.getContainer();
-    const origin = this.map.getCanvas().getBoundingClientRect();
+    // Surface pixels, like everything else the engine compares: under a CSS transform: scale() the client box is scaled.
+    const frame = clientFrame(this.map.getCanvas());
     const out: Overlay[] = [];
     const prefix = container.classList.contains('maplibregl-map') ? 'maplibregl' : 'mapboxgl';
     for (const [kind, selector] of [['marker', `.${prefix}-marker`], ['popup', `.${prefix}-popup`]] as const) {
@@ -553,7 +559,8 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       // document-wide query, and another map's overlays are not this one's.
       container.querySelectorAll(selector).forEach((el, index) => {
         const r = el.getBoundingClientRect();
-        const rect = { x: r.left - origin.left, y: r.top - origin.top, width: r.width, height: r.height };
+        const topLeft = toSurface(frame, { x: r.left, y: r.top });
+        const rect = { x: topLeft.x, y: topLeft.y, width: r.width / frame.sx, height: r.height / frame.sy };
         const side = [...el.classList].find((c) => c.startsWith(`${prefix}-${kind}-anchor-`))?.slice(`${prefix}-${kind}-anchor-`.length);
         let anchor: PixelPoint | undefined;
         if (side && kind === 'popup') {

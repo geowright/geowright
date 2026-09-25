@@ -17,7 +17,7 @@ test.describe('failure artefacts', () => {
   });
 
   test('failed assertions and location actions get one too', async ({ map, page }, testInfo) => {
-    await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'critical' } }, { timeout: 400 }).catch(() => {});
+    await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'critical' } }, { timeout: FAIL_FAST_MS }).catch(() => {});
     await page.getByTestId('fly-east').click();
     await map.clickAt({ lng: 34.0, lat: 32.08 }, { timeout: FAIL_FAST_MS }).catch(() => {});
     const names = testInfo.attachments.filter((a) => a.contentType === 'image/png').map((a) => a.name);
@@ -30,7 +30,7 @@ test.describe('failure artefacts', () => {
     expect(feature).toBeInstanceOf(GeowrightError);
     const location = await map.clickAt({ lng: 34.0, lat: 32.08 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(location).toBeInstanceOf(GeowrightError);
-    await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'critical' } }, { timeout: 400 }).catch(() => {});
+    await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'critical' } }, { timeout: FAIL_FAST_MS }).catch(() => {});
     const texts = testInfo.attachments.filter((a) => a.name.startsWith('map state — '));
     expect(texts.map((a) => a.name)).toEqual(['map state — map.feature({"layer":"alerts","id":99}).click()', 'map state — toHaveFeature']);
     for (const t of texts) {

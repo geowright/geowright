@@ -46,6 +46,11 @@ export interface StyleCause {
   /** The camera zoom it was evaluated at. */
   zoom: number;
   /**
+   * For a zoom-and-data paint property: the tile zoom the renderer evaluates it at (with the next one, blended by the
+   * camera zoom). Its value and `branches` are from there, not from `zoom`.
+   */
+  tileZoom?: number;
+  /**
    * 'default': not set in the style, the spec's default applies · 'constant': a plain value in the style ·
    * 'expression' · 'function': a legacy `{ stops }` function (traced as the expression the style-spec converts it to).
    */
@@ -94,6 +99,12 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    * for real frames. When present it is used instead of `pixelContribution`.
    */
   probePixels?(layer: string, at: PixelPoint, radiusPx: number, budgetMs: number): ProbeResult | Promise<ProbeResult>;
+  /**
+   * Optional, with `queryData`: does the layer's filter let this data feature (`f.layer` is the layer asked) through,
+   * at the current camera? A source holds features that some of its layers never draw (a filter per kind, clusters).
+   * false only when it certainly does not; undefined when it cannot be told (then: as if it did).
+   */
+  filterAdmits?(f: RenderedFeature): boolean | undefined;
   /** Optional, with `overlays`: the element an overlay stands for, looked up the way `overlays()` found it. */
   overlayElement?(o: Overlay): Element | undefined;
 }

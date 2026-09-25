@@ -13,8 +13,22 @@ test.describe('DOM markers and popups', () => {
     await expect(map).not.toHavePopup({ at: { lng: 34.79, lat: 32.095 } }); // alert 2's location
     await expect(await map.popup({ feature: { layer: 'alerts', id: 1 } })).toContainText('Severity: high'); // plain Locator
 
-    const err = await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 2 } }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    const err = await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 2 } }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/popups on the map: "Gas leakSeverity: high" anchored @\(\d+,\d+\)/);
+  });
+
+  // Overlay boxes were measured in scaled client pixels and compared with surface pixels: under scale(0.5) a popup on
+  // its feature was "somewhere else".
+  test('a popup is found at its feature on a map under a CSS transform: scale()', async ({ map, page }) => {
+    await page.addStyleTag({ content: '#map { transform: scale(0.5); transform-origin: 0 0; }' });
+    await page.evaluate(() => (window as any).__geowright_maps.main.resize());
+    await map.waitForIdle();
+    const alert = map.feature({ layer: 'alerts', id: 1 });
+    await alert.click();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
+    await expect(map).toHavePopup({ at: await alert.lngLat(), text: 'Gas leak' });
+    await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 1 } });
+    await expect(map).not.toHavePopup({ at: { lng: 34.79, lat: 32.095 } }); // alert 2's location
   });
 
   // while the camera moves, whether a popup is anchored on its feature cannot be decided — in either polarity

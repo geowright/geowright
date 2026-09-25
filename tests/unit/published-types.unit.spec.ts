@@ -50,6 +50,10 @@ test('@internal members are stripped from the emitted typings; the public API is
     // the published typings refuse `moving` on dragTo / dragBy / lngLat (tests/moving.spec.ts has the @ts-expect-error uses)
     expect(index).toMatch(/type SteadyActionOptions = Omit<ActionOptions, 'moving'> & \{\s*moving\?: never;?\s*\}/);
     for (const m of ['dragTo', 'dragBy', 'lngLat']) expect(index).toMatch(new RegExp(`${m}\\([^)]*opts\\?: SteadyActionOptions`));
+    // … and on every location action
+    for (const m of ['clickAt', 'dblclickAt', 'rightClickAt', 'hoverAt', 'wheelAt', 'dragAt', 'tapAt', 'doubleTapAt', 'touchDragAt', 'pinchAt', 'twoFingerRotateAt']) {
+      expect(index, m).toMatch(new RegExp(`\\b${m}\\([^)]*SteadyActionOptions`));
+    }
   } finally {
     rmSync(out, { recursive: true, force: true });
   }

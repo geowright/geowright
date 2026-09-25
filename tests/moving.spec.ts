@@ -71,6 +71,47 @@ test.describe("moving: 'allow'", () => {
     expect(await page.getByTestId('click-count').textContent()).toBe('0');
   });
 
+  // the location actions took `moving` in their option types and ignored it: an action at a location has no check at
+  // the instant the real event arrives either. Refused the same way — in the typings and at runtime.
+  test("location actions refuse { moving: 'allow' } and send no input", async ({ page }) => {
+    const map = geowright(page);
+    const at = { lng: 34.81, lat: 32.09 };
+    const to = { lng: 34.82, lat: 32.09 };
+    const o = { moving: 'allow', timeout: 2000 } as const;
+    const before = (await map.viewState()).center;
+    const actions: [string, () => Promise<unknown>][] = [
+      // @ts-expect-error — `moving` is not an option of a location action
+      ['clickAt', () => map.clickAt(at, o)],
+      // @ts-expect-error — nor of dblclickAt
+      ['dblclickAt', () => map.dblclickAt(at, o)],
+      // @ts-expect-error — nor of rightClickAt
+      ['rightClickAt', () => map.rightClickAt(at, o)],
+      // @ts-expect-error — nor of hoverAt
+      ['hoverAt', () => map.hoverAt(at, o)],
+      // @ts-expect-error — nor of wheelAt
+      ['wheelAt', () => map.wheelAt(at, -100, o)],
+      // @ts-expect-error — nor of dragAt
+      ['dragAt', () => map.dragAt(at, to, o)],
+      // @ts-expect-error — nor of tapAt
+      ['tapAt', () => map.tapAt(at, o)],
+      // @ts-expect-error — nor of doubleTapAt
+      ['doubleTapAt', () => map.doubleTapAt(at, o)],
+      // @ts-expect-error — nor of touchDragAt
+      ['touchDragAt', () => map.touchDragAt(at, to, o)],
+      // @ts-expect-error — nor of pinchAt
+      ['pinchAt', () => map.pinchAt(at, { scale: 2, ...o })],
+      // @ts-expect-error — nor of twoFingerRotateAt
+      ['twoFingerRotateAt', () => map.twoFingerRotateAt(at, { degrees: 30, ...o })],
+    ];
+    for (const [name, act] of actions) {
+      const err = await act().then(() => null, (e: Error) => e);
+      expect(err?.message, name).toContain(`${name}() does not take { moving: 'allow' }`);
+      expect(err?.message, name).toContain('use click() / tap() / hover()');
+    }
+    expect((await map.viewState()).center, 'no input reached the map').toEqual(before);
+    expect(await page.getByTestId('click-count').textContent()).toBe('0');
+  });
+
   test('a stationary feature next to the route is unaffected by the option', async ({ page }) => {
     const map = geowright(page);
     await map.feature({ layer: 'parked', id: 9 }).click({ moving: 'allow' });

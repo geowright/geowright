@@ -123,7 +123,7 @@ export class Engine<W = unknown> {
     // Not an error HERE — the query that follows reports it (group() refuses such a surface, actionPoint explains it).
     if (this.surfaceProblem()) return;
     if (!this.adapter.queryData || this.hiddenAt(q.at)) return;
-    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    const at = q.at ? this.projectAt(q.at) : undefined;
     const byKey = new Map<string, RenderedFeature[]>();
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
       if (f.id !== undefined) continue;
@@ -138,7 +138,7 @@ export class Engine<W = unknown> {
       const layer = pieces[0].layer;
       if (!data.has(layer)) data.set(layer, (await this.adapter.queryData(layer)) ?? null);
       const props = stableProperties(pieces[0].properties);
-      const n = data.get(layer)?.filter((d) => stableProperties(d.properties) === props).length;
+      const n = data.get(layer)?.filter((d) => stableProperties(d.properties) === props && this.drawnBy(d)).length;
       if (n === 1) this.single.add(k);
       else this.single.delete(k);
     }
@@ -166,6 +166,21 @@ export class Engine<W = unknown> {
     return (c) => this.adapter.project(toWorld(c));
   }
 
+  /**
+   * A LOCATION (a query's `at`, a place to act at) in the same copy of the world as `projector()` picks for geometry:
+   * seen from lng 179.5, lng -179.8 is drawn 0.7° east of the centre, not 359° west. Its pixel, and whether that
+   * pixel shows it (a pitched camera sees the far copy beyond the horizon), are those of this copy.
+   */
+  nearestWorld(at: unknown): W {
+    const { lng, lat } = at as { lng: number; lat: number };
+    const c = [lng, lat];
+    return this.adapter.nearestCopy?.(c)?.(c) ?? (at as W);
+  }
+
+  projectAt(at: unknown): PixelPoint {
+    return this.adapter.project(this.nearestWorld(at));
+  }
+
   /** On-screen bounding box of a piece's geometry. */
   private box(f: RenderedFeature) {
     const b = { x0: Infinity, y0: Infinity, x1: -Infinity, y1: -Infinity };
@@ -184,6 +199,25 @@ export class Engine<W = unknown> {
     const fold = (v: ReturnType<Engine<W>['box']>) => (wrap ? { ...v, x0: v.x0 - Math.floor(v.x0 / wrap) * wrap, x1: v.x1 - Math.floor(v.x0 / wrap) * wrap } : v);
     const p = fold(this.box(a)), q = fold(this.box(b));
     return p.x0 <= q.x1 + TOUCH_PX && q.x0 <= p.x1 + TOUCH_PX && p.y0 <= q.y1 + TOUCH_PX && q.y0 <= p.y1 + TOUCH_PX;
+  }
+
+  /** touch(), for comparing many against many: each feature's on-screen box is computed once. */
+  private toucher(): (a: RenderedFeature, b: RenderedFeature) => boolean {
+    const wrap = this.adapter.wrapPx?.();
+    const boxes = new Map<RenderedFeature, ReturnType<Engine<W>['box']>>();
+    const boxOf = (f: RenderedFeature) => {
+      let v = boxes.get(f);
+      if (!v) {
+        v = this.box(f);
+        if (wrap) v = { ...v, x0: v.x0 - Math.floor(v.x0 / wrap) * wrap, x1: v.x1 - Math.floor(v.x0 / wrap) * wrap };
+        boxes.set(f, v);
+      }
+      return v;
+    };
+    return (a, b) => {
+      const p = boxOf(a), q = boxOf(b);
+      return p.x0 <= q.x1 + TOUCH_PX && q.x0 <= p.x1 + TOUCH_PX && p.y0 <= q.y1 + TOUCH_PX && q.y0 <= p.y1 + TOUCH_PX;
+    };
   }
 
   /** Is this hit a piece of THAT feature? The key decides, plus — for id-less features — touching it. */
@@ -214,7 +248,7 @@ export class Engine<W = unknown> {
    * refused.
    */
   private hiddenAt(at: unknown): boolean {
-    return at !== undefined && this.adapter.isOnSurface?.(at as W) === false;
+    return at !== undefined && this.adapter.isOnSurface?.(this.nearestWorld(at)) === false;
   }
 
   /** Rendered features matching the query, grouped into logical features (pieces merged). Throws when the surface cannot be looked at. */
@@ -224,7 +258,7 @@ export class Engine<W = unknown> {
     for (const v of Object.values(q.where ?? {})) checkWhere(v); // a malformed `where` is an error even where nothing is rendered
     const groups = new Map<string, RenderedFeature[]>();
     if (this.hiddenAt(q.at)) return groups; // what is drawn at that pixel is something else (explain() says so)
-    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    const at = q.at ? this.projectAt(q.at) : undefined;
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
       if (!this.matches(f, q)) continue;
       const k = this.key(f);
@@ -552,7 +586,7 @@ export class Engine<W = unknown> {
     const frame = this.frame();
     const size = this.surfaceSize();
     const marks: DebugMark[] = [];
-    if (q.at) marks.push({ ...toClient(frame, this.adapter.project(q.at as W)), kind: 'target', label: this.hiddenAt(q.at) ? 'at (not on the visible surface)' : 'at' });
+    if (q.at) marks.push({ ...toClient(frame, this.projectAt(q.at)), kind: 'target', label: this.hiddenAt(q.at) ? 'at (not on the visible surface)' : 'at' });
     for (const pieces of [...this.group(q).values()].slice(0, 8)) {
       const ignore = this.ignoring(opts, pieces);
       let labelled = false;
@@ -586,7 +620,7 @@ export class Engine<W = unknown> {
     const toBox = (p: PixelPoint, r: Overlay['rect']) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.width)), Math.max(r.y - p.y, 0, p.y - (r.y + r.height)));
     if (o.at && this.hiddenAt(o.at)) return [];
     if (o.at) {
-      const p = this.adapter.project(o.at as W);
+      const p = this.projectAt(o.at);
       list = list.map((v) => ({ ...v, distance: v.anchor ? Math.hypot(v.anchor.x - p.x, v.anchor.y - p.y) : toBox(p, v.rect) })).filter((v) => v.distance! <= tol);
       list.sort((x, y) => x.distance! - y.distance!);
     }
@@ -616,25 +650,32 @@ export class Engine<W = unknown> {
     const f = groups[0][0];
     const data = await this.adapter.queryData?.(f.layer);
     const props = stableProperties(f.properties);
-    const sameProps = data?.filter((d) => stableProperties(d.properties) === props) ?? [];
-    const hit = sameProps.length === 1 ? sameProps[0] : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && String(d.id) === String(f.id));
+    // a data feature the layer's filter leaves out is not the one it drew (asked last: it is the costly test)
+    const sameProps = data?.filter((d) => stableProperties(d.properties) === props && this.drawnBy(d)) ?? [];
+    const hit = sameProps.length === 1 ? sameProps[0] : (sameProps.length ? sameProps : data ?? []).find((d) => d.id !== undefined && String(d.id) === String(f.id) && this.drawnBy(d));
     if (hit) return { ok: true, geometry: hit.geometry, from: 'data' };
     return { ok: true, geometry: f.geometry, from: 'rendered' };
   }
 
-  /** Compare in PIXELS (what a user sees, and zoom-independent to reason about), vertex by vertex. */
+  /**
+   * Compare in PIXELS (what a user sees, and zoom-independent to reason about), vertex by vertex. Actual and expected
+   * are projected by the same rule, `projector()`: each part in the copy of the world nearest the view, so a shape just
+   * across the antimeridian is compared where it is drawn, whichever copy its coordinates are written in.
+   */
   async compareGeometry(q: FeatureQuery, expected: GeometryExpectation, tolerancePx: number): Promise<GeometryVerdict> {
     const g = await this.geometry(q);
     if (!g.ok) return { ok: false, reason: g.message };
-    const px = (c: number[]) => this.adapter.project(this.adapter.worldFromCoord(c));
     const base = { actual: g.geometry, from: g.from };
     const clipped = g.from === 'rendered' ? ' (NOTE: compared against RENDERED geometry, which may be clipped at tile borders — the source cannot return its data)' : '';
     if ('circle' in expected) {
       const parts = explode(g.geometry);
       if (parts.length !== 1 || parts[0].kind !== 'polygon') return { ok: false, reason: `expected a circle polygon, got ${g.geometry.type}`, ...base };
-      const c = this.adapter.project(expected.circle.center as W);
-      const e = this.adapter.project(expected.circle.edge as W);
+      const { center, edge } = expected.circle;
+      const around = this.projector({ kind: 'line', coords: [[center.lng, center.lat], [edge.lng, edge.lat]] }); // the edge in the centre's copy
+      const c = around([center.lng, center.lat]);
+      const e = around([edge.lng, edge.lat]);
       const r = Math.hypot(e.x - c.x, e.y - c.y);
+      const px = this.projector(parts[0]);
       const worst = Math.max(...parts[0].rings[0].map((v) => Math.abs(Math.hypot(px(v).x - c.x, px(v).y - c.y) - r)));
       return worst <= tolerancePx ? { ok: true, ...base } : { ok: false, reason: `a vertex is ${worst.toFixed(1)}px off the expected circle of radius ${r.toFixed(1)}px (tolerance ${tolerancePx}px)${clipped}`, ...base };
     }
@@ -643,10 +684,11 @@ export class Engine<W = unknown> {
     if (A.length !== E.length) return { ok: false, reason: `${A.length} part(s), expected ${E.length}${clipped}`, ...base };
     for (let i = 0; i < E.length; i++) {
       const a = A[i], e = E[i];
+      const pa = this.projector(a), pe = this.projector(e);
       const seqs: [PixelPoint[], PixelPoint[], boolean][] =
-        a.kind === 'point' && e.kind === 'point' ? [[[px(a.coord)], [px(e.coord)], false]]
-        : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(px), e.coords.map(px), false]]
-        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(px), openRing(e.rings[k]).map(px), true] as [PixelPoint[], PixelPoint[], boolean]) : [])
+        a.kind === 'point' && e.kind === 'point' ? [[[pa(a.coord)], [pe(e.coord)], false]]
+        : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(pa), e.coords.map(pe), false]]
+        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(pa), openRing(e.rings[k]).map(pe), true] as [PixelPoint[], PixelPoint[], boolean]) : [])
         : [];
       if (!seqs.length) return { ok: false, reason: `part ${i}: ring count or kind differs${clipped}`, ...base };
       for (const [act, exp, cyclic] of seqs) {
@@ -695,8 +737,9 @@ export class Engine<W = unknown> {
       verdict.fired = true;
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
-      if (me.target !== surface && !isMirrorNode(me.target)) {
-        verdict.reason = `pointer event landed on ${describeEl(me.target as Element)}, not the map canvas`;
+      const landed = eventTarget(e);
+      if (landed !== surface && !isMirrorNode(landed)) {
+        verdict.reason = `pointer event landed on ${describeEl(landed as Element)}, not the map canvas`;
       } else {
         const at = toSurface(clientFrame(surface), { x: me.clientX, y: me.clientY });
         const miss = this.verifyAt(at, q, opts, target);
@@ -749,8 +792,9 @@ export class Engine<W = unknown> {
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
       verdict.ok = false;
-      if (me.target !== surface && !isMirrorNode(me.target)) {
-        verdict.reason = `the pointer is over ${describeEl(me.target as Element)}, not the map canvas`;
+      const landed = eventTarget(e);
+      if (landed !== surface && !isMirrorNode(landed)) {
+        verdict.reason = `the pointer is over ${describeEl(landed as Element)}, not the map canvas`;
         return;
       }
       const at = toSurface(clientFrame(surface), { x: me.clientX, y: me.clientY });
@@ -877,8 +921,17 @@ export class Engine<W = unknown> {
         );
       }
       if (data) {
-        const offscreen = data.filter((f) => this.matches(f, q, false));
-        if (offscreen.length && !this.find(q).length) {
+        const matching = data.filter((f) => this.matches(f, q, false));
+        const found = matching.length > 0 && this.find(q).length > 0;
+        const filtered = found ? [] : matching.filter((f) => !this.drawnBy(f));
+        if (filtered.length) {
+          lines.push(
+            `  ${filtered.length} matching feature(s) exist in the source but the layer's filter leaves them out: layer "${id}" never draws them, wherever the camera is: ` +
+              filtered.slice(0, 3).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; '),
+          );
+        }
+        const offscreen = matching.filter((f) => this.drawnBy(f));
+        if (offscreen.length && !found) {
           lines.push(
             `  ${offscreen.length} matching feature(s) exist in the source but are not rendered ` +
               `(off-screen, hidden layer, filtered out${info.type === 'symbol' ? ', or hidden by label/icon collision' : ''}): ` +
@@ -890,7 +943,7 @@ export class Engine<W = unknown> {
       }
     }
     if (q.at) {
-      const at = this.adapter.project(q.at as W);
+      const at = this.projectAt(q.at);
       const under = this.adapter.queryFeatures({ at });
       const shown = (n: number) => under.slice(0, n).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; ');
       lines.push(
@@ -927,7 +980,7 @@ export class Engine<W = unknown> {
     const filterLayers = o.filter && this.layersOf(o.filter);
     for (const v of Object.values(o.filter?.where ?? {})) checkWhere(v);
     // filter.at: only entities drawn AT that location (the hit test there), and none at a location that is not on the visible surface
-    const filterAt = o.filter?.at === undefined ? undefined : this.hiddenAt(o.filter.at) ? [] : a.queryFeatures({ layers: filterLayers, at: a.project(o.filter.at as W) });
+    const filterAt = o.filter?.at === undefined ? undefined : this.hiddenAt(o.filter.at) ? [] : a.queryFeatures({ layers: filterLayers, at: this.projectAt(o.filter.at) });
     const size = this.surfaceSize();
     const centre = { x: size.w / 2, y: size.h / 2 };
     const found = new Map<string, Collected>();
@@ -975,13 +1028,15 @@ export class Engine<W = unknown> {
     // Candidates come from the GEOMETRY; what is hit-tested is what is DRAWN. They differ for a label placed
     // along a line, an icon with an offset, or a symbol hidden by collision at the pixels we tried.
     let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
-    // whole client pixels, exactly as actionPointOnce() tries them: what the snapshot lists as clickable is what click() uses
+    // whole client pixels, snapped exactly as actionPointOnce() snaps them: what the snapshot lists as clickable is what
+    // click() uses. But fewer of them — the 40 best candidates (at most 200 pixels) against click()'s MAX_TRIES — as this
+    // runs for every listed entity: one almost entirely covered may be listed as covered and still be clickable.
     for (const c of wholePixels((e.cands ?? []).slice(0, 40), frame)) {
       const hits = this.adapter.queryFeatures({ at: c });
       const all = [...e.byLayer.values()].flat();
       if (!hits.some((h) => this.sameEntity(h, all))) continue;
       const client = toClient(frame, c);
-      const el = document.elementsFromPoint(client.x, client.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
+      const el = topElementAt(client.x, client.y, ignoreDom);
       const top = this.topVisible(hits)!;
       if (this.sameEntity(top, all) && el === surface) return { pixel: round(c) };
       coveredPixel ??= round(c);
@@ -1120,7 +1175,8 @@ export class Engine<W = unknown> {
     };
     // Raster, hillshade, heatmap... draw pixels, not features: "empty" would be a lie about them.
     const pixelOnly = visible.filter((l) => PIXEL_ONLY.has(l.type));
-    const empty = visible.filter((l) => !drawn.has(l.id) && l.source && !PIXEL_ONLY.has(l.type));
+    // A layer left out by `layers` / `skipLayers` was not looked at: it is not "empty", it is not in the snapshot.
+    const empty = visible.filter((l) => !drawn.has(l.id) && l.source && !PIXEL_ONLY.has(l.type) && !skip.has(l.id) && (!only || only.has(l.id)));
     const top = out.splice(0);
     const header = (condense: boolean): string[] => [
       ...top,
@@ -1213,8 +1269,19 @@ export class Engine<W = unknown> {
       const renderedIds = new Set(rendered.map((f) => this.entityKey(f)));
       // The renderer's id is not the data's when the data id is not a number: MapLibre renders a string id (terra-draw's
       // UUIDs) as a coerced number, and gives id-less features generated ones. Those are matched by their properties.
-      const renderedProps = new Set(rendered.map((f) => stableProperties(f.properties)));
-      const isDrawn = (f: RenderedFeature) => renderedIds.has(this.entityKey({ ...f, source: l.source })) || (typeof f.id !== 'number' && renderedProps.has(stableProperties(f.properties)));
+      const renderedProps = new Map<string, RenderedFeature[]>();
+      for (const f of rendered) renderedProps.set(stableProperties(f.properties), [...(renderedProps.get(stableProperties(f.properties)) ?? []), f]);
+      // Look-alikes: data features without a (numeric) id and with the same properties. The rendered pieces of ONE of
+      // them match ALL of them by key, so for those a data feature counts as drawn only if a rendered look-alike piece
+      // touches it on screen — the same rule that splits id-less look-alikes everywhere else (split()).
+      const lookAlikes = new Map<string, number>();
+      for (const f of data) if (typeof f.id !== 'number') lookAlikes.set(stableProperties(f.properties), (lookAlikes.get(stableProperties(f.properties)) ?? 0) + 1);
+      const touching = this.toucher();
+      const isDrawn = (f: RenderedFeature) => {
+        const props = stableProperties(f.properties);
+        if (typeof f.id !== 'number' && (lookAlikes.get(props) ?? 0) > 1) return (renderedProps.get(props) ?? []).some((p) => touching(f, p));
+        return renderedIds.has(this.entityKey({ ...f, source: l.source })) || (typeof f.id !== 'number' && renderedProps.has(props));
+      };
       // a filter `at` a location asks what is drawn there: nothing elsewhere matches it
       const off = data.filter((f) => !isDrawn(f) && (!o.filter || (o.filter.at === undefined && this.matches(f, o.filter, false))));
       if (!off.length || view.center === undefined) continue;
@@ -1295,7 +1362,7 @@ export class Engine<W = unknown> {
     if (!this.adapter.reveal || !this.adapter.queryData) return false;
     for (const id of this.layersOf(q) ?? []) {
       const data = await this.adapter.queryData(id);
-      const hit = data?.find((f) => this.matches(f, q, false));
+      const hit = data?.find((f) => this.matches(f, q, false) && this.drawnBy(f));
       if (!hit) continue;
       const first = explode(hit.geometry)[0];
       const coords = first.kind === 'point' ? [first.coord] : first.kind === 'line' ? first.coords : first.rings[0];
@@ -1304,6 +1371,15 @@ export class Engine<W = unknown> {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Can the layer of this DATA feature (queryData tags each with the layer asked) draw it at all — does its filter let
+   * it through? For per-layer questions only (where to pan to, which data feature a rendered one is): a SOURCE-level
+   * question (what a source holds that is not drawn) must not apply one layer's filter to the whole source.
+   */
+  private drawnBy(f: RenderedFeature): boolean {
+    return this.adapter.filterAdmits?.(f) !== false;
   }
 }
 
@@ -1547,12 +1623,25 @@ function trackPresses(): void {
   window.addEventListener('pointerdown', () => ((press.previousSwallowed = press.lastSwallowed), (press.lastSwallowed = false)), true);
 }
 
-export function topElementAt(x: number, y: number): Element | null {
-  for (const el of document.elementsFromPoint(x, y)) {
-    if (!el.closest('[data-geowright-mirror]')) return el;
+/**
+ * The element a pointer at this client pixel lands on. The document answers with a shadow HOST for anything inside its
+ * shadow root (a map in a web component): an OPEN root is asked in turn, down to the element itself. A closed root
+ * cannot be looked into — the host is the answer then. `skip`: elements that do not count (the snapshot's ignoreDom).
+ */
+export function topElementAt(x: number, y: number, skip?: (e: Element) => boolean): Element | null {
+  let root: Document | ShadowRoot = document;
+  let top: Element | null = null;
+  for (;;) {
+    const el: Element | undefined = root.elementsFromPoint(x, y).find((e) => !e.closest('[data-geowright-mirror]') && !skip?.(e));
+    if (!el || el === top) return top ?? el ?? null;
+    top = el;
+    if (!el.shadowRoot) return el;
+    root = el.shadowRoot;
   }
-  return null;
 }
+
+/** Where an event really happened: a listener on `window` sees an event from inside a shadow root retargeted to its host. */
+const eventTarget = (e: Event): EventTarget | null => e.composedPath?.()[0] ?? e.target;
 
 const isMirrorNode = (el: EventTarget | null) => el instanceof Element && !!el.closest('[data-geowright-mirror]');
 
@@ -1664,12 +1753,12 @@ export function describeBranch(b: StyleBranch): string {
 
 /** "fill-opacity is 0 because the match on ["get","kind"] took its fallback for kind="park"" — without the zoom. */
 function describeValue(c: StyleCause): string {
-  const what = `${c.property} is ${fmtJson(c.value)}`;
+  const what = `${c.property} is ${fmtJson(c.value)}${c.tileZoom !== undefined ? `, drawn from tiles of zoom ${c.tileZoom}` : ''}`;
   if (c.origin === 'default') return `${what} (not set in the style: the default)`;
   if (c.origin === 'constant') return `${what} (a constant in the style)`;
   const kind = c.origin === 'function' ? 'legacy function' : 'expression';
   if (!c.branches.length) return `${what} (an ${kind}; which of its branches produced this cannot be traced)`;
-  return `${what} because ${c.origin === 'function' ? 'its legacy function, read as an expression: ' : ''}${c.branches.map(describeBranch).join(', then ')}`;
+  return `${what}${c.tileZoom !== undefined ? ',' : ''} because ${c.origin === 'function' ? 'its legacy function, read as an expression: ' : ''}${c.branches.map(describeBranch).join(', then ')}`;
 }
 
 /** Why one feature is painted invisibly: every cause, and the zoom once. */
