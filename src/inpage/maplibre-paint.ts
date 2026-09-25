@@ -2,6 +2,7 @@ import {
   Color,
   createVisibilityExpression,
   expression as styleExpression,
+  featureFilter,
   function as styleFunction,
   latest,
   normalizePropertyExpression,
@@ -206,7 +207,12 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
     }
     return out;
   };
-  return { type, value, elsewhere, expression, globalState, feature };
+  /** For a zoom-and-data paint property: the tile zoom its value was evaluated at (and the next one, blended). */
+  const tileZoomOf = (group: 'paint' | 'layout', name: string): number | undefined => {
+    const expr = expression(group, name);
+    return expr && isComposite(group, expr) ? (tiles ??= tileZoom(map, layer.source)).z : undefined;
+  };
+  return { type, value, elsewhere, expression, tileZoomOf, globalState, feature };
 }
 
 /**
@@ -495,8 +501,11 @@ function explainValue(map: MlMap, f: RenderedFeature, ev: ReturnType<typeof eval
       return { ...cause, origin: 'function' };
     }
   }
-  const ctx: Ctx = { propSpec, globalState: ev.globalState, globals: { zoom }, feature: ev.feature, state: f.state ?? {} };
-  return { ...cause, origin: isFn ? 'function' : 'expression', branches: value === undefined ? [] : attribute(json, value, ctx) };
+  // A zoom-and-data value is drawn from tiles of zoom z (see tileZoom): traced there, not at the camera zoom, where its
+  // branches would not produce it (attribute() checks every branch against the value, so it would name none).
+  const tileZ = ev.tileZoomOf(group, name);
+  const ctx: Ctx = { propSpec, globalState: ev.globalState, globals: { zoom: tileZ ?? zoom }, feature: ev.feature, state: f.state ?? {} };
+  return { ...cause, origin: isFn ? 'function' : 'expression', ...(tileZ === undefined ? {} : { tileZoom: tileZ }), branches: value === undefined ? [] : attribute(json, value, ctx) };
 }
 
 /**
@@ -548,6 +557,51 @@ export function explainLayerHidden(map: MlMap, layerId: string): StyleCause[] {
     out.push({ ...base, group: 'layout', property: 'visibility', value, origin: 'expression', branches: attribute(raw, value, ctx) });
   }
   return out;
+}
+
+const filters = new Map<string, ReturnType<typeof featureFilter> | null>();
+
+/**
+ * Does the layer's `filter` let this DATA feature (from queryData) through? MapLibre applies it per tile, at the tile's
+ * zoom, so that is where it is evaluated here too (see tileZoom); where tile zooms vary across the view, it is "no" only
+ * if no tile zoom lets it through. Undefined when it cannot be told: a filter the bundled evaluator cannot compile, or
+ * one that needs the tile geometry (`within`, `distance`). Never a false "no".
+ */
+export function filterAdmits(map: MlMap, f: RenderedFeature): boolean | undefined {
+  const layer = map.getLayer(f.layer);
+  if (!layer) return undefined;
+  let raw: unknown;
+  try {
+    raw = map.getFilter(f.layer);
+  } catch {
+    return undefined;
+  }
+  if (raw === undefined || raw === null) return true;
+  let globalState: Record<string, unknown> = {};
+  try {
+    globalState = map.getGlobalState?.() ?? {};
+  } catch {
+    /* older MapLibre: no global state */
+  }
+  const key = `${JSON.stringify(raw)}|${JSON.stringify(globalState)}`;
+  let compiled = filters.get(key);
+  if (compiled === undefined) {
+    try {
+      compiled = featureFilter(raw as any, `layers.${f.layer}.filter`, globalState);
+    } catch {
+      compiled = null;
+    }
+    filters.set(key, compiled);
+  }
+  if (!compiled || compiled.needGeometry) return undefined;
+  const feature = { type: GEOM_TYPE[f.geometry.type] ?? 1, id: f.id, properties: f.properties };
+  const t = tileZoom(map, layer.source);
+  const zooms = t.varies ? Array.from({ length: Math.min(24, t.z + 4) + 1 }, (_, z) => z) : [t.z];
+  try {
+    return zooms.some((zoom) => compiled!.filter({ zoom } as any, feature as any));
+  } catch {
+    return undefined;
+  }
 }
 
 /** Is this evaluated icon-image an SDF image of the style? `map.getImage` is feature-detected (not in Mapbox GL 1). */

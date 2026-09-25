@@ -30,6 +30,27 @@ test.describe('map snapshot (agent layer)', () => {
     expect(skipped).not.toMatch(/\[parcels(-outline)?\]/);
     expect(skipped).not.toMatch(/#105 Polygon/);
     expect(skipped).toMatch(/\[alerts\] 3 circle entities/);
+    // a layer that was not looked at is not "empty": it is simply not in the snapshot (it used to be listed as empty)
+    expect(skipped).not.toMatch(/visible but empty in this view: .*parcels/);
+    const only = await map.snapshot({ layers: ['alerts'] });
+    expect(only).toMatch(/\[alerts\] 3 circle entities/);
+    expect(only).not.toMatch(/visible but empty in this view: .*(parcels|roads)/);
+  });
+
+  // Identity is id + properties; id-less look-alikes are told apart by where they are drawn. Two id-less data features
+  // with the same properties, one drawn and one far outside the view, used to both count as drawn.
+  test('an id-less look-alike outside the view is listed as outside, although its twin is drawn', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const pt = (lng: number, lat: number) => ({ type: 'Feature', properties: { kind: 'twin' }, geometry: { type: 'Point', coordinates: [lng, lat] } });
+      m.addSource('twins', { type: 'geojson', data: { type: 'FeatureCollection', features: [pt(34.77, 32.075), pt(35.3, 32.075)] } });
+      m.addLayer({ id: 'twins', type: 'circle', source: 'twins', paint: { 'circle-radius': 6, 'circle-color': '#000' } });
+    });
+    await map.waitForIdle();
+    const snap = await map.snapshot();
+    expect(snap).toMatch(/\[twins\] 1 circle entity/);
+    expect(snap).toContain('[source twins] 1 feature(s) OUTSIDE the viewport');
+    expect(snap).not.toContain('[source twins] 1 feature(s) are inside the view but not drawn individually');
   });
 
   test('the calls agent/MAP_SKILL.md tells an agent to make work as written', async ({ map, page }) => {

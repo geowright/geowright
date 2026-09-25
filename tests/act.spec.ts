@@ -83,6 +83,18 @@ test.describe('act gap', () => {
     await expect(map).toHaveView({ center: { lng: 35.2, lat: 32.08 } });
   });
 
+  // The source holds the feature, but the layer's filter never draws it: autoPan used to jump the camera to it anyway.
+  test("autoPan does not pan to a feature the layer's filter never draws", async ({ map, page }) => {
+    await page.getByTestId('toggle-sensors').check();
+    await map.waitForIdle();
+    const before = (await map.viewState()).center;
+    const ghost = map.feature({ layer: 'sensors', id: 504 }); // kind "ghost": the sensors layer's filter leaves it out
+    const err = await ghost.click({ timeout: FAIL_FAST_MS, autoPan: true }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('not-found');
+    expect(err?.message).toContain("the layer's filter leaves them out");
+    expect((await map.viewState()).center).toEqual(before);
+  });
+
   test('strictness: ambiguous query is an error, like a Playwright locator', async ({ map }) => {
     const err = await map.feature({ layer: 'parcels' }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toContain('strict mode violation');

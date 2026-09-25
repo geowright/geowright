@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { describeLayerHidden, describeStyleCauses, nameColour, tally } from '../../src/inpage/engine';
-import { explainLayerHidden, explainPaint, paintColour, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
+import { explainLayerHidden, explainPaint, filterAdmits, paintColour, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
 import type { RenderedFeature } from '../../src/inpage/types';
 
 /** Just enough of maplibregl.Map for the paint evaluator: one layer, its paint/layout, a zoom. */
@@ -213,6 +213,17 @@ test.describe('zoom-and-data paint is judged as the renderer draws it', () => {
     expect(paintColour(colour, feature({ c: '#ff0000' }))?.colour).toBe('#ff0000');
   });
 
+  test('why invisible traces a zoom-and-data expression at the tile zoom it is drawn from, not the camera zoom', () => {
+    const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.7 });
+    expect(describeStyleCauses(explainPaint(map, feature({ o: 1 })))).toBe(
+      'at zoom 11.7: circle-opacity is 0, drawn from tiles of zoom 11, because the step on zoom used its base output (zoom 11 is below its first stop, 11.5); and circle-stroke-width is 0 (not set in the style: the default)',
+    );
+    // blended strictly between two tile zooms: no single branch — property and value only, never a wrong branch
+    const blended = fakeMap('circle', { 'circle-radius': ['interpolate', ['linear'], ['zoom'], 11, ['*', ['get', 'r'], 0], 12, ['*', ['get', 'r'], -1]] }, {}, { zoom: 11.5 });
+    expect(explainPaint(blended, feature({ r: 1 }))[0]).toMatchObject({ property: 'circle-radius', tileZoom: 11, branches: [] });
+    expect(describeStyleCauses(explainPaint(blended, feature({ r: 1 })))).toContain('circle-radius is -0.5, drawn from tiles of zoom 11 (an expression; which of its branches produced this cannot be traced)');
+  });
+
   test('a 256-pixel tile source is one tile zoom deeper', () => {
     const map = fakeMap('circle', { 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] }, {}, { zoom: 11.2, tileSize: 256 });
     expect(paintVisibility(map, feature({ o: 1 })).visible).toBe(true); // tile zoom 12
@@ -253,3 +264,21 @@ test.describe('outline and SDF icons', () => {
   });
 });
 
+/** autoPan and full geometry read the SOURCE: a feature the layer's filter leaves out is never drawn by that layer. */
+test.describe("filterAdmits: does the layer's filter let a data feature through", () => {
+  const withFilter = (filter: unknown, zoom = 10) => ({ ...fakeMap('circle', {}, {}, { zoom }), getFilter: () => filter });
+  test('expression and legacy filters; no filter lets everything through', () => {
+    expect(filterAdmits(withFilter(['!=', ['get', 'kind'], 'ghost']), feature({ kind: 'ghost' }))).toBe(false);
+    expect(filterAdmits(withFilter(['!=', ['get', 'kind'], 'ghost']), feature({ kind: 'probe' }))).toBe(true);
+    expect(filterAdmits(withFilter(['==', 'kind', 'ghost']), feature({ kind: 'probe' }))).toBe(false); // legacy syntax
+    expect(filterAdmits(withFilter(undefined), feature({}))).toBe(true);
+  });
+
+  test('zoom is the tile zoom; what cannot be evaluated is "cannot tell", never "no"', () => {
+    expect(filterAdmits(withFilter(['>=', ['zoom'], 10.5], 10.7), feature({}))).toBe(false); // tile zoom 10
+    expect(filterAdmits(withFilter(['>=', ['zoom'], 10.5], 11.2), feature({}))).toBe(true);
+    const area = { type: 'Polygon', coordinates: [[[0, 0], [1, 0], [1, 1], [0, 1], [0, 0]]] };
+    expect(filterAdmits(withFilter(['within', area]), feature({}))).toBeUndefined();
+    expect(filterAdmits(withFilter(['frobnicate-from-the-future', 1]), feature({}))).toBeUndefined();
+  });
+});
