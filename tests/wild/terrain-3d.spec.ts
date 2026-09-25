@@ -1,5 +1,6 @@
 import { example, expect, rasterTiles, test, type Routes } from './harness';
 import { syntheticTerrain } from './terrain';
+import { FAIL_FAST_MS } from '../slow-machine';
 
 // MapLibre example "3D Terrain": raster basemap + hillshade + terrain, pitch 70°. No vector features at
 // all — what a team can test here is the camera, the controls, and that LOCATIONS still mean what they say
@@ -32,7 +33,7 @@ test.describe('wild: 3d-terrain', () => {
 
   test('a location hidden BEHIND the ridge is refused, not clicked through the mountain', async ({ wild }) => {
     const map = await wild.open(example('3d-terrain'), { routes, options: SLOW });
-    const err = await map.clickAt(north(8), { timeout: 1500 }).then(() => null, (e: Error) => e);
+    const err = await map.clickAt(north(8), { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/not on the visible map surface/);
   });
 

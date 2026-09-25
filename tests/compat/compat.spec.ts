@@ -3,6 +3,7 @@ import { geowright, expect, type MapHandle } from '../../src/playwright';
 import { routeVectorTiles } from '../../src/playwright/tiles';
 import { guardNetwork } from '../fixtures';
 import { LIBS } from './libs';
+import { FAIL_FAST_MS } from '../slow-machine';
 
 /**
  * The version matrix: the SAME page and the SAME specs against every MapLibre / Mapbox-GL-v1-API major.
@@ -57,7 +58,7 @@ for (const lib of LIBS) {
 
     test('occlusion: a point under a polygon is refused, and says what covers it', async ({ map, page }) => {
       const echo = map.feature({ layer: 'places', where: { name: 'Echo' } });
-      const err = await echo.click({ timeout: 1500 }).then(() => null, (e: Error) => e);
+      const err = await echo.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
       expect(err?.message).toContain('occluded');
       expect(err?.message).toContain('cover');
       await echo.click({ force: true });
@@ -69,7 +70,7 @@ for (const lib of LIBS) {
       await expect(map).toHaveFeature({ layer: 'ghosts' }, { visible: 'any' });
       await expect(map.feature({ layer: 'ghosts', visible: 'any' })).not.toBeVisibleOnMap();
       await expect(map.feature({ layer: 'places', id: 1 })).toBeVisibleOnMap();
-      const err = await map.feature({ layer: 'ghosts' }).click({ timeout: 1000 }).then(() => null, (e: Error) => e);
+      const err = await map.feature({ layer: 'ghosts' }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
       expect(err?.message).toContain('circle-opacity');
     });
 
@@ -167,7 +168,7 @@ for (const lib of LIBS) {
     test('source data: off-screen features are known, named in failures, and reachable with autoPan', async ({ map, page }) => {
       // GeoJSONSource.getData() is MapLibre >= 4; below that the adapter reads the data back through serialize().
       const golf = map.feature({ layer: 'places', where: { name: 'Golf' } });
-      const err = await golf.click({ timeout: 1000 }).then(() => null, (e: Error) => e);
+      const err = await golf.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
       expect(err?.message).toContain('exist in the source but are not rendered');
       expect(await map.snapshot()).toMatch(/1 feature\(s\) OUTSIDE the viewport .*#7 to the north-east/);
       await golf.click({ autoPan: true });
@@ -188,7 +189,7 @@ for (const lib of LIBS) {
       await expect(map).toHaveFeature({ layer: 'url-places', where: { name: 'Hotel' } });
       await map.waitForIdle();
       const india = map.feature({ layer: 'url-places', where: { name: 'India' } });
-      const err = await india.click({ timeout: 1000 }).then(() => null, (e: Error) => e);
+      const err = await india.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
       const snap = await map.snapshot();
       const note = 'source(s) url-places: this map library version has no GeoJSONSource.getData() and the source was given a URL — features outside the viewport and full geometries are unknowable';
       if (getData) {

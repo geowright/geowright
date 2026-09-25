@@ -345,7 +345,7 @@ test.describe('act gap', () => {
       m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 } }); // on top of everything
     });
     await expect(map).toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 1500 }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e, 'geowright clicked alert 1 although an opaque image layer covers the whole map').not.toBeNull();
   });
 
