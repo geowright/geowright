@@ -22,6 +22,6 @@ base('two maps on one page are addressed independently', async ({ page }) => {
   const err = await right.clickAt({ lng: 34.78, lat: 32.08 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
   expect(err?.message).toContain('outside the viewport');
 
-  const unknown = await geowright(page, { mapId: 'middle', timeout: 500 }).waitForIdle().then(() => null, (e: Error) => e);
+  const unknown = await geowright(page, { mapId: 'middle', timeout: FAIL_FAST_MS }).waitForIdle().then(() => null, (e: Error) => e);
   expect(unknown?.message).toContain('no map registered as "middle" (registered: left, right)');
 });

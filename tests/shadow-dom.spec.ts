@@ -16,3 +16,13 @@ test('a feature of a map inside an open shadow root is clicked', async ({ page }
   await map.clickAt(await map.feature({ layer: 'sites', id: 1 }).lngLat(), { timeout: 5000 });
   await expect(page.getByTestId('last-click')).toHaveText('Depot');
 });
+
+test('the snapshot of a map inside an open shadow root lists its features as clickable, not covered by the host', async ({ page }) => {
+  await page.goto('/shadow.html');
+  const map = geowright(page);
+  await map.waitForIdle();
+  const snap = await map.snapshot();
+  expect(snap).not.toContain('covered-by-dom');
+  expect(snap).toMatch(/#1 Point @\(\d+,\d+\)/);
+  expect(snap).toMatch(/#2 Point @\(\d+,\d+\)/);
+});

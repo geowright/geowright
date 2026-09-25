@@ -13,7 +13,7 @@ test.describe('DOM markers and popups', () => {
     await expect(map).not.toHavePopup({ at: { lng: 34.79, lat: 32.095 } }); // alert 2's location
     await expect(await map.popup({ feature: { layer: 'alerts', id: 1 } })).toContainText('Severity: high'); // plain Locator
 
-    const err = await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 2 } }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    const err = await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 2 } }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/popups on the map: "Gas leakSeverity: high" anchored @\(\d+,\d+\)/);
   });
 

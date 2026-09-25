@@ -240,7 +240,8 @@ export interface ActionPointOptions {
    * is the verification at the instant the real event arrives: if the target is no longer under the pointer by
    * then, a click or tap is swallowed before the app sees it, and a hover — which cannot be taken back — is
    * detected as a miss; either way the action tries again. It can take several attempts; a click or tap never
-   * lands on the wrong thing. `dragTo`, `dragBy` and `lngLat` have no such check and refuse the option.
+   * lands on the wrong thing. `dragTo`, `dragBy`, `lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`, …)
+   * have no such check and refuse the option.
    */
   moving?: 'allow';
   /** @internal with `moving`: aim this many ms ahead along the target's measured velocity (learnt from misses). */

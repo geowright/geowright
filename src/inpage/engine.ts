@@ -1036,7 +1036,7 @@ export class Engine<W = unknown> {
       const all = [...e.byLayer.values()].flat();
       if (!hits.some((h) => this.sameEntity(h, all))) continue;
       const client = toClient(frame, c);
-      const el = document.elementsFromPoint(client.x, client.y).find((x) => !x.closest('[data-geowright-mirror]') && !ignoreDom?.(x));
+      const el = topElementAt(client.x, client.y, ignoreDom);
       const top = this.topVisible(hits)!;
       if (this.sameEntity(top, all) && el === surface) return { pixel: round(c) };
       coveredPixel ??= round(c);
@@ -1626,13 +1626,13 @@ function trackPresses(): void {
 /**
  * The element a pointer at this client pixel lands on. The document answers with a shadow HOST for anything inside its
  * shadow root (a map in a web component): an OPEN root is asked in turn, down to the element itself. A closed root
- * cannot be looked into — the host is the answer then.
+ * cannot be looked into — the host is the answer then. `skip`: elements that do not count (the snapshot's ignoreDom).
  */
-export function topElementAt(x: number, y: number): Element | null {
+export function topElementAt(x: number, y: number, skip?: (e: Element) => boolean): Element | null {
   let root: Document | ShadowRoot = document;
   let top: Element | null = null;
   for (;;) {
-    const el: Element | undefined = root.elementsFromPoint(x, y).find((e) => !e.closest('[data-geowright-mirror]'));
+    const el: Element | undefined = root.elementsFromPoint(x, y).find((e) => !e.closest('[data-geowright-mirror]') && !skip?.(e));
     if (!el || el === top) return top ?? el ?? null;
     top = el;
     if (!el.shadowRoot) return el;

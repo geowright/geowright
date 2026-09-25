@@ -131,8 +131,8 @@ is id + properties, and id-less look-alikes are told apart by where they are dra
 
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map; never the target's own layer), `{ autoPan: true }`, `{ timeout }`, and
 `{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
-arrives late is swallowed before the app sees it — it can time out, it never clicks the wrong thing; `dragTo`, `dragBy`
-and `lngLat` have no such check and refuse the option). The reasoning and the measurements:
+arrives late is swallowed before the app sees it — it can time out, it never clicks the wrong thing; `dragTo`, `dragBy`,
+`lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`…) have no such check and refuse the option). The reasoning and the measurements:
 [DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
 
 ### When something fails, it says what WAS on the map
@@ -244,7 +244,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 
 `FeatureSetHandle` (`map.features(q)`): `all()`, `count()` — snapshots, no waiting (a removed or 0×0 map is an error, not 0).
 
-Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visible` (default true; `false`; `'any'`). Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `moving: 'allow'` (clicks, `tap`, `hover` on targets that never stop moving) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
+Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visible` (default true; `false`; `'any'`). Action options: `timeout` · `force` (skip occlusion + visibility checks) · `ignoreLayers` · `autoPan` (`true` | `{ lng, lat }`) · `moving: 'allow'` (feature `click`/`rightClick`/`dblclick`, `tap`, `hover` on targets that never stop moving; refused by `dragTo`, `dragBy`, `lngLat` and every location action such as `clickAt` or `tapAt`) · `modifiers` (`Shift` `Control` `Alt` `Meta`) · clicks also `button`, `clickCount`.
 
 | Matcher (all retry; `.not` supported) | |
 |---|---|

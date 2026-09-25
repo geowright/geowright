@@ -33,7 +33,7 @@ test.describe('failures explain invisibility', () => {
   test('data-driven: the match on a property took its fallback', async ({ map, page }) => {
     await addLayer(page, { type: 'fill', paint: { 'fill-color': '#2e7d32', 'fill-opacity': ['match', ['get', 'kind'], 'forest', 0.7, 0] } });
     await expect(map.feature({ layer: 'why', id: 2 })).toBeVisibleOnMap({ pixels: false });
-    const msg = await failure(expect(map.feature({ layer: 'why', id: 1 })).toBeVisibleOnMap({ timeout: 800 }));
+    const msg = await failure(expect(map.feature({ layer: 'why', id: 1 })).toBeVisibleOnMap({ timeout: FAIL_FAST_MS }));
     expect(msg).toContain('Received: paint: fill-opacity evaluates to 0');
     expect(msg).toContain('-> why#1 is not visible at zoom 12: fill-opacity is 0 because the match on ["get","kind"] took its fallback for kind="park"');
   });
@@ -41,7 +41,7 @@ test.describe('failures explain invisibility', () => {
   test('data-driven: the case took the branch whose condition was true', async ({ map, page }) => {
     await addLayer(page, { type: 'fill', paint: { 'fill-color': ['case', ['==', ['get', 'kind'], 'park'], 'rgba(0,0,0,0)', '#6d4c41'] } });
     await expect(map).toHaveFeature({ layer: 'why', id: 2 });
-    const msg = await failure(expect(map).toHaveFeature({ layer: 'why', where: { kind: 'park' } }, { timeout: 800 }));
+    const msg = await failure(expect(map).toHaveFeature({ layer: 'why', where: { kind: 'park' } }, { timeout: FAIL_FAST_MS }));
     expect(msg).toContain('1 feature(s) match but are NOT VISIBLE: why#1 (fill-color is fully transparent');
     expect(msg).toContain('-> why#1 is not visible at zoom 12: fill-color is "rgba(0,0,0,0)" because the case took its branch 1 (the first true condition: ["==",["get","kind"],"park"])');
   });
@@ -49,7 +49,7 @@ test.describe('failures explain invisibility', () => {
   test('zoom-driven: the step on zoom used the stop at 12', async ({ map, page }) => {
     await addLayer(page, { type: 'fill', paint: { 'fill-color': '#1565c0', 'fill-opacity': ['step', ['zoom'], 0.8, 12, 0] } });
     await expect(map).toHaveFeature({ layer: 'why', id: 1, visible: 'any' });
-    const msg = await failure(expect(map.feature({ layer: 'why', id: 1 })).toBeVisibleOnMap({ timeout: 800 }));
+    const msg = await failure(expect(map.feature({ layer: 'why', id: 1 })).toBeVisibleOnMap({ timeout: FAIL_FAST_MS }));
     expect(msg).toContain('-> why#1 is not visible at zoom 12: fill-opacity is 0 because the step on zoom used the stop at 12 (zoom 12)');
   });
 
@@ -63,11 +63,11 @@ test.describe('failures explain invisibility', () => {
 
   test('zoom range: a layer below its minzoom, or at its maxzoom, is not drawn', async ({ map, page }) => {
     await addLayer(page, { type: 'fill', minzoom: 13, paint: { 'fill-color': '#2e7d32' } });
-    const below = await failure(expect(map).toHaveFeature({ layer: 'why', id: 1 }, { timeout: 800 }));
+    const below = await failure(expect(map).toHaveFeature({ layer: 'why', id: 1 }, { timeout: FAIL_FAST_MS }));
     expect(below).toContain('layer "why" is not drawn at zoom 12: its minzoom is 13 (drawn from zoom 13)');
 
     await page.evaluate(() => (window as any).__geowright_maps.main.setLayerZoomRange('why', 0, 12));
-    const at = await failure(expect(map.feature({ layer: 'why', id: 1 })).toBeVisibleOnMap({ timeout: 800 }));
+    const at = await failure(expect(map.feature({ layer: 'why', id: 1 })).toBeVisibleOnMap({ timeout: FAIL_FAST_MS }));
     expect(at).toContain('layer "why" is not drawn at zoom 12: its maxzoom is 12 (drawn below zoom 12 only)');
 
     await page.evaluate(() => (window as any).__geowright_maps.main.setLayerZoomRange('why', 0, 24));
@@ -76,7 +76,7 @@ test.describe('failures explain invisibility', () => {
 
   test('visibility "none": a constant, or an expression on global state', async ({ map, page }) => {
     await addLayer(page, { type: 'fill', layout: { visibility: 'none' }, paint: { 'fill-color': '#2e7d32' } });
-    const constant = await failure(expect(map).toHaveFeature({ layer: 'why', id: 1 }, { timeout: 800 }));
+    const constant = await failure(expect(map).toHaveFeature({ layer: 'why', id: 1 }, { timeout: FAIL_FAST_MS }));
     expect(constant).toContain('layer "why" is not drawn at zoom 12: layout property visibility is "none" (a constant in the style)');
 
     await page.evaluate(() => {
@@ -84,7 +84,7 @@ test.describe('failures explain invisibility', () => {
       m.setGlobalStateProperty('showWhy', false);
       m.setLayoutProperty('why', 'visibility', ['case', ['global-state', 'showWhy'], 'visible', 'none']);
     });
-    const expression = await failure(expect(map).toHaveFeature({ layer: 'why', id: 1 }, { timeout: 800 }));
+    const expression = await failure(expect(map).toHaveFeature({ layer: 'why', id: 1 }, { timeout: FAIL_FAST_MS }));
     expect(expression).toContain('layer "why" is not drawn at zoom 12: layout property visibility is "none" because the case took its fallback (no condition was true)');
 
     await page.evaluate(() => (window as any).__geowright_maps.main.setGlobalStateProperty('showWhy', true));

@@ -97,11 +97,11 @@ test.describe('camera: globe projection', () => {
     await expect(map.features({ layer: 'hemi', at: near })).toHaveFeatureCount(1); // the polygon is there, on the near side
     expect(await map.features({ layer: 'hemi', at: far }).count(), 'a far-side `at` matched the near-side polygon drawn at that pixel').toBe(0);
     // the matchers say why, and a pixel assertion at the far side reaches no verdict (either polarity fails)
-    const e1 = await expect(map).toHaveFeature({ layer: 'hemi', at: far }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    const e1 = await expect(map).toHaveFeature({ layer: 'hemi', at: far }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e1?.message).toMatch(/not on the visible map surface/);
-    const e2 = await expect(map).toHaveLayerPixels('hemi', { at: far, timeout: 500 }).then(() => null, (e: Error) => e);
+    const e2 = await expect(map).toHaveLayerPixels('hemi', { at: far, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e2?.message).toMatch(/no verdict: .*not on the visible map surface/);
-    const e3 = await expect(map).not.toHaveLayerPixels('hemi', { at: far, timeout: 500 }).then(() => null, (e: Error) => e);
+    const e3 = await expect(map).not.toHaveLayerPixels('hemi', { at: far, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e3?.message).toMatch(/no verdict: .*not on the visible map surface/);
   });
 });

@@ -1,5 +1,6 @@
 import { test, expect } from './fixtures';
 import { geowright, type MapHandle } from '../src/playwright';
+import { FAIL_FAST_MS } from './slow-machine';
 
 /**
  * ASSERT gap: an action in the regular DOM UI must be verifiable ON THE MAP.
@@ -50,7 +51,7 @@ test.describe('assert gap', () => {
 
   test('failure message says what WAS on the map', async ({ map }) => {
     const err = await expect(map)
-      .toHaveFeature({ layer: 'alerts', where: { severity: 'critical' } }, { timeout: 600 })
+      .toHaveFeature({ layer: 'alerts', where: { severity: 'critical' } }, { timeout: FAIL_FAST_MS })
       .then(() => null, (e: Error) => e);
     expect(err).not.toBeNull();
     const msg = err!.message;
@@ -61,14 +62,14 @@ test.describe('assert gap', () => {
   });
 
   test('failure message distinguishes off-screen from missing, and hidden layers', async ({ map, page }) => {
-    const offscreen = await expect(map).toHaveFeature({ layer: 'alerts', id: 4 }, { timeout: 600 }).then(() => null, (e: Error) => e);
+    const offscreen = await expect(map).toHaveFeature({ layer: 'alerts', id: 4 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(offscreen!.message).toContain('exist in the source but are not rendered');
 
     await page.getByTestId('toggle-alerts').uncheck();
-    const hidden = await expect(map).toHaveFeature({ layer: 'alerts', id: 1 }, { timeout: 600 }).then(() => null, (e: Error) => e);
+    const hidden = await expect(map).toHaveFeature({ layer: 'alerts', id: 1 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(hidden!.message).toContain('visibility is "none"');
 
-    const typo = await expect(map).toHaveFeature({ layer: 'alertz' }, { timeout: 600 }).then(() => null, (e: Error) => e);
+    const typo = await expect(map).toHaveFeature({ layer: 'alertz' }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(typo!.message).toContain('layer "alertz": does not exist');
   });
 
@@ -91,7 +92,7 @@ test.describe('assert gap', () => {
     for (const where of [{ severity: ['high', 'medium'] }, { severity: { equals: 'high' } }] as any[]) {
       for (const not of [false, true]) {
         const m = not ? expect(map).not : expect(map);
-        const e = await m.toHaveFeature({ layer: 'alerts', where }, { timeout: 500 }).then(() => null, (e: Error) => e);
+        const e = await m.toHaveFeature({ layer: 'alerts', where }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
         expect(e, `${not ? '.not.' : ''}toHaveFeature passed with where ${JSON.stringify(where)}`).not.toBeNull();
         expect(e?.message).toMatch(/no verdict: .*unknown where operator/);
       }
@@ -118,19 +119,19 @@ test.describe('assert gap', () => {
     await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Twin of gas leak' } }); // circle is there
     await expect(map.features({ layer: 'alerts-labels', where: { name: /gas leak/i } })).toHaveFeatureCount(1); // one label lost
     const hidden = (await map.features({ layer: 'alerts-labels' }).all()).some((f) => f.properties.name === 'Gas leak') ? 'Twin of gas leak' : 'Gas leak';
-    const err = await expect(map).toHaveFeature({ layer: 'alerts-labels', where: { name: hidden } }, { timeout: 500 }).then(() => null, (e: Error) => e);
+    const err = await expect(map).toHaveFeature({ layer: 'alerts-labels', where: { name: hidden } }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err!.message).toContain('or hidden by label/icon collision');
   });
 
   test('near-miss diagnostics: says which values ARE present', async ({ map }) => {
     const err = await expect(map)
-      .toHaveFeature({ layer: 'alerts', where: { severity: 'critical', name: /leak/ } }, { timeout: 500 })
+      .toHaveFeature({ layer: 'alerts', where: { severity: 'critical', name: /leak/ } }, { timeout: FAIL_FAST_MS })
       .then(() => null, (e: Error) => e);
     expect(err!.message).toMatch(/"severity" wanted "critical"; rendered values: ("(high|medium|low)"(, )?){3}/);
     expect(err!.message).toContain('"name" wanted /leak/; rendered values:');
 
     const at = await expect(map)
-      .toHaveFeature({ layer: 'alerts', at: { lng: 34.771, lat: 32.09 } }, { timeout: 500 })
+      .toHaveFeature({ layer: 'alerts', at: { lng: 34.771, lat: 32.09 } }, { timeout: FAIL_FAST_MS })
       .then(() => null, (e: Error) => e);
     expect(at!.message).toMatch(/nearest match without "at": alerts#1 .* \d+px away/);
   });
@@ -142,30 +143,30 @@ test.describe('assert gap', () => {
     await expect(map).toHaveView({ bearing: 270 });
     await expect(map).toHaveView({ bearing: -90 });
     await expect(map).toHaveView({ bearing: 269.95 });
-    const e = await rejects(expect(map).toHaveView({ bearing: 260, zoom: 12 }, { timeout: 300 }));
+    const e = await rejects(expect(map).toHaveView({ bearing: 260, zoom: 12 }, { timeout: FAIL_FAST_MS }));
     expect(e?.message).toContain('(±0.01 zoom, ±0.0005° centre, ±0.1° bearing and pitch)');
   });
 
   // the message said "rendered" for a query that matches only what a user can SEE.
   test('toHaveFeature says "visible" when it looks for visible features; toHaveGeometry says what is on the map', async ({ map }) => {
-    const e = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: 300 }));
-    expect(e?.message).toContain('Expected: at least one visible feature matching, within 300ms');
-    const any = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: 300, visible: 'any' }));
+    const e = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: FAIL_FAST_MS }));
+    expect(e?.message).toContain(`Expected: at least one visible feature matching, within ${FAIL_FAST_MS}ms`);
+    const any = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: FAIL_FAST_MS, visible: 'any' }));
     expect(any?.message).toContain('Expected: at least one rendered feature matching');
-    const g = await rejects(expect(map.feature({ layer: 'alerts', id: 1 })).toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: 300 }));
+    const g = await rejects(expect(map.feature({ layer: 'alerts', id: 1 })).toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: FAIL_FAST_MS }));
     expect(g?.message).toContain('What is on the map');
     expect(g?.message).toContain('"name":"Gas leak"');
   });
 
   test('toHaveView: zoomTolerance and degreesTolerance widen the match, and the message states them', async ({ map }) => {
     // the demo is at rest at 34.78,32.08 zoom 12
-    const zoom = await rejects(expect(map).toHaveView({ zoom: 12.2 }, { timeout: 300 }));
+    const zoom = await rejects(expect(map).toHaveView({ zoom: 12.2 }, { timeout: FAIL_FAST_MS }));
     expect(zoom?.message).toContain('±0.01 zoom');
     await expect(map).toHaveView({ zoom: 12.2 }, { zoomTolerance: 0.25 });
-    const centre = await rejects(expect(map).toHaveView({ center: { lng: 34.79, lat: 32.08 } }, { timeout: 300 }));
+    const centre = await rejects(expect(map).toHaveView({ center: { lng: 34.79, lat: 32.08 } }, { timeout: FAIL_FAST_MS }));
     expect(centre?.message).toContain('±0.0005° centre');
     await expect(map).toHaveView({ center: { lng: 34.79, lat: 32.08 } }, { degreesTolerance: 0.02 });
-    const narrow = await rejects(expect(map).toHaveView({ center: { lng: 34.79, lat: 32.08 } }, { timeout: 300, degreesTolerance: 0.005 }));
+    const narrow = await rejects(expect(map).toHaveView({ center: { lng: 34.79, lat: 32.08 } }, { timeout: FAIL_FAST_MS, degreesTolerance: 0.005 }));
     expect(narrow?.message).toContain('±0.005° centre');
   });
 
@@ -187,24 +188,24 @@ const rejects = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
 test.describe('a verdict needs a map it could look at', () => {
   test('.not on an unregistered mapId fails instead of passing', async ({ map, page }) => {
     void map;
-    const e = await rejects(expect(geowright(page, { mapId: 'nope' })).not.toHaveFeature({ layer: 'alerts' }, { timeout: 800 }));
+    const e = await rejects(expect(geowright(page, { mapId: 'nope' })).not.toHaveFeature({ layer: 'alerts' }, { timeout: FAIL_FAST_MS }));
     expect(e, 'the .not assertion passed although the map could never be queried').not.toBeNull();
     expect(e?.message).toContain('no map registered as "nope"');
   });
 
   test('.not on a mistyped layer fails, and says the layer does not exist', async ({ map }) => {
-    const e = await rejects(expect(map).not.toHaveFeature({ layer: 'alert' }, { timeout: 800 }));
+    const e = await rejects(expect(map).not.toHaveFeature({ layer: 'alert' }, { timeout: FAIL_FAST_MS }));
     expect(e, '.not.toHaveFeature passed for a layer that does not exist').not.toBeNull();
     expect(e?.message).toContain('layer "alert" does not exist. Layers:');
-    const count = await rejects(expect(map.features({ layer: 'alert' })).toHaveFeatureCount(0, { timeout: 800 }));
+    const count = await rejects(expect(map.features({ layer: 'alert' })).toHaveFeatureCount(0, { timeout: FAIL_FAST_MS }));
     expect(count, 'toHaveFeatureCount(0) passed for a layer that does not exist').not.toBeNull();
     // a positive assertion fails for the same reason, and names it
-    const pos = await rejects(expect(map).toHaveFeature({ layer: 'alert' }, { timeout: 800 }));
+    const pos = await rejects(expect(map).toHaveFeature({ layer: 'alert' }, { timeout: FAIL_FAST_MS }));
     expect(pos?.message).toContain('layer "alert" does not exist');
   });
 
   test('.not.toHaveGeometry on a feature that is not on the map fails', async ({ map }) => {
-    const e = await rejects(expect(map.feature({ layer: 'alerts', id: 999 })).not.toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: 800 }));
+    const e = await rejects(expect(map.feature({ layer: 'alerts', id: 999 })).not.toHaveGeometry({ type: 'Point', coordinates: [0, 0] }, { timeout: FAIL_FAST_MS }));
     expect(e, '.not.toHaveGeometry passed for a feature that is not on the map').not.toBeNull();
     expect(e?.message).toContain('no rendered feature matches');
     // ...while a real difference is a verdict
