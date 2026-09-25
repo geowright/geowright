@@ -1,4 +1,5 @@
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { expand } from '../../../../scripts/maplibre-notices.mjs';
 
 await rm('dist', { recursive: true, force: true });
 await mkdir('dist/vendor', { recursive: true });
@@ -23,6 +24,7 @@ for (const [name, pkg, license] of notices) {
   const { version, license: id } = JSON.parse(await readFile(pkg, 'utf8'));
   md += `\n## ${name} - ${version} (${id})\n\n${(await readFile(license, 'utf8')).trim()}\n`;
 }
-await writeFile('dist/THIRD_PARTY_LICENSES.md', md);
+// maplibre-gl.js bundles other packages inside itself: their notices come from its source maps.
+await writeFile('dist/THIRD_PARTY_LICENSES.md', expand(md, 'node_modules/maplibre-gl'));
 
 console.log('copied upstream index.html and pinned MapLibre/PMTiles browser assets to dist/, with their licenses');

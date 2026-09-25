@@ -139,7 +139,8 @@ is kept beside them as `demo/public/maplibre/LICENSE.txt`; `demo/scripts/copy-wo
 from `node_modules/maplibre-gl`. Demo-only, not in `package.json` `"files"`.
 `LICENSE.txt` covers MapLibre and the code it names (mapbox-gl-js ≤ v1.13, glfx.js, d3-color), not the npm packages
 MapLibre's build bundles into the two files. `copy-worker.mjs` therefore also writes
-`demo/public/maplibre/THIRD_PARTY_LICENSES.md`, from the source maps MapLibre ships beside them: the license text of
+`demo/public/maplibre/THIRD_PARTY_LICENSES.md`, from the source maps MapLibre ships beside them
+(`scripts/maplibre-notices.mjs`, shared with the wrapper apps' builds): the license text of
 each of those packages (in 6.10.0: `@mapbox/point-geometry`, `@mapbox/unitbezier`, `@mapbox/vector-tile`,
 `@maplibre/geojson-vt`, `@maplibre/maplibre-gl-style-spec`, `@maplibre/mlt` — `(MIT OR Apache-2.0)`, used under MIT —,
 `@maplibre/vt-pbf`, `bidi-js`, `earcut`, `gl-matrix`, `murmurhash-js`, `pbf`, `potpack`, `quickselect`, `tinyqueue`;
@@ -157,9 +158,13 @@ Every app's committed `dist/` carries `dist/THIRD_PARTY_LICENSES.md`: the licens
 build bundles (React, ReactDOM, Vue, Svelte, `d3-*`, luma.gl / math.gl / loaders.gl, maplibre-gl, …), written by
 Vite's `build.license` (by `scripts/build.mjs` for `pmtiles`, which only copies files). `node wild/scripts/apps.mjs
 check`, run by the unit suite, fails when an app's `dist/` has none, or a package in it has no text.
-Vite lists `maplibre-gl` there as one package; the packages MapLibre's prebuilt dist bundles inside it (for 6.10.0
-the list above plus `kdbush` and `@mapbox/tiny-sdf`, which its main file adds; 5.13.0 and 3.6.2 a similar set, with
-`supercluster`, `geojson-vt`, `@mapbox/geojson-rewind`, `@mapbox/whoots-js` and `tslib`) are not in those files yet.
+Vite lists `maplibre-gl` there as one package, so each app's build expands it (`maplibreNotices` / `expand` from
+`scripts/maplibre-notices.mjs`) with the packages MapLibre's prebuilt dist bundles inside itself, read from the source
+maps of the installed copy: for 6.10.0 the list above plus `kdbush` and `@mapbox/tiny-sdf`, which its main file adds;
+5.13.0 and 3.6.2 a similar set, with `supercluster`, `geojson-vt`, `@mapbox/geojson-rewind`, `@mapbox/whoots-js` and
+`tslib` (0BSD). The main file of 5.13.0 and 6.10.0 also carries `DOM.sanitize()`, adapted from Chris Ferdinandi's
+"(c) 2021 Chris Ferdinandi, MIT License": listed with the MIT text. `check` fails on a notices file that lists
+`maplibre-gl` without the packages every MapLibre 3–6 build bundles.
 `wild/fixtures/vendor/turf@7/turf.min.js` bundles JSTS, licensed `(EDL-1.0 OR EPL-1.0)` and used under EDL-1.0,
 and further MIT / ISC / BSD / Unlicense packages: their texts are in `wild/fixtures/vendor/turf@7/THIRD_PARTY_LICENSES.md`.
 `wild/fixtures/vendor/maplibre-gl-terradraw@1.0.1/` (MIT) bundles terra-draw 1.0.0 and its MapLibre adapter 1.0.1 (MIT)

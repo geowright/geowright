@@ -5,6 +5,7 @@ import { defineConfig } from 'vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { maplibreNotices } from '../../../scripts/maplibre-notices.mjs';
 
 // The svelte-maplibre-gl npm package ships no license file, so Vite's notices list it without a text. The license
 // files of its repository (kept here as LICENSE-MIT.txt and LICENSE-APACHE.txt, see UPSTREAM.md) are the ones that
@@ -26,7 +27,8 @@ const svelteMaplibreGlNotice = {
 export default defineConfig({
   root: __dirname,
   base: './',
-  plugins: [svelte(), svelteMaplibreGlNotice],
+  // maplibreNotices: Vite lists maplibre-gl as one package; add what MapLibre's prebuilt dist bundles inside itself.
+  plugins: [svelte(), svelteMaplibreGlNotice, maplibreNotices(__dirname)],
   resolve: {
     alias: [
       // Clusters.svelte (unedited) imports '$lib/components/ui/{slider,checkbox,label}/index.js',

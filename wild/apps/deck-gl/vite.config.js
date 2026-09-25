@@ -1,6 +1,7 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'node:path';
 import { readFileSync } from 'node:fs';
+import { maplibreNotices } from '../../../scripts/maplibre-notices.mjs';
 
 // maplibre-gl 3's dist/ has a stub package.json (name only), so Vite's notices head its section "maplibre-gl - 0.0.0"
 // with no license id (its text, dist/LICENSE.txt, is right). Put the installed version and license id in the heading.
@@ -25,7 +26,8 @@ export default defineConfig({
   // Resolve that import to its layers package, which exports the same classes without
   // pulling in unrelated CARTO/ColorBrewer packages and their extra license terms.
   resolve: { alias: [{ find: /^deck\.gl$/, replacement: '@deck.gl/layers' }] },
-  plugins: [maplibreNoticeHeading],
+  // maplibreNotices after the heading fix: it expands the maplibre-gl section with what MapLibre's dist bundles.
+  plugins: [maplibreNoticeHeading, maplibreNotices(__dirname)],
   build: {
     outDir: 'dist',
     sourcemap: false,

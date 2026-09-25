@@ -150,6 +150,28 @@ test('check fails when an app\'s dist/ ships no notices, or a notice without its
   expect(run(tree, 'check').code, 'every package with its text: passes').toBe(0);
 });
 
+test('check fails when an app\'s notices list maplibre-gl but not the packages MapLibre\'s dist bundles inside itself', () => {
+  const tree = scratchTree();
+  const planted = plantApp(tree);
+  // A real app's notices, as its build writes them (maplibreNotices), then as Vite alone wrote them before an earlier issue.
+  const real = readFileSync(join(ROOT, 'wild/apps/react-map-gl', NOTICES), 'utf8');
+  writeFileSync(join(planted, NOTICES), real);
+  expect(run(tree, 'check').code, 'maplibre-gl with the packages its dist bundles: passes').toBe(0);
+
+  const viteOnly = real.split(/^(?=## )/m).filter((s) => !/^## .*, bundled in maplibre-gl /.test(s)).join('');
+  expect(viteOnly).toContain('## maplibre-gl - ');
+  writeFileSync(join(planted, NOTICES), viteOnly);
+  let r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`wild/apps/planted/${NOTICES}: lists maplibre-gl but not what its dist bundles (`);
+  expect(r.out).toContain('earcut');
+
+  writeFileSync(join(planted, NOTICES), real.replace(/^## earcut - [^\n]*\n[\s\S]*?(?=^## )/m, ''));
+  r = run(tree, 'check');
+  expect(r.code, 'one bundled package missing').toBe(1);
+  expect(r.out).toContain('bundles (earcut)');
+});
+
 // the one-line rule (decision 0016) as far as it can be checked offline. Each planted edit below passed the old
 // checks: examples.sh counted `^+[^+]` / `^-[^-]` (so a blank line, `--x` or `++y` was not counted, and any one added
 // line passed), and apps.mjs read only UPSTREAM.md, never the app's sources.

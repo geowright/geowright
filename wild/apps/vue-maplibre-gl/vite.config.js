@@ -4,11 +4,13 @@
 import { defineConfig } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import { resolve } from 'node:path';
+import { maplibreNotices } from '../../../scripts/maplibre-notices.mjs';
 
 export default defineConfig({
   root: __dirname,
   base: './',
-  plugins: [vue()],
+  // maplibreNotices: Vite lists maplibre-gl as one package; add what MapLibre's prebuilt dist bundles inside itself.
+  plugins: [vue(), maplibreNotices(__dirname)],
   build: {
     outDir: 'dist',
     sourcemap: false,

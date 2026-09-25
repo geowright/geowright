@@ -59,7 +59,9 @@ issue from the "My map app does not work" template, which asks for everything be
    `serve.mjs` serves at `/apps/<name>/`. `dist/` redistributes what the build bundles, so it carries their notices:
    in the Vite config, `build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } }`; a build that only copies files
    writes the same file itself (`apps/pmtiles/scripts/build.mjs`). A bundled package that ships no license file gets
-   its text added by the build (`apps/svelte-maplibre-gl/vite.config.js`); `check` fails on a section without one. `UPSTREAM.md` lists every vendored path and shows the one line as a diff.
+   its text added by the build (`apps/svelte-maplibre-gl/vite.config.js`); `check` fails on a section without one.
+   A build that bundles `maplibre-gl` adds `maplibreNotices(__dirname)` from `scripts/maplibre-notices.mjs` to its
+   plugins (a copying build calls `expand`): Vite lists MapLibre as one package, not what its dist bundles inside itself. `UPSTREAM.md` lists every vendored path and shows the one line as a diff.
 5. **Fixtures for everything it fetches.** Run the spec
    (`npx playwright test tests/wild/<name>.spec.ts`): the harness aborts every request to the outside and fails the
    test naming each URL. Answer each one with a route, from what exists first — `DEMOTILES`, `glyphs()`,
