@@ -1,4 +1,4 @@
-import { test as base, type Page } from '@playwright/test';
+import { test as base, type BrowserContext, type Page } from '@playwright/test';
 import { makeTilePng } from './tile-png';
 import { BUILDINGS } from './buildings';
 import { routeVectorTiles } from '../src/playwright/tiles';
@@ -10,19 +10,37 @@ export { expect } from '../src/playwright';
 const TILE = makeTilePng();
 
 /**
- * Determinism guard (decision 0009): nothing may leave the machine. Every request of the page's context to anywhere but
- * `origin` (the preview server; the exact origin, not a prefix: :41730 is not :4173) is aborted and recorded. Registered
- * on the context, so a spec's own `page.route` fixtures answer first and a popup is guarded too.
+ * Blocks every request and WebSocket of `context` to anywhere but `origin` (the exact origin, not a prefix: :41730 is not
+ * :4173; a ws:// socket counts as its http:// origin), and hands each blocked URL to `blocked`. Registered on the context,
+ * so a spec's own `page.route` fixtures answer first and a popup is guarded too. A request a service worker answers never
+ * reaches a route: playwright.config.ts blocks service workers.
  */
-export async function guardNetwork(page: Page, origin: string): Promise<{ external: string[]; check(): void }> {
+export async function blockOffOrigin(context: BrowserContext, origin: string, blocked: (url: string) => void): Promise<void> {
   const allowed = new URL(origin).origin;
-  const external: string[] = [];
-  await page.context().route(/^https?:\/\//, (route) => {
+  await context.route(/^https?:\/\//, (route) => {
     const url = route.request().url();
     if (new URL(url).origin === allowed) return route.fallback();
-    external.push(url);
+    blocked(url);
     return route.abort('blockedbyclient');
   });
+  const httpOrigin = (u: URL) => `${u.protocol === 'wss:' ? 'https:' : 'http:'}//${u.host}`;
+  // A routed socket that is not connected to its server is opened by Playwright as a mock: closed at once instead.
+  await context.routeWebSocket((u) => httpOrigin(u) !== allowed, (ws) => {
+    blocked(ws.url());
+    return ws.close({ code: 1008, reason: 'blocked by the test network guard' });
+  });
+}
+
+/** The guard the `page` fixture put on this page's context: tests/network-guard.spec.ts asserts what it recorded. */
+export const pageGuards = new WeakMap<Page, { external: string[]; check(): void }>();
+
+/**
+ * Determinism guard (decision 0021): nothing may leave the machine. Every request and WebSocket of the page's context to
+ * anywhere but `origin` (the preview server) is aborted and recorded (blockOffOrigin); `check()` names them all.
+ */
+export async function guardNetwork(page: Page, origin: string): Promise<{ external: string[]; check(): void }> {
+  const external: string[] = [];
+  await blockOffOrigin(page.context(), origin, (url) => external.push(url));
   return {
     external,
     check() {
@@ -36,6 +54,7 @@ export const test = base.extend<{ map: MapHandle }>({
   page: async ({ page, baseURL }, use) => {
     await throttleFromEnv(page); // opt-in slow machine (tests/slow-machine.ts); nothing when unset
     const guard = await guardNetwork(page, baseURL!);
+    pageGuards.set(page, guard);
     await use(page);
     guard.check(); // fails the test, naming each URL
   },

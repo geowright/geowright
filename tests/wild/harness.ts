@@ -3,6 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { makeTilePng } from '../tile-png';
 import { throttleFromEnv } from '../slow-machine';
+import { blockOffOrigin } from '../fixtures';
 import { geowright, type GeowrightOptions, type MapHandle } from '../../src/playwright';
 
 export { expect } from '../../src/playwright';
@@ -74,11 +75,10 @@ export const test = base.extend<{ wild: Wild }>({
   wild: async ({ page }, use) => {
     const unrouted: string[] = [];
     const tolerated: RegExp[] = [];
-    await page.route(/^https?:\/\//, (route) => {
-      const url = route.request().url();
-      if (new URL(url).origin === WILD_ORIGIN) return route.fallback(); // the exact origin: :41740 is not :4174
+    // On the context, as the core suite's guard: a popup the app opens is guarded too, and WebSockets are (the exact
+    // origin: :41740 is not :4174). The routes of `open` are on the page, so they answer first.
+    await blockOffOrigin(page.context(), WILD_ORIGIN, (url) => {
       if (!tolerated.some((t) => t.test(url))) unrouted.push(url);
-      return route.abort();
     });
     const wild: Wild = {
       unrouted,

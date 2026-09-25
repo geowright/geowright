@@ -1,4 +1,5 @@
 import { DEMOTILES, example, expect, test, type Wild } from './harness';
+import { FAIL_FAST_MS } from '../slow-machine';
 
 // MapLibre example "Display a globe with a vector map": demotiles switched to globe projection on
 // 'style.load'. No interactivity of its own — the tests exercise the LIBRARY's globe support:
@@ -14,10 +15,12 @@ const open = (wild: Wild) => wild.open(example('display-a-globe-with-a-vector-ma
 
 test.describe('wild: display-a-globe-with-a-vector-map', () => {
   test.slow(); // globe projection is slow to render under software GL
+  // test.slow() does not touch expect's 7s, and one round trip into a globe page takes seconds on a loaded machine
+  // (measured): the matchers here get the map's own 20s (`map.timeout`, set above) instead.
 
   test('the map comes up in globe projection at the example\'s own view', async ({ wild }) => {
     const map = await open(wild);
-    await expect(map).toHaveView({ center: { lng: 0, lat: 0 }, zoom: 2 });
+    await expect(map).toHaveView({ center: { lng: 0, lat: 0 }, zoom: 2 }, { timeout: map.timeout });
     expect((await map.viewState()).projection).toBe('globe');
   });
 
@@ -45,7 +48,7 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
   test('a location on the far side of the globe fails clearly, not by hitting the near side', async ({ wild }) => {
     const map = await open(wild);
     // The view is centred on (0,0); (180,0) is its antipode, always on the far side / behind the camera.
-    await expect(map.clickAt({ lng: 180, lat: 0 }, { timeout: 2000 })).rejects.toThrow(/far side of the globe, beyond the horizon, or behind the camera/);
+    await expect(map.clickAt({ lng: 180, lat: 0 }, { timeout: 2 * FAIL_FAST_MS })).rejects.toThrow(/far side of the globe, beyond the horizon, or behind the camera/);
     // The near side is unaffected by the rejected click: the same feature is still there and clickable.
     await map.feature({ layer: 'countries-fill', at: { lng: 11.6, lat: -0.8 } }).click();
   });
@@ -57,8 +60,8 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     const map = await open(wild);
     const raw = await page.evaluate(() => new Set((window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['countries-fill'] }).map((f: any) => f.properties.NAME)).size);
     expect(raw).toBeLessThan(40); // the upstream behaviour this test exists for; if this starts failing, MapLibre fixed it
-    for (const NAME of ['Gabon', 'Nigeria', 'Brazil', 'Spain']) await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME } });
-    for (const NAME of ['Australia', 'Japan', 'New Zealand']) await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME } }); // far side
+    for (const NAME of ['Gabon', 'Nigeria', 'Brazil', 'Spain']) await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME } }, { timeout: map.timeout });
+    for (const NAME of ['Australia', 'Japan', 'New Zealand']) await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME } }, { timeout: map.timeout }); // far side
     await map.feature({ layer: 'countries-fill', where: { NAME: 'Nigeria' } }).click();
   });
 
@@ -74,8 +77,8 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
       await map.waitForIdle();
       expect((await map.viewState()).projection).toMatch(/vertical-perspective/);
       expect(await map.snapshot()).toMatch(/projection [^\n]*vertical-perspective/);
-      for (const NAME of ['Gabon', 'Nigeria', 'Brazil', 'Spain']) await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME } });
-      for (const NAME of ['Australia', 'Japan', 'New Zealand']) await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME } });
+      for (const NAME of ['Gabon', 'Nigeria', 'Brazil', 'Spain']) await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME } }, { timeout: map.timeout });
+      for (const NAME of ['Australia', 'Japan', 'New Zealand']) await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME } }, { timeout: map.timeout });
     });
   }
 
@@ -85,8 +88,8 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     const map = await open(wild);
     await page.evaluate(() => (window as any).__geowright_maps.main.jumpTo({ center: [-52, -10], zoom: 8 }));
     await map.waitForIdle();
-    await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME: 'Brazil' } });
-    await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME: 'Gabon' } });
+    await expect(map).toHaveFeature({ layer: 'countries-fill', where: { NAME: 'Brazil' } }, { timeout: map.timeout });
+    await expect(map).not.toHaveFeature({ layer: 'countries-fill', where: { NAME: 'Gabon' } }, { timeout: map.timeout });
   });
 });
 

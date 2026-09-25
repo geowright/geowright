@@ -80,7 +80,7 @@ test.describe('visibility', () => {
     expect(await page.evaluate(() => (window as any).__geowright_maps.main.getLayoutProperty('cover', 'visibility'))).toEqual(visibility);
 
     await page.evaluate(() => (window as any).__geowright_maps.main.setGlobalStateProperty('showCover', false));
-    await expect(map).not.toHaveLayerPixels('cover', { at: { lng: 34.7675, lat: 32.0775 }, timeout: 1000 });
+    await expect(map).not.toHaveLayerPixels('cover', { at: { lng: 34.7675, lat: 32.0775 } });
     expect(await page.evaluate(() => (window as any).__geowright_maps.main.getLayoutProperty('cover', 'visibility'))).toEqual(visibility);
     await expect(map).not.toHaveFeature({ layer: 'cover', id: 9 }); // still hidden, as the app wants
   });
@@ -205,13 +205,16 @@ test.describe('visibility', () => {
  * the camera zoom; `within` / `distance` need the tile geometry, which the evaluator does not have.
  */
 test.describe('the paint evaluator agrees with the renderer', () => {
-  const agree = async (map: import('../src/playwright').MapHandle, layer: string, at: { lng: number; lat: number }) => {
+  // `drawn`: what the canvas shows, and only a verdict counts: toHaveLayerPixels passing says drawn, .not passing says
+  // not drawn. A probe that reaches no verdict (the page did not answer, the point is off the surface) fails the test with
+  // its own message; it used to read as "the canvas shows nothing", and a `false` case passed unchecked.
+  const agree = async (map: import('../src/playwright').MapHandle, layer: string, at: { lng: number; lat: number }, drawn: boolean) => {
     await map.waitForIdle();
     // counted BEFORE the probe: a probe hides and re-shows the layer, and MapLibre then reloads its source
     const found = await map.features({ layer }).count();
-    const pixels = await expect(map).toHaveLayerPixels(layer, { at, radiusPx: 6, timeout: 1500 }).then(() => true, () => false);
-    expect({ canvasShowsIt: pixels, geowrightSaysVisible: found > 0 }).toEqual({ canvasShowsIt: pixels, geowrightSaysVisible: pixels });
-    return pixels;
+    if (drawn) await expect(map, 'the canvas shows it').toHaveLayerPixels(layer, { at, radiusPx: 6 });
+    else await expect(map, 'the canvas does not show it').not.toHaveLayerPixels(layer, { at, radiusPx: 6 });
+    expect(found > 0, `geowright says ${layer} is ${found > 0 ? 'visible' : 'invisible'}; the canvas ${drawn ? 'shows it' : 'does not'}`).toBe(drawn);
   };
 
   test('B2: a zoom-and-data step expression is judged at the tile zoom, as MapLibre draws it', async ({ map, page }) => {
@@ -221,7 +224,7 @@ test.describe('the paint evaluator agrees with the renderer', () => {
       m.addLayer({ id: 'b2', type: 'circle', source: 'b2', paint: { 'circle-radius': 12, 'circle-color': '#f00', 'circle-opacity': ['step', ['zoom'], 0, 11.5, ['get', 'o']] } });
       m.jumpTo({ zoom: 11.7 });
     });
-    expect(await agree(map, 'b2', { lng: 34.8, lat: 32.09 })).toBe(false); // tile zoom 11: the step's base output, 0
+    await agree(map, 'b2', { lng: 34.8, lat: 32.09 }, false); // tile zoom 11: the step's base output, 0
   });
 
   test('B2: a zoom-and-data interpolate is blended between tile zooms, not read at the camera zoom', async ({ map, page }) => {
@@ -231,7 +234,7 @@ test.describe('the paint evaluator agrees with the renderer', () => {
       m.addLayer({ id: 'b2i', type: 'circle', source: 'b2i', paint: { 'circle-radius': 12, 'circle-color': '#f00', 'circle-opacity': ['interpolate', ['linear'], ['zoom'], 11.5, 0, 11.6, ['get', 'o']] } });
       m.jumpTo({ zoom: 11.2 });
     });
-    expect(await agree(map, 'b2i', { lng: 34.8, lat: 32.09 })).toBe(true); // 0 at z11, 1 at z12, blended at 0.2
+    await agree(map, 'b2i', { lng: 34.8, lat: 32.09 }, true); // 0 at z11, 1 at z12, blended at 0.2
   });
 
   test('B5: `within` in paint is evaluated like MapLibre (points inside the area are drawn)', async ({ map, page }) => {
@@ -241,7 +244,7 @@ test.describe('the paint evaluator agrees with the renderer', () => {
       m.addSource('b5', { type: 'geojson', data: { type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [34.8, 32.1] } } });
       m.addLayer({ id: 'b5', type: 'circle', source: 'b5', paint: { 'circle-radius': 12, 'circle-color': '#00f', 'circle-opacity': ['case', ['within', area], 1, 0] } });
     });
-    expect(await agree(map, 'b5', { lng: 34.8, lat: 32.1 })).toBe(true);
+    await agree(map, 'b5', { lng: 34.8, lat: 32.1 }, true);
     expect(await map.snapshot()).toContain('visibility unknown for layer b5: circle-opacity');
   });
 });

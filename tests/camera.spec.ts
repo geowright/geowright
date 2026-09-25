@@ -61,11 +61,14 @@ test.describe('camera: rotated + pitched', () => {
 test.describe('camera: globe projection', () => {
   // A whole-world globe at 1280x720 in SOFTWARE GL costs seconds per frame when the CPU is contended
   // (measured in a failed 20x: single page.evaluate round-trips of 5–10s while 400 foreign simulator
-  // processes were running). test.slow() triples the timeout; it is not a retry and not a sleep.
+  // processes were running). test.slow() triples the TEST's timeout (and with it `map.timeout`, which is a third of it);
+  // it is not a retry and not a sleep. It does not touch expect's 7s: the first frames after a switch to the globe cost
+  // 2-7s on a loaded machine (measured), so a matcher that must pass on the globe gets `map.timeout` explicitly,
+  // and an expected failure twice FAIL_FAST_MS (one round trip into a whole-world globe can take more than FAIL_FAST_MS).
   test.slow();
   test('near side: feature and location actions work', async ({ map, page }) => {
     await page.getByTestId('camera-preset').selectOption('globe-6');
-    await expect(map).toHaveView({ zoom: 6 });
+    await expect(map).toHaveView({ zoom: 6 }, { timeout: map.timeout });
     await map.feature({ layer: 'alerts', id: 4 }).click(); // 0.42° east of the rest: ~38px away at z6
     await expect(page.getByTestId('popup')).toContainText('Far east incident');
     await map.rightClickAt({ lng: 33.5, lat: 33.0 });
@@ -74,8 +77,8 @@ test.describe('camera: globe projection', () => {
 
   test('far side of the globe: a clear error instead of clicking the near side', async ({ map, page }) => {
     await page.getByTestId('camera-preset').selectOption('globe-2');
-    await expect(map).toHaveView({ zoom: 1.8 });
-    const err = await map.clickAt({ lng: -145, lat: -32 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    await expect(map).toHaveView({ zoom: 1.8 }, { timeout: map.timeout });
+    const err = await map.clickAt({ lng: -145, lat: -32 }, { timeout: 2 * FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).toMatch(/not on the visible map surface/);
     await map.rightClickAt({ lng: 20, lat: 40 }); // visible hemisphere still works
     await expect(page.getByTestId('ctx-coords')).toHaveText(/\d/);
@@ -91,17 +94,17 @@ test.describe('camera: globe projection', () => {
       m.addLayer({ id: 'hemi', type: 'fill', source: 'hemi', paint: { 'fill-color': '#0a0', 'fill-opacity': 0.4 } }, 'alerts');
     });
     await page.getByTestId('camera-preset').selectOption('globe-2');
-    await expect(map).toHaveView({ zoom: 1.8 });
+    await expect(map).toHaveView({ zoom: 1.8 }, { timeout: map.timeout });
     const far = { lng: -145, lat: -32 };
     const near = { lng: 20, lat: 10 };
-    await expect(map.features({ layer: 'hemi', at: near })).toHaveFeatureCount(1); // the polygon is there, on the near side
+    await expect(map.features({ layer: 'hemi', at: near })).toHaveFeatureCount(1, { timeout: map.timeout }); // the polygon is there, on the near side
     expect(await map.features({ layer: 'hemi', at: far }).count(), 'a far-side `at` matched the near-side polygon drawn at that pixel').toBe(0);
     // the matchers say why, and a pixel assertion at the far side reaches no verdict (either polarity fails)
-    const e1 = await expect(map).toHaveFeature({ layer: 'hemi', at: far }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e1 = await expect(map).toHaveFeature({ layer: 'hemi', at: far }, { timeout: 2 * FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e1?.message).toMatch(/not on the visible map surface/);
-    const e2 = await expect(map).toHaveLayerPixels('hemi', { at: far, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e2 = await expect(map).toHaveLayerPixels('hemi', { at: far, timeout: 2 * FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e2?.message).toMatch(/no verdict: .*not on the visible map surface/);
-    const e3 = await expect(map).not.toHaveLayerPixels('hemi', { at: far, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e3 = await expect(map).not.toHaveLayerPixels('hemi', { at: far, timeout: 2 * FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e3?.message).toMatch(/no verdict: .*not on the visible map surface/);
   });
 });

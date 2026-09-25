@@ -251,8 +251,8 @@ test.describe('act gap', () => {
     await page.evaluate(() => (window as any).__geowright_maps.main.resize());
     await map.waitForIdle();
     const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: 5000 }).then(() => null, (e: Error) => e);
-    const popupId = await page.getByTestId('popup').getAttribute('data-id', { timeout: 1000 }).catch(() => null);
-    expect({ error: e?.message.split('\n')[0] ?? null, popupId }).toEqual({ error: null, popupId: '1' });
+    expect(e?.message.split('\n')[0] ?? null).toBeNull();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1');
     // a location, too (clientPoint), and the way back (worldAt)
     const two = await map.feature({ layer: 'alerts', id: 2 }).lngLat();
     await map.clickAt(two);
@@ -334,8 +334,9 @@ test.describe('act gap', () => {
 
   // A known limit: occlusion is decided from the map's hit test, which never returns pixel-only layers (raster, image,
   // video, canvas, heatmap, hillshade). An opaque one drawn above a feature does not stop click(). Documented in DESIGN
-  // "Costs and known limitations" and README Limits; this test turns green when the limit is lifted.
-  test.fail('an opaque image layer drawn above a feature occludes it (known limit)', async ({ map, page }) => {
+  // "Costs and known limitations" and README Limits. This test asserts the limit as it is, so it FAILS when the limit is
+  // lifted, and says so; any other failure (the veil never painted, the page did not answer) fails with its own message.
+  test('known limit: an opaque image layer drawn above a feature does not stop click()', async ({ map, page }) => {
     await page.evaluate(() => {
       const m = (window as any).__geowright_maps.main;
       const c = document.createElement('canvas'); c.width = c.height = 4;
@@ -344,9 +345,14 @@ test.describe('act gap', () => {
       m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[b.getWest(), b.getNorth()], [b.getEast(), b.getNorth()], [b.getEast(), b.getSouth()], [b.getWest(), b.getSouth()]] });
       m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': 1, 'raster-fade-duration': 0 } }); // on top of everything
     });
-    await expect(map).toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
-    expect(e, 'geowright clicked alert 1 although an opaque image layer covers the whole map').not.toBeNull();
+    // the premise: the veil really is drawn over alert 1 (34.77, 32.085)
+    await expect(map, 'the premise: the opaque veil is drawn over alert 1').toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click().then(() => null, (e: Error) => e);
+    if (e && /covered|occlu/.test(e.message)) {
+      throw new Error(`this limit is lifted: click() now refuses a feature under an opaque image layer. Rewrite this test to assert the refusal, and update DESIGN "Costs and known limitations" and README Limits.\n\n${e.message}`);
+    }
+    expect(e?.message ?? null, 'click() on alert 1 under the veil').toBeNull();
+    await expect(page.getByTestId('popup')).toHaveAttribute('data-id', '1'); // the click went through the veil to the app
   });
 
   test('clickAt outside the viewport fails clearly unless autoPan', async ({ map }) => {
