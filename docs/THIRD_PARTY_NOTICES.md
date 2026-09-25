@@ -10,8 +10,7 @@ Apache-2.0. What the package ships is MIT / BSD-2-Clause / BSD-3-Clause / ISC on
 `wild/` add OFL-1.1 (a font), Apache-2.0, Unlicense, EDL-1.0 (a BSD-3-Clause text: JSTS, inside the
 vendored Turf bundle) and the Unicode data license (`bidi-js`'s tables, derived from the Unicode Character Database,
 inside MapLibre's dist), each with its text kept beside the file, and 0BSD (`tslib`, inside the MapLibre 5.13 and
-3.6.2 builds in `wild/`), which asks for no notice (decision 0020). The wrapper apps' notices do not list everything
-MapLibre's dist bundles yet: see `wild/` below.
+3.6.2 builds in `wild/`), which asks for no notice (decision 0020).
 
 ---
 
