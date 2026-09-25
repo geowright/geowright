@@ -123,7 +123,7 @@ export class Engine<W = unknown> {
     // Not an error HERE — the query that follows reports it (group() refuses such a surface, actionPoint explains it).
     if (this.surfaceProblem()) return;
     if (!this.adapter.queryData || this.hiddenAt(q.at)) return;
-    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    const at = q.at ? this.projectAt(q.at) : undefined;
     const byKey = new Map<string, RenderedFeature[]>();
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
       if (f.id !== undefined) continue;
@@ -164,6 +164,21 @@ export class Engine<W = unknown> {
     const anchor = part.kind === 'point' ? part.coord : part.kind === 'line' ? part.coords[0] : part.rings[0][0];
     const toWorld = (anchor && this.adapter.nearestCopy?.(anchor)) || ((c: number[]) => this.adapter.worldFromCoord(c));
     return (c) => this.adapter.project(toWorld(c));
+  }
+
+  /**
+   * A LOCATION (a query's `at`, a place to act at) in the same copy of the world as `projector()` picks for geometry:
+   * seen from lng 179.5, lng -179.8 is drawn 0.7° east of the centre, not 359° west. Its pixel, and whether that
+   * pixel shows it (a pitched camera sees the far copy beyond the horizon), are those of this copy.
+   */
+  nearestWorld(at: unknown): W {
+    const { lng, lat } = at as { lng: number; lat: number };
+    const c = [lng, lat];
+    return this.adapter.nearestCopy?.(c)?.(c) ?? (at as W);
+  }
+
+  projectAt(at: unknown): PixelPoint {
+    return this.adapter.project(this.nearestWorld(at));
   }
 
   /** On-screen bounding box of a piece's geometry. */
@@ -214,7 +229,7 @@ export class Engine<W = unknown> {
    * refused.
    */
   private hiddenAt(at: unknown): boolean {
-    return at !== undefined && this.adapter.isOnSurface?.(at as W) === false;
+    return at !== undefined && this.adapter.isOnSurface?.(this.nearestWorld(at)) === false;
   }
 
   /** Rendered features matching the query, grouped into logical features (pieces merged). Throws when the surface cannot be looked at. */
@@ -224,7 +239,7 @@ export class Engine<W = unknown> {
     for (const v of Object.values(q.where ?? {})) checkWhere(v); // a malformed `where` is an error even where nothing is rendered
     const groups = new Map<string, RenderedFeature[]>();
     if (this.hiddenAt(q.at)) return groups; // what is drawn at that pixel is something else (explain() says so)
-    const at = q.at ? this.adapter.project(q.at as W) : undefined;
+    const at = q.at ? this.projectAt(q.at) : undefined;
     for (const f of this.adapter.queryFeatures({ layers: this.layersOf(q), at })) {
       if (!this.matches(f, q)) continue;
       const k = this.key(f);
@@ -552,7 +567,7 @@ export class Engine<W = unknown> {
     const frame = this.frame();
     const size = this.surfaceSize();
     const marks: DebugMark[] = [];
-    if (q.at) marks.push({ ...toClient(frame, this.adapter.project(q.at as W)), kind: 'target', label: this.hiddenAt(q.at) ? 'at (not on the visible surface)' : 'at' });
+    if (q.at) marks.push({ ...toClient(frame, this.projectAt(q.at)), kind: 'target', label: this.hiddenAt(q.at) ? 'at (not on the visible surface)' : 'at' });
     for (const pieces of [...this.group(q).values()].slice(0, 8)) {
       const ignore = this.ignoring(opts, pieces);
       let labelled = false;
@@ -586,7 +601,7 @@ export class Engine<W = unknown> {
     const toBox = (p: PixelPoint, r: Overlay['rect']) => Math.hypot(Math.max(r.x - p.x, 0, p.x - (r.x + r.width)), Math.max(r.y - p.y, 0, p.y - (r.y + r.height)));
     if (o.at && this.hiddenAt(o.at)) return [];
     if (o.at) {
-      const p = this.adapter.project(o.at as W);
+      const p = this.projectAt(o.at);
       list = list.map((v) => ({ ...v, distance: v.anchor ? Math.hypot(v.anchor.x - p.x, v.anchor.y - p.y) : toBox(p, v.rect) })).filter((v) => v.distance! <= tol);
       list.sort((x, y) => x.distance! - y.distance!);
     }
@@ -622,19 +637,25 @@ export class Engine<W = unknown> {
     return { ok: true, geometry: f.geometry, from: 'rendered' };
   }
 
-  /** Compare in PIXELS (what a user sees, and zoom-independent to reason about), vertex by vertex. */
+  /**
+   * Compare in PIXELS (what a user sees, and zoom-independent to reason about), vertex by vertex. Actual and expected
+   * are projected by the same rule, `projector()`: each part in the copy of the world nearest the view, so a shape just
+   * across the antimeridian is compared where it is drawn, whichever copy its coordinates are written in.
+   */
   async compareGeometry(q: FeatureQuery, expected: GeometryExpectation, tolerancePx: number): Promise<GeometryVerdict> {
     const g = await this.geometry(q);
     if (!g.ok) return { ok: false, reason: g.message };
-    const px = (c: number[]) => this.adapter.project(this.adapter.worldFromCoord(c));
     const base = { actual: g.geometry, from: g.from };
     const clipped = g.from === 'rendered' ? ' (NOTE: compared against RENDERED geometry, which may be clipped at tile borders — the source cannot return its data)' : '';
     if ('circle' in expected) {
       const parts = explode(g.geometry);
       if (parts.length !== 1 || parts[0].kind !== 'polygon') return { ok: false, reason: `expected a circle polygon, got ${g.geometry.type}`, ...base };
-      const c = this.adapter.project(expected.circle.center as W);
-      const e = this.adapter.project(expected.circle.edge as W);
+      const { center, edge } = expected.circle;
+      const around = this.projector({ kind: 'line', coords: [[center.lng, center.lat], [edge.lng, edge.lat]] }); // the edge in the centre's copy
+      const c = around([center.lng, center.lat]);
+      const e = around([edge.lng, edge.lat]);
       const r = Math.hypot(e.x - c.x, e.y - c.y);
+      const px = this.projector(parts[0]);
       const worst = Math.max(...parts[0].rings[0].map((v) => Math.abs(Math.hypot(px(v).x - c.x, px(v).y - c.y) - r)));
       return worst <= tolerancePx ? { ok: true, ...base } : { ok: false, reason: `a vertex is ${worst.toFixed(1)}px off the expected circle of radius ${r.toFixed(1)}px (tolerance ${tolerancePx}px)${clipped}`, ...base };
     }
@@ -643,10 +664,11 @@ export class Engine<W = unknown> {
     if (A.length !== E.length) return { ok: false, reason: `${A.length} part(s), expected ${E.length}${clipped}`, ...base };
     for (let i = 0; i < E.length; i++) {
       const a = A[i], e = E[i];
+      const pa = this.projector(a), pe = this.projector(e);
       const seqs: [PixelPoint[], PixelPoint[], boolean][] =
-        a.kind === 'point' && e.kind === 'point' ? [[[px(a.coord)], [px(e.coord)], false]]
-        : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(px), e.coords.map(px), false]]
-        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(px), openRing(e.rings[k]).map(px), true] as [PixelPoint[], PixelPoint[], boolean]) : [])
+        a.kind === 'point' && e.kind === 'point' ? [[[pa(a.coord)], [pe(e.coord)], false]]
+        : a.kind === 'line' && e.kind === 'line' ? [[a.coords.map(pa), e.coords.map(pe), false]]
+        : a.kind === 'polygon' && e.kind === 'polygon' ? (a.rings.length === e.rings.length ? a.rings.map((ring, k) => [openRing(ring).map(pa), openRing(e.rings[k]).map(pe), true] as [PixelPoint[], PixelPoint[], boolean]) : [])
         : [];
       if (!seqs.length) return { ok: false, reason: `part ${i}: ring count or kind differs${clipped}`, ...base };
       for (const [act, exp, cyclic] of seqs) {
@@ -890,7 +912,7 @@ export class Engine<W = unknown> {
       }
     }
     if (q.at) {
-      const at = this.adapter.project(q.at as W);
+      const at = this.projectAt(q.at);
       const under = this.adapter.queryFeatures({ at });
       const shown = (n: number) => under.slice(0, n).map((f) => describe({ ...f, geometryType: f.geometry.type })).join('; ');
       lines.push(
@@ -927,7 +949,7 @@ export class Engine<W = unknown> {
     const filterLayers = o.filter && this.layersOf(o.filter);
     for (const v of Object.values(o.filter?.where ?? {})) checkWhere(v);
     // filter.at: only entities drawn AT that location (the hit test there), and none at a location that is not on the visible surface
-    const filterAt = o.filter?.at === undefined ? undefined : this.hiddenAt(o.filter.at) ? [] : a.queryFeatures({ layers: filterLayers, at: a.project(o.filter.at as W) });
+    const filterAt = o.filter?.at === undefined ? undefined : this.hiddenAt(o.filter.at) ? [] : a.queryFeatures({ layers: filterLayers, at: this.projectAt(o.filter.at) });
     const size = this.surfaceSize();
     const centre = { x: size.w / 2, y: size.h / 2 };
     const found = new Map<string, Collected>();
@@ -975,7 +997,9 @@ export class Engine<W = unknown> {
     // Candidates come from the GEOMETRY; what is hit-tested is what is DRAWN. They differ for a label placed
     // along a line, an icon with an offset, or a symbol hidden by collision at the pixels we tried.
     let blocked: string | undefined = e.cands?.length ? 'no-pixel: none of the pixels tried on its geometry hit-tests back to it (label along a line, offset icon?)' : 'no part of it is inside the view';
-    // whole client pixels, exactly as actionPointOnce() tries them: what the snapshot lists as clickable is what click() uses
+    // whole client pixels, snapped exactly as actionPointOnce() snaps them: what the snapshot lists as clickable is what
+    // click() uses. But fewer of them — the 40 best candidates (at most 200 pixels) against click()'s MAX_TRIES — as this
+    // runs for every listed entity: one almost entirely covered may be listed as covered and still be clickable.
     for (const c of wholePixels((e.cands ?? []).slice(0, 40), frame)) {
       const hits = this.adapter.queryFeatures({ at: c });
       const all = [...e.byLayer.values()].flat();

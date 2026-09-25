@@ -118,10 +118,11 @@ const api = {
     if (!info) return { ok: false as const, message: `layer "${layer}" does not exist. Layers: ${a.listLayers().map((l) => l.id).join(', ')}` };
     const el = a.surface();
     if (el.isConnected === false || el.clientWidth < 1 || el.clientHeight < 1) return { ok: false as const, message: el.isConnected === false ? 'map canvas is detached from the document; the map was removed or its container was detached' : `map canvas is ${el.clientWidth}x${el.clientHeight}` };
-    const p = a.project(world);
+    const near = engine(mapId).nearestWorld(world); // just across the antimeridian: the copy in view
+    const p = a.project(near);
     if (p.x < 0 || p.y < 0 || p.x > el.clientWidth || p.y > el.clientHeight) return { ok: false as const, message: 'that location is outside the viewport' };
     // Its pixel shows something else — the near side of a globe, the ridge in front of it: no verdict about it.
-    if (a.isOnSurface?.(world) === false) return { ok: false as const, message: 'that location is not on the visible map surface (the far side of the globe, or hidden behind terrain or beyond the horizon)' };
+    if (a.isOnSurface?.(near) === false) return { ok: false as const, message: 'that location is not on the visible map surface (the far side of the globe, or hidden behind terrain or beyond the horizon)' };
     if (!info.visible) return { ok: true as const, diff: 0, surface: p, hidden: true };
     // an AREA: imagery is often transparent at any one pixel
     const r = a.probePixels ? await a.probePixels(layer, p, radiusPx, budgetMs) : { diff: await a.pixelContribution?.(layer, p, radiusPx) };
@@ -162,12 +163,13 @@ const api = {
   clientPoint: (mapId: string, world: any) => {
     engine(mapId).scrollIntoView();
     const a = engine(mapId).adapter;
-    const p = a.project(world);
+    const near = engine(mapId).nearestWorld(world); // just across the antimeridian: the copy in view
+    const p = a.project(near);
     const el = a.surface();
     const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
     const client = toClient(clientFrame(el), p); // a CSS-scaled map is not just offset
     const top = inside ? topElementAt(client.x, client.y) : null;
-    const hidden = inside && a.isOnSurface ? !a.isOnSurface(world) : false;
+    const hidden = inside && a.isOnSurface ? !a.isOnSurface(near) : false;
     return { client, surface: p, inside, hidden, covered: inside && top !== el, moving: a.isMoving() };
   },
   worldAt: (mapId: string, client: { x: number; y: number }) => {
