@@ -1,3 +1,4 @@
+import { cpuSlowdown } from '../slow-machine';
 import { DEMOTILES, example, expect, test } from './harness';
 
 // MapLibre example "Animate a point": a circle layer whose GeoJSON source is replaced on every
@@ -10,6 +11,14 @@ import { DEMOTILES, example, expect, test } from './harness';
 // answer in the time that was left" — equally true, equally not a click.
 const REFUSED = /unstable: feature position changed between two animation frames|ambiguous: strict mode violation: query resolved to 2 features: point \{\}|the page did not answer "actionPoint" in the time that was left/;
 
+// waitForIdle's timeout in the spec that expects it to fail with a diagnosis. The round trip is abandoned at the deadline
+// and the in-page wait takes half the time left (at most 2 s), so the page's answer must come back within
+// T - min(T/2, 2000) ms, or the error is "the page did not answer" instead. Measured (tests/wild/idle-measure.spec.ts, five
+// workers, as the suite runs here): the answer comes back 1031 ms late at the median, 1541 ms at most (n=120, load 10-38);
+// p90 3433 / max 9618 ms at load ~200 (n=33). The earlier 2500 left 1250 ms: this spec failed 3 runs in 20 at five
+// workers. 7000 leaves 5000: three times the largest lateness measured at the loads CI sees.
+const IDLE_FAIL_MS = 7000 * cpuSlowdown();
+
 test.describe('wild: animate-a-point', () => {
   test('the point is on the map and never becomes idle (waitForIdle must be opted out)', async ({ wild }) => {
     const map = await wild.open(example('animate-a-point'), { routes: DEMOTILES, waitForIdle: false });
@@ -19,7 +28,7 @@ test.describe('wild: animate-a-point', () => {
     // …and the error says WHY, instead of leaving the reader to guess that the app is slow
     // (the second alternative is what a starved page gives: fewer than two data replacements were SEEN inside the wait —
     //  the library then says only what it knows, not what it guesses)
-    await expect(map.waitForIdle({ timeout: 2500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — (the app keeps replacing the data of source\(s\) point \(\d+ times in \d+ms\) — setData in a requestAnimationFrame loop or a timer\. Such a map NEVER becomes idle|source\(s\) point have not finished loading)/);
+    await expect(map.waitForIdle({ timeout: IDLE_FAIL_MS })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — (the app keeps replacing the data of source\(s\) point \(\d+ times in \d+ms\) — setData in a requestAnimationFrame loop or a timer\. Such a map NEVER becomes idle|source\(s\) point have not finished loading)/);
   });
 
   test('the point stays on the radius-20 circle around the origin at any sampled instant', async ({ wild }) => {
