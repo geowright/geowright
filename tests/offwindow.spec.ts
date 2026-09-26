@@ -114,6 +114,29 @@ test.describe('a location below the window (the map is taller than it)', () => {
     expect(Math.abs(clicked.lat - at.lat)).toBeLessThan(0.001);
   });
 
+  // A map more than twice the window's height: its centre is itself below the window, so no pan brings the location in.
+  // autoPan pans once (as for a feature), and the failure says why, not "panned to location".
+  test('clickAt with autoPan on a map whose centre is below the window pans once, and says the location is outside it', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const el = document.getElementById('map')!;
+      el.style.bottom = 'auto';
+      el.style.height = '1600px';
+      const m = (window as any).__geowright_maps.main;
+      m.resize();
+      (window as any).__clicks = [];
+      m.on('click', (e: any) => (window as any).__clicks.push([e.point.x, e.point.y]));
+    });
+    await map.waitForIdle(); // (the container's own resize observer resizes the map once more)
+    await page.evaluate(() => {
+      (window as any).__pans = 0;
+      (window as any).__geowright_maps.main.on('movestart', () => (window as any).__pans++);
+    });
+    const at = await belowTheWindow(page);
+    const err = await map.clickAt(at, { autoPan: true, timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(err?.message.split('\n')[0]).toContain(OFF_WINDOW);
+    expect(await page.evaluate(() => ({ clicks: (window as any).__clicks.length, pans: (window as any).__pans }))).toEqual({ clicks: 0, pans: 1 });
+  });
+
   test('the snapshot says a feature below the window is outside it, not covered by DOM', async ({ map, page }) => {
     await tallMap(page);
     await page.evaluate(() => {

@@ -616,7 +616,10 @@ blocked for 5 s returned after 5 s, now after 1 s); otherwise they get 2 s. An a
 shape) has one timeout for all of them, not one each. A round trip is never abandoned before it has had 500 ms: a last
 attempt that started with a few ms left used to be abandoned for want of them, and the timeout then blamed "a busy main
 thread" on an idle page instead of the real reason (the slowest round trip measured: 206 ms, on the dense page at 4x
-CPU throttling). As in Playwright, `timeout: 0` means no timeout.
+CPU throttling). A page that answered the earlier attempts and was only slow to answer the last one is slow, not
+stalled: the failure is what it answered, with the map state, as the matchers already had it. `waitForIdle()` is bounded
+the same way (its in-page wait ends early enough for the answer to come back in time). As in Playwright, `timeout: 0`
+means no timeout; a pixel probe then gets 5 s a look (a browser fires a timer of Infinity at once).
 
 **The library has no fixed sleep of its own, and neither do its tests.** The one that used to exist — a
 short pause between vertices while drawing a shape, to avoid an unintended double-click — turned out to

@@ -277,6 +277,14 @@ for (const lib of LIBS) {
       baseExpect(await page.evaluate(() => (window as any).__presses), 'one press').toBe(1);
     });
 
+    // `timeout: 0` means no timeout: a matcher's probe then has no deadline to take its budget from. On Mapbox GL v1 (no
+    // redraw(), the probe waits for real frames) an Infinity budget made every frame "late" at once, and the matcher never
+    // concluded (the test timeout ends it, if the fix is gone).
+    test('toBeVisibleOnMap({ timeout: 0 }) and toHaveLayerPixels({ timeout: 0 }) conclude', async ({ map }) => {
+      await expect(map.feature({ layer: 'places', where: { name: 'Bravo' } })).toBeVisibleOnMap({ timeout: 0 });
+      await expect(map).toHaveLayerPixels('cover', { at: { lng: 34.86, lat: 32.11 }, timeout: 0 });
+    });
+
     // A version without getLayersOrder() reports the style's layers from getStyle(), which leaves custom layers out: it
     // says so, since an action cannot check a custom layer drawn over its target there.
     test('a version without getLayersOrder() says that custom layers are not checked', async ({ map, page }) => {

@@ -581,7 +581,8 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       }
       return reloading(verdict(difference(first, withLayer), difference(withLayer, without)));
     }
-    const deadline = performance.now() + Math.max(0, budgetMs);
+    // (a browser's timer delay is a 32-bit number: beyond it, as for Infinity, the timer fires at once)
+    const deadline = performance.now() + Math.min(Math.max(0, budgetMs), 2 ** 31 - 1);
     const frame = () =>
       new Promise<Uint8Array | undefined>((resolve) => {
         // A hidden tab renders no frames; a starved machine renders them late. Either way: not within the budget.
@@ -640,7 +641,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     };
     return new Promise((resolve) => {
       const done = (ok: boolean) => (clearTimeout(timer), this.map.off('render', onRender), resolve(ok));
-      const timer = setTimeout(() => done(false), Math.max(0, budgetMs));
+      const timer = setTimeout(() => done(false), Math.min(Math.max(0, budgetMs), 2 ** 31 - 1));
       const onRender = () => (loaded() ? done(true) : this.map.triggerRepaint());
       this.map.on('render', onRender);
       this.map.triggerRepaint();

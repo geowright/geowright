@@ -75,7 +75,9 @@ as written (it adds types only).
   an `autoPan` pan, `lngLat()`, and its failure report), even on a page too busy to answer. Real input is never
   abandoned half-way: once it is sent, a feature's `click()` and `tap()`, and `hover()` with `moving: 'allow'`, wait
   for the page to say where it landed, which a stalled page can hold past the timeout. An action with several points
-  (a drag, a shape) has one timeout for all of them. As in Playwright, `timeout: 0` means no timeout.
+  (a drag, a shape) has one timeout for all of them. `waitForIdle({ timeout })` is wall-clock too. When a page answered
+  the earlier attempts and only the last one ran past the deadline, the failure is what it answered (slow, not stalled).
+  `autoPan` pans once per action. As in Playwright, `timeout: 0` means no timeout (a pixel probe then gets 5 s a look).
 - DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element. They are found
   inside the map's container, also when a web component hosts the map in its shadow root.
 - **Typings**: `expect` is typed from `@playwright/test` alone (so it keeps its matcher types under pnpm and Yarn PnP),

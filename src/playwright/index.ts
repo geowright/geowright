@@ -220,6 +220,13 @@ const DIAGNOSTIC_GRACE_MS = 2000;
  * left, less room for its answer to come back, so that it answers with what it found instead of being abandoned.
  */
 const lookBudget = (deadline: number) => (deadline === Infinity ? undefined : Math.max(0, Math.round(deadline - Date.now() - Math.min(MIN_ANSWER_MS, (deadline - Date.now()) / 4))));
+/**
+ * A matcher's pixel probe may take what is left of its timeout, at least 100 ms. `timeout: 0` (no timeout) leaves an
+ * Infinity that the page cannot wait with (`setTimeout(…, Infinity)` fires at once): a probe then gets 5 s, the
+ * in-page default of an action's look, and the matcher's own retries go on.
+ */
+const probeBudget = (deadline: number) => (deadline === Infinity ? 5000 : Math.max(100, deadline - Date.now()));
+
 /** The injection of the in-page engine under way, per page: concurrent first calls share it. */
 const injections = new WeakMap<Page, Promise<unknown>>();
 
@@ -431,8 +438,9 @@ export class MapHandle {
   }
 
   /**
-   * @internal `_call`, but gives up at `deadline`. ONLY for calls without side effects on the page (queries,
-   * waits): the abandoned evaluate keeps running in the page and its answer is dropped. Never wrap real input.
+   * @internal `_call`, but gives up at `deadline`. ONLY for calls without side effects the app can act on (queries,
+   * waits, an action's look, whose pixel probe puts the style back by itself): the abandoned evaluate keeps running in
+   * the page and its answer is dropped. Never wrap real input.
    */
   _callBy<T>(deadline: number, method: string, ...args: unknown[]): Promise<T> {
     return this._answerBy(deadline, method, this._call<T>(method, ...args));
@@ -499,21 +507,28 @@ export class MapHandle {
    */
   async _retry<T>(what: string, timeout: number, attempt: (deadline: number) => Promise<{ value: T } | { retry: string }>, deadline = deadlineOf(timeout)): Promise<T> {
     let last = 'never attempted';
+    let slowest = -1; // ms, the longest attempt the page answered (-1: none)
     for (let i = 0; ; i++) {
+      const started = Date.now();
       try {
         const r = await attempt(deadline);
         if ('value' in r) return r.value;
         last = r.retry;
+        slowest = Math.max(slowest, Date.now() - started);
       } catch (e) {
         if (e instanceof InputThrew) throw e.error; // real input may have left: never sent again
         if (e instanceof DeadlineError) {
           // `timeout` is a wall-clock promise. One slow round trip into a busy page used to run on for as long as it
-          // liked (measured: 33s for { timeout: 2000 } on an overloaded machine); it is abandoned instead. The page is not
-          // answering: the caller skips the diagnostics that would wait for it.
-          throw new UnresponsiveError(`${what}: timed out after ${timeout}ms — ${e.message}; before that: ${last}`);
+          // liked (measured: 33s for { timeout: 2000 } on an overloaded machine); it is abandoned instead. A page that is
+          // not answering is left alone: the caller skips the diagnostics that would wait for it. But a page that
+          // answered the attempts before, whose last attempt started with less time left than its slowest answered one
+          // took, is slow, not stalled (the matchers' rule): the failure is what it answered, with the map state.
+          if (slowest < 0 || deadline - started >= slowest) throw new UnresponsiveError(`${what}: timed out after ${timeout}ms — ${e.message}; before that: ${last}`);
+          throw new GeowrightError(`${what}: timed out after ${timeout}ms — ${last} (the attempt still running at the deadline was abandoned: the page was slow to answer it)`);
         }
         // "no map registered yet" and navigation races are retryable; they surface on timeout.
         last = (e as Error).message.split('\n')[0];
+        slowest = Math.max(slowest, Date.now() - started);
       }
       const wait = POLL[Math.min(i, POLL.length - 1)];
       if (Date.now() + wait > deadline) break;
@@ -531,16 +546,17 @@ export class MapHandle {
     const timeout = opts.timeout ?? this.idleTimeout;
     await step(`map.waitForIdle()`, () =>
       this._retry('map.waitForIdle()', timeout, async (deadline) => {
-        // Not abandoned at the deadline: the in-page wait is bounded by itself (<= 2s), and its answer carries the
-        // diagnosis ("an animated source: never idle") that is the whole point of the error message.
-        const ok = await this._call<boolean>('waitForIdle', Math.max(50, Math.min(deadline - Date.now(), 2000)));
+        // Abandoned at the deadline like every other wait: the in-page wait bounds itself (<= 2s), but a page whose main
+        // thread is busy answers when it can. The in-page wait ends early enough for its answer to come back in time,
+        // with the diagnosis ("an animated source: never idle") that is the point of the error message.
+        const ok = await this._callBy<boolean>(deadline, 'waitForIdle', Math.max(50, Math.min(lookBudget(deadline) ?? 2000, 2000)));
         if (!ok) {
-          const why = await this._call<string | undefined>('idleDiagnosis').catch(() => undefined);
+          const why = await this._callBy<string | undefined>(Date.now() + DIAGNOSTIC_GRACE_MS, 'idleDiagnosis').catch(() => undefined);
           return { retry: `map did not become idle (still moving, loading tiles, or repainting)${why ? ` — ${why}` : ''}` };
         }
         // The mirror is (re)started here: after a navigation the page is new and it is gone.
-        if (this.mirrorOpt && !(await this._call<boolean>('hasMirror'))) {
-          await this._call('mirror', typeof this.mirrorOpt === 'object' ? this.mirrorOpt : {});
+        if (this.mirrorOpt && !(await this._callBy<boolean>(deadline, 'hasMirror'))) {
+          await this._callBy(deadline, 'mirror', typeof this.mirrorOpt === 'object' ? this.mirrorOpt : {});
         }
         return { value: undefined };
       }),
@@ -711,14 +727,18 @@ export class MapHandle {
 
   private _pointAtOnce(at: LngLat, opts: ActionOptions, what: string, seen: (client: { x: number; y: number }) => void, deadline?: number): Promise<{ x: number; y: number }> {
     const timeout = opts.timeout ?? this.timeout;
+    // Once per action, as for a feature: a location a pan cannot bring into the window (a map more than twice the
+    // window's size) would otherwise be panned to on every attempt, and the timeout would say only "panned".
+    let panned = false;
     return this._retry<{ x: number; y: number }>(`${what} ${fmt(at)}`, timeout, async (by) => {
       const r = await this._pointNow(at, opts, seen, by);
-      if ('outside' in r && opts.autoPan) {
+      if ('outside' in r && opts.autoPan && !panned) {
+        panned = true;
         await this._answerBy(by, 'revealWorld', this._call('revealWorld', at)); // the pan is sent either way; its answer is not waited for past the deadline
         await this._callBy(by, 'waitForIdle', 2000);
         return { retry: 'panned to location' };
       }
-      return r;
+      return 'retry' in r ? { retry: r.retry } : r;
     }, deadline ?? deadlineOf(timeout));
   }
 
@@ -1336,7 +1356,7 @@ const matchers = {
         // Absence needs a settled map: a raster whose tiles are still loading contributes nothing YET. A positive
         // assertion waits for pixels to appear and needs no settling — nor the cost of it on an animated source.
         const s: { settled: boolean; why?: string } = this.isNot ? await settle.wait(received, i, deadline, true) : { settled: true };
-        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number }; hidden?: boolean } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24, Math.max(100, deadline - Date.now()));
+        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number }; hidden?: boolean } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24, probeBudget(deadline));
         if (!r.ok) return { verdict: undefined, why: (why = r.message) };
         why = r.hidden ? `layer "${layer}" is hidden (its visibility is "none")` : r.diff > 0 ? `pixels differ by ${r.diff} with and without the layer` : `hiding the layer changes nothing within ${options.radiusPx ?? 24}px of (${Math.round(r.surface.x)},${Math.round(r.surface.y)})`;
         if (r.diff > 0) return { verdict: true };
@@ -1403,7 +1423,7 @@ const matchers = {
           const reuse = last && last.key === key && Date.now() - last.at < last.every;
           const probe = reuse
             ? last!.probe
-            : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), { ignoreLayers: map.ignoreLayers, budgetMs: Math.max(100, deadline - Date.now()) });
+            : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), { ignoreLayers: map.ignoreLayers, budgetMs: probeBudget(deadline) });
           if (!probe.ok) return invisible(`pixels: no clean point to probe — ${probe.message}`);
           if (!reuse) last = probe.inconclusive === undefined ? { key, at: Date.now(), every: last?.key === key ? Math.min(last.every * 2, 8000) : 1000, probe } : undefined;
           // No verdict YET — the pixels changed by themselves, or no frame came in time: never "passed on paint alone".
