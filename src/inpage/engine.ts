@@ -1968,6 +1968,7 @@ const eventTarget = (e: Event): EventTarget | null => e.composedPath?.()[0] ?? e
  */
 const closedRoots = new WeakMap<Element, ShadowRoot>();
 function rememberClosedRoots(surface: Element): void {
+  if (typeof ShadowRoot === 'undefined' || typeof surface.getRootNode !== 'function') return; // (a surface without a DOM: unit tests)
   for (let root = surface.getRootNode(); root instanceof ShadowRoot; root = root.host.getRootNode()) {
     if (root.mode === 'closed') closedRoots.set(root.host, root);
   }

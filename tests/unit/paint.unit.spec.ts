@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { describeLayerHidden, describeStyleCauses, nameColour, tally } from '../../src/inpage/engine';
-import { explainLayerHidden, explainPaint, filterAdmits, inQuad, mercator, paintColour, pixelOccluders, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
+import { explainLayerHidden, explainPaint, filterAdmits, inQuad, mercator, nullUncertainProperties, paintColour, pixelOccluders, paintVisibility, unparseableProperties, unparseableReasons, zoomUncertainProperties } from '../../src/inpage/maplibre-paint';
 import type { RenderedFeature } from '../../src/inpage/types';
 
 /** Just enough of maplibregl.Map for the paint evaluator: one layer, its paint/layout, a zoom. */
@@ -8,11 +8,11 @@ function fakeMap(
   type: string,
   paint: Record<string, unknown>,
   layout: Record<string, unknown> = {},
-  opts: { zoom?: number; minzoom?: number; maxzoom?: number; globalState?: Record<string, unknown>; tileSize?: number; pitch?: number; images?: Record<string, { sdf: boolean }> } = {},
+  opts: { zoom?: number; minzoom?: number; maxzoom?: number; globalState?: Record<string, unknown>; tileSize?: number; pitch?: number; images?: Record<string, { sdf: boolean }>; sourceType?: string } = {},
 ) {
   return {
     getLayer: (id: string) => (id === 'l' ? { id, type, source: 's', minzoom: opts.minzoom, maxzoom: opts.maxzoom } : undefined),
-    getSource: (id: string) => (id === 's' ? { type: 'geojson', tileSize: opts.tileSize ?? 512 } : undefined),
+    getSource: (id: string) => (id === 's' ? { type: opts.sourceType ?? 'geojson', tileSize: opts.tileSize ?? 512 } : undefined),
     getZoom: () => opts.zoom ?? 10,
     getPitch: () => opts.pitch ?? 0,
     hasImage: (name: string) => !!opts.images?.[name],
@@ -112,8 +112,21 @@ test.describe('why invisible: property, value, expression branch, zoom', () => {
       'at zoom 10: circle-opacity is 0 because the case took its branch 1 (the first true condition: ["==",["get","status"],"archived"]); and circle-stroke-width is 0 (a constant in the style)',
     );
     expect(why(map, feature({ status: 'ok' }, { muted: true }))).toContain('the case took its branch 2 (the first true condition: ["boolean",["feature-state","muted"],false])');
-    const fallback = fakeMap('line', { 'line-width': ['case', ['has', 'lanes'], 3, 0] });
+    const fallback = fakeMap('line', { 'line-width': ['case', ['==', ['get', 'lanes'], 2], 3, 0] });
     expect(why(fallback, feature({}))).toBe('at zoom 10: line-width is 0 because the case took its fallback (no condition was true)');
+  });
+
+  test("['has', key] on a key the rendered GeoJSON feature lacks is uncertain (the key may be there, null): visible, and noted", () => {
+    const hasLanes = { 'line-width': ['case', ['has', 'lanes'], 3, 0] };
+    const geojson = fakeMap('line', hasLanes);
+    expect(paintVisibility(geojson, feature({}))).toEqual({ visible: true });
+    expect(nullUncertainProperties(geojson)).toEqual(['l: line-width']);
+    // a vector tile cannot hold a null: what the hit test sees is what the renderer drew
+    const tiles = fakeMap('line', hasLanes, {}, { sourceType: 'vector' });
+    expect(paintVisibility(tiles, feature({})).visible).toBe(false);
+    expect(nullUncertainProperties(tiles)).toEqual([]);
+    // the key present: nothing uncertain about it
+    expect(paintVisibility(fakeMap('line', hasLanes), feature({ lanes: 2 }))).toEqual({ visible: true });
   });
 
   test('step on zoom: the stop used, or the base output below the first stop', () => {
