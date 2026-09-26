@@ -128,8 +128,8 @@ Actions refuse an invisible feature unless `{ force: true }`. How it works: [DES
 3. the pixel is **on** the feature — for polygons an interior point far from the edge, never the centroid
 4. the feature is the **topmost visible hit** at that pixel (its own label on top does not count as an occluder; neither does anything the style paints invisibly, e.g. a transparent hit area)
 5. no DOM element (popup, control, overlay) covers the pixel
-6. a layer the hit test cannot see (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) drawn **above** the feature at that pixel: the feature's own layer is probed there, and if hiding it changes no pixel the point is covered and the next one is tried (a translucent overlay, or a transparent gap in an opaque one, lets the action through). Maps without such a layer above their features pay nothing
-7. at the instant the real `pointerdown` arrives, the hit test is re-run; if the feature the query resolved to is no longer there (a look-alike that slid under the pointer does not count), or a layer of item 6 appeared over it since the aim, the click — or the tap, touch events included — is swallowed and the action retries
+6. a layer the hit test cannot see (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) drawn **above** the feature at that pixel: the feature's own layer is probed there, and if hiding it changes no pixel the point is covered and the next one is tried (a translucent overlay, or a transparent gap in an opaque one, lets the action through; so does a heatmap that draws nothing there, although MapLibre 5 and later hit-test it over its whole radius). Each action probes anew. Maps without such a layer above their features pay nothing
+7. at the instant the real `pointerdown` arrives, the hit test is re-run; if the feature the query resolved to is no longer there (a look-alike that slid under the pointer does not count), is painted invisibly since the aim, or a layer of item 6 appeared over it since the aim, the click — or the tap, touch events included — is swallowed and the action retries
 
 Works unchanged on rotated, pitched, globe and terrain maps, and on a map inside a container scaled with CSS `transform: scale()`. A location on the far side of the globe, behind the camera or
 hidden behind a mountain is an error, never a click on whatever is drawn at that pixel, and a feature query `at` such a
@@ -339,7 +339,8 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   machine. A check at `click` as well is planned.
 - **Pixel-only layers above a feature** (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) are checked with a pixel probe:
   a few renders per action on a map that has one over its features, and not at all for `moving: 'allow'`. Pixels that change
-  inside an overlay between the aim and the press are not re-checked: [RECIPES](docs/RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
+  inside an overlay between the aim and the press are not re-checked; on MapLibre 2 and Mapbox GL 1 a custom layer is not
+  checked at all; the snapshot does not probe (it marks such a feature `under-pixel-layer:<ids>`): [RECIPES](docs/RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
 - The injected script is about 410 KB, not minified (88 KB gzipped; it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
 
 The full list, with costs measured on a dense map: [DESIGN — Costs and known limitations](docs/DESIGN.md#costs-and-known-limitations).

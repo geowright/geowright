@@ -154,12 +154,15 @@ export class Engine<W = unknown> {
   private byDataId = new Map<string, { feature: RenderedFeature; props: string; alone: boolean }[]>();
 
   /**
-   * Pixel-probe verdicts of actions (decision 0022): does the target show through the pixel-only layers above it at this pixel?
-   * Keyed by the target, the pixel, the camera and those layers with their stamps (pixelKey), so that the aim after a
-   * probe does not probe again (a probe that reloads the source would make the next aim miss, probe, reload… for ever).
-   * Anything that may change the answer changes the key. Bounded like the style caches.
+   * Pixel-probe verdicts (decision 0022), per ACTION (`opts.action`, one token per action from the binding): does the
+   * target show through the pixel-only layers above it at this pixel? Within one action, the aim after a probe does not
+   * probe again: a probe that reloads the source would make the next aim miss, probe, reload… for ever. A verdict never
+   * outlives its action: what an overlay draws can change without anything the key sees (an animated canvas or video, a
+   * paint transition, a colour), so every new action probes again. Within the action the key still holds the target, the
+   * pixel, the camera and the layers with their stamps (verdictKey). The last few actions are kept; a call without a
+   * token (a matcher's look) keeps its verdicts for that one call.
    */
-  private pixelVerdicts = new Map<string, 'visible' | 'occluded'>();
+  private pixelVerdicts = new Map<string, Verdicts>();
 
   /**
    * For each target (key) its last aim approved: the pixel-only layers drawn over it at the aimed pixel that it was seen
@@ -418,9 +421,13 @@ export class Engine<W = unknown> {
    * hit area, a muted symbol) hide nothing, so they are not occluders — originally they were.
    * (MapLibre delivers layer-scoped events to every layer under the pointer, so "on top" was never
    * about who gets the click; it is about what the person clicking can see.)
+   * A hit of a pixel-only layer (a heatmap, on MapLibre >= 5) is not an occluder either, unless it is the target's own
+   * layer: whether its pixels hide the target is for the gate and the probe (decision 0022), as on every other version.
    */
-  private topVisible(hits: RenderedFeature[]): RenderedFeature | undefined {
-    return hits.find((h) => this.visibility(h).visible) ?? hits[0];
+  private topVisible(hits: RenderedFeature[], own: string | Set<string>): RenderedFeature | undefined {
+    const mine = (layer: string) => (typeof own === 'string' ? layer === own : own.has(layer));
+    const seen = hits.filter((h) => mine(h.layer) || !this.adapter.pixelOnly?.(h.layer));
+    return seen.find((h) => this.visibility(h).visible) ?? seen[0];
   }
 
   /* ---------------- action point ("actionability") ---------------- */
@@ -437,12 +444,13 @@ export class Engine<W = unknown> {
   async actionPoint(q: FeatureQuery, opts: ActionPointOptions = {}): Promise<ActionPointResult> {
     if (opts.moving === 'allow') return this.movingActionPoint(q, opts);
     const deadline = performance.now() + (opts.budgetMs ?? 5000);
+    const verdicts = this.verdictsOf(opts.action);
     // 6. a pixel-only layer drawn above the target at the chosen pixel (the gate, adapter.pixelOccluders): the hit test
     //    cannot see it, so hide the TARGET's layer there and look (the pixel probe). Nothing changes: the pixel is covered;
     //    the next candidate is tried, at most MAX_PROBES per aim. Maps without such a layer never probe (the gate is < 0.1 ms).
     let next: Aimed | undefined;
     for (let probes = 0; ; ) {
-      const r = next ?? (await this.aimStill(q, opts));
+      const r = next ?? (await this.aimStill(q, opts, verdicts));
       next = undefined;
       if (!r.ok) return r;
       const { pixels, ...aimed } = r;
@@ -469,11 +477,11 @@ export class Engine<W = unknown> {
         this.aimedThrough.set(pixels.target, new Set(pixels.over.map((o) => o.layer)));
         return { ...aimed, why: `${aimed.why}; under ${names}, not checked: ${p.unavailable}` };
       }
-      this.remember(pixels.key, p.diff === 0 ? 'occluded' : 'visible');
+      verdicts.set(pixels.key, p.diff === 0 ? 'occluded' : 'visible');
       if (p.diff === 0) {
         // the next candidate, from one more look: the map was still a moment ago (aimStill), and is now
         if (this.adapter.isMoving()) return fail('moving', 'map started moving');
-        next = this.actionPointOnce(q, opts, true, true);
+        next = this.actionPointOnce(q, opts, true, verdicts);
         continue;
       }
       if (!p.reloads) {
@@ -490,18 +498,20 @@ export class Engine<W = unknown> {
     }
   }
 
-  /** Remember a pixel verdict (bounded: the oldest goes first). */
-  private remember(key: string, verdict: 'visible' | 'occluded'): void {
-    this.pixelVerdicts.delete(key);
-    this.pixelVerdicts.set(key, verdict);
-    if (this.pixelVerdicts.size > 200) this.pixelVerdicts.delete(this.pixelVerdicts.keys().next().value!);
+  /** The verdicts of one action (bounded: the oldest action's go first); without a token, a map for this call alone. */
+  private verdictsOf(action: string | undefined): Verdicts {
+    if (action === undefined) return new Map();
+    let v = this.pixelVerdicts.get(action);
+    if (!v) {
+      this.pixelVerdicts.set(action, (v = new Map()));
+      if (this.pixelVerdicts.size > 8) this.pixelVerdicts.delete(this.pixelVerdicts.keys().next().value!);
+    }
+    return v;
   }
 
-  /** The key of a pixel verdict: the target, the pixel, the camera, and the pixel-only layers over it with their stamps. */
+  /** The key of a pixel verdict within an action: see verdictKey. */
   private pixelKey(pieces: RenderedFeature[], c: PixelPoint, over: PixelOccluder[]): string {
-    const v = this.adapter.getViewState() as { center?: unknown; zoom?: unknown; bearing?: unknown; pitch?: unknown };
-    const size = this.surfaceSize();
-    return JSON.stringify([this.key(pieces[0]), Math.round(c.x), Math.round(c.y), v.center, v.zoom, v.bearing, v.pitch, size.w, size.h, over.map((o) => [o.layer, o.stamp])]);
+    return verdictKey(this.key(pieces[0]), c, this.adapter.getViewState(), this.surfaceSize(), over);
   }
 
   /** Does the one feature the query resolves to hit-test at `at` (again)? */
@@ -510,16 +520,16 @@ export class Engine<W = unknown> {
     return !!pieces && this.adapter.queryFeatures({ at }).some((h) => this.isPieceOf(h, pieces));
   }
 
-  /** Checks 1–5: map at rest, the same pixel two frames running. */
-  private async aimStill(q: FeatureQuery, opts: ActionPointOptions): Promise<Aimed> {
+  /** Checks 1–5: map at rest, the same pixel two frames running; and the pixel-only layers above, from `verdicts`. */
+  private async aimStill(q: FeatureQuery, opts: ActionPointOptions, verdicts: Verdicts): Promise<Aimed> {
     if (this.adapter.isMoving()) return fail('moving', 'map is moving (camera animation or user gesture in progress)');
     // Look-alikes, or ONE id-less feature caught in two tile generations? On 'ambiguous', ask the source — now,
     // while the split is visible — and look again.
     const once = async (): Promise<Aimed> => {
-      const r = this.actionPointOnce(q, opts, true, true);
+      const r = this.actionPointOnce(q, opts, true, verdicts);
       if (r.ok || r.reason !== 'ambiguous') return r;
       await this.learnIdentity(q);
-      return this.actionPointOnce(q, opts, true, true);
+      return this.actionPointOnce(q, opts, true, verdicts);
     };
     const first = await once();
     if (!first.ok) return first;
@@ -598,10 +608,11 @@ export class Engine<W = unknown> {
 
   /**
    * `scroll: false` inside an input event handler: the page must not scroll under an event being delivered.
-   * `pixels`: also check the pixel-only layers drawn above the target (actions only; see actionPoint): a candidate whose
-   * verdict says covered is skipped, and the first one without a verdict comes back `unprobed`, for actionPoint to probe.
+   * `verdicts`: also check the pixel-only layers drawn above the target (actions only; see actionPoint): a candidate whose
+   * verdict in this action says covered is skipped, and the first one without a verdict comes back `unprobed`, for
+   * actionPoint to probe.
    */
-  private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions, scroll = true, pixels = false): Aimed {
+  private actionPointOnce(q: FeatureQuery, opts: ActionPointOptions, scroll = true, verdicts?: Verdicts): Aimed {
     if (scroll && this.adapter.surface().isConnected !== false) this.scrollIntoView();
     const problem = this.surfaceProblem();
     if (problem) return fail('offscreen', problem);
@@ -653,7 +664,7 @@ export class Engine<W = unknown> {
         skipped.miss++; // candidate is not actually on the rendered feature (e.g. icon offset)
         continue;
       }
-      const top = this.topVisible(hits)!;
+      const top = this.topVisible(hits, pieces[0].layer)!;
       if (!opts.force && !this.sameEntity(top, pieces)) {
         occluder ??= top;
         skipped.occluded++;
@@ -671,11 +682,11 @@ export class Engine<W = unknown> {
         continue;
       }
       let px: PixelCheck | undefined;
-      if (pixels && !opts.force) {
+      if (verdicts && !opts.force) {
         const over = (this.adapter.pixelOccluders?.(pieces[0].layer, c) ?? []).filter((o) => !ignore.has(o.layer));
         if (over.length) {
           const key = this.pixelKey(pieces, c, over);
-          const verdict = this.pixelVerdicts.get(key);
+          const verdict = verdicts.get(key);
           if (verdict === 'occluded') {
             pixelCover ??= { over, at: c };
             skipped.pixels++;
@@ -814,12 +825,15 @@ export class Engine<W = unknown> {
         const hits = this.adapter.queryFeatures({ at: c }).filter((h) => !ignore.has(h.layer));
         const client = toClient(frame, c);
         const el = topElementAt(client.x, client.y);
-        const top = this.topVisible(hits);
+        const top = this.topVisible(hits, pieces[0].layer);
         const kind: DebugMark['kind'] = !hits.some((h) => this.isPieceOf(h, pieces)) ? 'miss' : !this.sameEntity(top!, pieces) ? 'occluded' : el !== this.adapter.surface() ? 'dom' : 'ok';
+        // a pixel-only layer over an otherwise clean pixel: whether it hides the feature there, only a probe tells
+        const under = kind === 'ok' && !opts.force ? (this.adapter.pixelOccluders?.(pieces[0].layer, c) ?? []).filter((o) => !ignore.has(o.layer)) : [];
         const label = labelled
           ? undefined
           : `${pieces[0].layer}${pieces[0].id !== undefined ? '#' + pieces[0].id : ''}` +
-            (kind === 'occluded' ? ` under ${top!.layer}${top!.id !== undefined ? '#' + top!.id : ''}` : kind === 'dom' && el ? ` under ${describeEl(el)}` : '');
+            (kind === 'occluded' ? ` under ${top!.layer}${top!.id !== undefined ? '#' + top!.id : ''}` : kind === 'dom' && el ? ` under ${describeEl(el)}` : '') +
+            (under.length ? ` under ${under.map((o) => o.layer).join(', ')} (a layer the hit test cannot see: click() probes it)` : '');
         labelled = true;
         marks.push({ ...client, kind, label });
       }
@@ -974,6 +988,7 @@ export class Engine<W = unknown> {
         else if (miss.covered) verdict.reason = `target was covered by ${describe({ ...miss.covered, geometryType: miss.covered.geometry.type })} when the click arrived`;
         else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the click arrived (strict mode): not clicking whichever is under the pointer`;
         else if (miss.pixels) verdict.reason = `${miss.pixels.map((o) => `${o.type} layer "${o.layer}"`).join(', ')} was drawn over the target when the click arrived, and not when it was aimed`;
+        else if (miss.invisible) verdict.reason = `the target was painted invisibly when the click arrived (${miss.invisible})`;
         else {
           verdict.reason = 'target was no longer under the pointer when the click arrived';
           if (opts.moving === 'allow') verdict.offset = this.offsetFrom(at, q, opts);
@@ -1032,6 +1047,7 @@ export class Engine<W = unknown> {
       else if (miss.covered) verdict.reason = 'target was covered by another feature when the pointer arrived';
       else if (miss.several) verdict.reason = `the query matched ${miss.several} features when the pointer arrived (strict mode)`;
       else if (miss.pixels) verdict.reason = `${miss.pixels.map((o) => `layer "${o.layer}"`).join(', ')} was drawn over the target when the pointer arrived`;
+      else if (miss.invisible) verdict.reason = `the target was painted invisibly when the pointer arrived (${miss.invisible})`;
       else {
         verdict.reason = 'target was no longer under the pointer when it arrived';
         verdict.offset = this.offsetFrom(at, q, opts);
@@ -1056,7 +1072,7 @@ export class Engine<W = unknown> {
    * without one (a moving target, or none could be resolved then), the ONE feature the query resolves to at this instant
    * — `several` when it matches more than one (strict mode, as when it was aimed at).
    */
-  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature; several?: number; pixels?: PixelOccluder[] } | undefined {
+  private verifyAt(at: PixelPoint, q: FeatureQuery, opts: ActionPointOptions, target: RenderedFeature[] | undefined): { covered?: RenderedFeature; several?: number; pixels?: PixelOccluder[]; invisible?: string } | undefined {
     let candidates: RenderedFeature[][];
     try {
       candidates = target ? [target] : [...this.group(q).values()];
@@ -1069,8 +1085,12 @@ export class Engine<W = unknown> {
       const ignore = this.ignoring(opts, pieces);
       const seen = hits.filter((h) => !ignore.has(h.layer));
       if (!seen.some((h) => this.isPieceOf(h, pieces))) continue;
-      const top = this.topVisible(seen)!;
+      const top = this.topVisible(seen, pieces[0].layer)!;
       if (opts.force) return undefined;
+      // Painted invisibly since the aim (opacity 0 by a paint change or feature-state): a user cannot see it, although the
+      // hit test still finds it — and with nothing visible under it, it would be "topmost". Judged on the piece hit now.
+      const now = this.visibility(seen.find((h) => this.isPieceOf(h, pieces))!);
+      if (!now.visible) return { invisible: now.reason ?? 'painted invisibly' };
       if (!this.sameEntity(top, pieces)) return { covered: top };
       // A pixel-only layer over the pointer that the aim did not see through: it appeared (or was shown) since. Only the
       // gate, never a probe: a probe here would reload the target's source while the app's own handler hit-tests it.
@@ -1269,7 +1289,7 @@ export class Engine<W = unknown> {
   }
 
   /** The expensive part, done only for entities that will actually be shown: verified hit tests. */
-  private locate(e: Collected, ignoreDom?: (el: Element) => boolean): { pixel?: PixelPoint; coveredPixel?: PixelPoint; blocked?: string } {
+  private locate(e: Collected, ignoreDom?: (el: Element) => boolean): { pixel?: PixelPoint; coveredPixel?: PixelPoint; blocked?: string; under?: string[] } {
     const surface = this.adapter.surface();
     const frame = clientFrame(surface);
     let coveredPixel: PixelPoint | undefined;
@@ -1279,9 +1299,14 @@ export class Engine<W = unknown> {
     // whole client pixels, snapped exactly as actionPointOnce() snaps them: what the snapshot lists as clickable is what
     // click() uses. But fewer of them — the 40 best candidates (at most 200 pixels) against click()'s MAX_TRIES — as this
     // runs for every listed entity: one almost entirely covered may be listed as covered and still be clickable.
+    // A pixel whose only cover is a pixel-only layer (the hit test cannot see it) is kept as a fallback: a pixel with none
+    // over it is better, and whether the layer hides the entity there only a probe can tell, which click() runs and a
+    // snapshot does not (it would be four renders per listed entity).
+    let underPixel: { pixel: PixelPoint; under: string[] } | undefined;
+    const all = [...e.byLayer.values()].flat();
+    const own = new Set(e.byLayer.keys());
     for (const c of wholePixels((e.cands ?? []).slice(0, 40), frame)) {
       const hits = this.adapter.queryFeatures({ at: c });
-      const all = [...e.byLayer.values()].flat();
       if (!hits.some((h) => this.sameEntity(h, all))) continue;
       const client = toClient(frame, c);
       if (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight) {
@@ -1291,12 +1316,18 @@ export class Engine<W = unknown> {
         continue;
       }
       const el = topElementAt(client.x, client.y, ignoreDom);
-      const top = this.topVisible(hits)!;
-      if (this.sameEntity(top, all) && el === surface) return { pixel: round(c) };
+      const top = this.topVisible(hits, own)!;
+      if (this.sameEntity(top, all) && el === surface) {
+        const layer = hits.find((h) => this.sameEntity(h, all))!.layer;
+        const under = (this.adapter.pixelOccluders?.(layer, c) ?? []).map((o) => o.layer);
+        if (!under.length) return { pixel: round(c) };
+        underPixel ??= { pixel: round(c), under };
+        continue;
+      }
       coveredPixel ??= round(c);
       blocked = el !== surface ? `covered-by-dom:${el ? describeEl(el) : '?'}` : `covered-by:${top.layer}${top.id !== undefined ? '#' + top.id : ''}`;
     }
-    return { coveredPixel, blocked };
+    return underPixel ?? { coveredPixel, blocked };
   }
 
   /**
@@ -1314,7 +1345,7 @@ export class Engine<W = unknown> {
       if (o.max !== undefined && usable >= o.max) return { ...base, located: false };
       const loc = this.locate(e, o.ignoreDom);
       if (loc.pixel && !invisible) usable++;
-      return { ...base, located: true, pixel: loc.pixel, blocked: loc.pixel ? undefined : loc.blocked };
+      return { ...base, located: true, pixel: loc.pixel, blocked: loc.under ? `under-pixel-layer:${loc.under.join(',')}` : loc.pixel ? undefined : loc.blocked };
     });
   }
 
@@ -1480,7 +1511,7 @@ export class Engine<W = unknown> {
           if (!loc) located.set(e.key, (loc = this.locate(e)));
           const f = e.byLayer.get(e.owner)![0];
           const pt = loc.pixel ?? loc.coveredPixel;
-          const pos = pt ? `@(${Math.round(toClient(frame, pt).x)},${Math.round(toClient(frame, pt).y)})` : `@(${loc.blocked})`;
+          const pos = (pt ? `@(${Math.round(toClient(frame, pt).x)},${Math.round(toClient(frame, pt).y)})` : `@(${loc.blocked})`) + (loc.under ? ` under-pixel-layer:${loc.under.join(',')}` : '');
           const invisible = this.entityInvisible(e.byLayer);
           const colour = driven ? this.adapter.colour?.(f) : undefined;
           sec.push(`  ${f.id !== undefined ? '#' + f.id : '-'} ${f.geometry.type} ${pos}${loc.pixel || !pt ? '' : ' ' + loc.blocked}${invisible ? ` NOT-VISIBLE(${invisible})` : ''}${colour ? ` drawn ${nameColour(colour.colour)}` : ''}${f.state && Object.keys(f.state).length ? ` state=${JSON.stringify(f.state)}` : ''} ${fmtProps(f.properties, maxProps)}`);
@@ -2015,6 +2046,19 @@ const oneFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r())
 
 /** Probes per aim (decision 0022): each is four renders; a user does not hunt through an overlay either. */
 const MAX_PROBES = 3;
+
+/** One action's pixel-probe verdicts, by verdictKey. */
+type Verdicts = Map<string, 'visible' | 'occluded'>;
+
+/**
+ * The key of a pixel verdict within one action: the target (its key), the pixel, the camera (the view state and the
+ * surface size), and the pixel-only layers over the pixel with their stamps. A retry after the camera moved, or after an
+ * overlay changed in a way its stamp sees, probes again.
+ */
+export function verdictKey(target: string, c: PixelPoint, view: unknown, size: { w: number; h: number }, over: { layer: string; stamp: string }[]): string {
+  const v = (view ?? {}) as { center?: unknown; zoom?: unknown; bearing?: unknown; pitch?: unknown };
+  return JSON.stringify([target, Math.round(c.x), Math.round(c.y), v.center, v.zoom, v.bearing, v.pitch, size.w, size.h, over.map((o) => [o.layer, o.stamp])]);
+}
 /** The least time a probe is given, even at the deadline: four frames of a renderer without redraw() (Mapbox GL v1). */
 const PROBE_MIN_MS = 250;
 

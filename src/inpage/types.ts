@@ -250,6 +250,8 @@ export interface ActionPointOptions {
   leadMs?: number;
   /** @internal the time left for this look, ms: a pixel probe and the wait after it stay within it. */
   budgetMs?: number;
+  /** @internal the action this look is an attempt of: its pixel-probe verdicts serve that action's retries, and no other call. */
+  action?: string;
 }
 
 export interface SnapshotOptions {
@@ -277,7 +279,11 @@ export interface EntityView {
   properties: Record<string, unknown>;
   /** Clickable surface pixel where the entity is the topmost hit and no DOM covers it. */
   pixel?: PixelPoint;
-  /** Why there is no clean pixel (covered-by:..., covered-by-dom:..., or out of view). */
+  /**
+   * Why there is no clean pixel (covered-by:..., covered-by-dom:..., or out of view). With `pixel` set:
+   * `under-pixel-layer:<ids>`, layers the hit test cannot see (raster, image, heatmap…) drawn over that pixel, which may
+   * hide the entity there: an action probes them (decision 0022), a snapshot does not.
+   */
   blocked?: string;
   /** False when the entity was counted but not hit-tested (over `max`). */
   located?: boolean;

@@ -220,6 +220,9 @@ const DIAGNOSTIC_GRACE_MS = 2000;
  * left, less room for its answer to come back, so that it answers with what it found instead of being abandoned.
  */
 const lookBudget = (deadline: number) => (deadline === Infinity ? undefined : Math.max(0, Math.round(deadline - Date.now() - Math.min(MIN_ANSWER_MS, (deadline - Date.now()) / 4))));
+/** A token per action: the page keeps a pixel-probe verdict for the retries of that one action only (decision 0022). */
+let actionCount = 0;
+const actionToken = () => `${process.pid}.${++actionCount}.${Math.random().toString(36).slice(2, 8)}`;
 
 /** The deadline of a timeout. As in Playwright, 0 means no timeout. */
 const deadlineOf = (timeout: number) => (timeout === 0 ? Infinity : Date.now() + timeout);
@@ -922,6 +925,7 @@ export class FeatureHandle {
     const timeout = opts.timeout ?? this.map.timeout;
     let panned = false;
     const aim = new Aim(); // moving targets: how far ahead to point, learnt from misses across the attempts
+    const action = actionToken(); // this action's pixel-probe verdicts serve its own retries only
     // Nothing that follows a failure may wait for a page that stopped answering: the check armed before it is
     // disarmed without waiting for the answer (the page runs it when it gets to it; its verdict is not needed).
     const release = (token: string | undefined) => void (token && this.map._disarm(token));
@@ -929,8 +933,9 @@ export class FeatureHandle {
       await this.map._retry<true>(what, timeout, async (deadline) => {
         const arming = armFirst?.();
         const token = arming && (await this.map._armBy(deadline, 'arm', arming));
-        // Looking for the pixel has no side effects and may be abandoned at the deadline; real input (below) never is.
-        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), { ...this.pointOpts(opts, aim.leadMs), budgetMs: lookBudget(deadline) }).catch((e) => {
+        // Looking for the pixel may be abandoned at the deadline (a pixel probe it ran puts the style back by itself); real
+        // input (below) never is.
+        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), { ...this.pointOpts(opts, aim.leadMs), budgetMs: lookBudget(deadline), action }).catch((e) => {
           release(token);
           throw e;
         });

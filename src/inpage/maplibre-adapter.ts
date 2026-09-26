@@ -1,6 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
 import { clientFrame, toSurface } from './engine';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, layoutVisible, missingIcon, paintColour, paintVisibility, pixelOccluders, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, isPixelOnlyType, layoutVisible, missingIcon, paintColour, paintVisibility, pixelOccluders, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
 import type { InternalCanvasAdapter, InternalRenderedFeature, PixelOccluder, ProbeResult, StyleCause } from './types-internal';
 
@@ -444,6 +444,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     for (const p of zoomUncertainProperties(this.map)) out.push(`visibility uncertain for layer ${p} — a zoom-and-data expression is drawn per tile zoom, and tile zooms vary across this view (pitch, terrain or globe); treated as visible where some tile zoom draws it`);
     // What THIS version of the map library cannot do (feature-detected). Said once, in diagnostics and the snapshot.
     if (typeof this.map.redraw !== 'function') out.push('this map library version has no synchronous redraw(): the pixel probe renders through the frame loop instead (three real frames; the frame without the layer may be seen as a one-frame flicker)');
+    if (typeof this.map.getLayersOrder !== 'function') out.push('this map library version has no getLayersOrder(): custom layers (a WebGL overlay such as deck.gl\'s) are missing from the layer order it reports, so an action does not check one drawn over its target, and layers() and this snapshot do not list them');
     if (this.geojsonWithoutData().length) out.push(`source(s) ${this.geojsonWithoutData().join(', ')}: this map library version has no GeoJSONSource.getData() and the source was given a URL — features outside the viewport and full geometries are unknowable (as for tiled sources)`);
     return out;
   }
@@ -590,6 +591,10 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
 
   /** `sourcedata` events per source, counted from the first gate on: what an overlay draws may have changed since. */
   private dataEvents?: Map<string, number>;
+
+  pixelOnly(layer: string): boolean {
+    return isPixelOnlyType(this.map.getLayer(layer)?.type);
+  }
 
   pixelOccluders(layer: string, at: PixelPoint): PixelOccluder[] {
     if (!this.dataEvents) {
