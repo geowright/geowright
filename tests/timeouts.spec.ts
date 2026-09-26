@@ -135,6 +135,7 @@ test.describe('timeouts', () => {
     ['toHaveView', (map: MapHandle) => expect(map).toHaveView({ zoom: 3 }, { timeout: TIMEOUT })],
     ['marker()', (map: MapHandle) => map.marker({ at: { lng: 34.84, lat: 32.12 } }, { timeout: TIMEOUT })],
     ['popup()', (map: MapHandle) => map.popup({}, { timeout: TIMEOUT })],
+    ['waitForIdle()', (map: MapHandle) => map.waitForIdle({ timeout: TIMEOUT })],
   ] as const) {
     test(`${name} on a page that cannot answer fails at its timeout, not when the page answers`, async ({ map, page }) => {
       block(page, BUSY);
@@ -203,6 +204,30 @@ test.describe('timeouts', () => {
       expect(err?.message, `timeout ${timeout}`).toContain(`timed out after ${timeout}ms — occluded`);
       expect(err?.message, `timeout ${timeout}`).not.toContain('did not answer');
     }
+  });
+
+  // A SLOW page (every look answers, in 700 ms: more than the room kept for an answer) is not a stalled one: when the
+  // attempts before answered, the failure is what they answered, with the map state; "the page did not answer" only
+  // when it never did.
+  test('an action whose last attempt is abandoned on a slow page reports what the attempts before answered', async ({ map, page }) => {
+    await page.getByTestId('alert-name').fill('Covering 106');
+    await page.getByTestId('alert-lng').fill('34.800');
+    await page.getByTestId('alert-lat').fill('32.060');
+    await page.getByTestId('alert-submit').click();
+    await expect(map).toHaveFeature({ layer: 'alerts', where: { name: 'Covering 106' } });
+    await page.evaluate(() => {
+      const api = (window as any).__geowright;
+      const orig = api.actionPoint;
+      api.actionPoint = async (...a: unknown[]) => {
+        const end = performance.now() + 700;
+        while (performance.now() < end);
+        return orig(...a);
+      };
+    });
+    const err = await map.feature({ layer: 'parcels', id: 106 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(err?.message).toContain('occluded');
+    expect(err?.message).not.toContain('did not answer');
+    expect(err?.message, 'the map state is attached to it').toContain('What is on the map');
   });
 
   // every point of a multi-point action had its own full timeout: a drag waited for its start, then as long
