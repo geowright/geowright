@@ -122,7 +122,8 @@ await map.feature({ layer: 'alerts', id: 1 }).click({ ignoreLayers: ['radar'] })
 
 or for every action of that handle: `geowright(page, { ignoreLayers: ['radar'] })`.
 
-What it costs and what it does not see: a probe is four renders (~15–45 ms on a laptop, more under software GL on CI)
+What it costs and what it does not see: a probe is four renders (measured medians: 15–45 ms across
+the tested versions; actual cost varies with rendering conditions)
 and runs only when such a layer is drawn above the target at that pixel; where the target's opacity is data-driven the
 probe reloads its source, and the action waits for it. Each action probes anew; only its own retries reuse a verdict.
 `moving: 'allow'` is not checked. Pixels that change inside an overlay that was already there between the aim and the
@@ -133,10 +134,14 @@ does not probe: a feature under such a layer is listed with `under-pixel-layer:<
 
 Tests should not depend on a tile server. `routeVectorTiles(page, '**/tiles/**', { <source-layer>: <GeoJSON> })` cuts real
 vector tiles from GeoJSON inside `page.route` (give the source a `maxzoom`, 14 like the helper's default, or every zoom
-level past it is requested and cut separately); [`tests/wild/basemap.ts`](../tests/wild/basemap.ts) builds a whole
-OpenMapTiles-shaped basemap that way (style, sprite with road shields, glyphs, a synthetic city and region with
-production-like label density; `{ dense: false }` for the old sparse city). For a REAL basemap on your own machine only: `scripts/fetch-real-basemap.sh` +
-`GEOWRIGHT_REAL_BASEMAP=1` (the data is ODbL: cached outside the repository, never committed).
+level past it is requested and cut separately). In a repository checkout,
+[`tests/wild/basemap.ts`](../tests/wild/basemap.ts) builds a whole OpenMapTiles-shaped basemap that way
+(style, sprite with road shields, glyphs, a synthetic city and region with production-like label density;
+`{ dense: false }` for the old sparse city). This test helper is not in the installed package. Also from
+a repository checkout, `bash scripts/fetch-real-basemap.sh` and then
+`GEOWRIGHT_REAL_BASEMAP=1 npx playwright test tests/wild/real-basemap.spec.ts` exercise a real basemap
+locally (ODbL data cached outside the repository, never committed or fetched by CI). These scripts
+and specs are not in the installed package.
 
 For a `pmtiles://https://…` source, route the underlying HTTPS archive URL and serve a local synthetic archive with
 HTTP byte ranges (`206`, `Content-Range`, `Accept-Ranges`). The [Protomaps wild spec](../tests/wild/pmtiles.spec.ts) is

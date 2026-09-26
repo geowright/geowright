@@ -34,8 +34,7 @@ flags, nothing that could silently change across a minor version. This shows up 
 one design choice described under actionability: an existing prior-art library (MapGrab, see below)
 decided whether the map was "stable" by reading MapLibre's private internal flags directly
 (`_styleDirty`, `_repaint`, `scrollZoom._lastWheelEventTime`, and others). Reading private fields
-ties a testing library to implementation details that are free to change on any release, which is a
-plausible reason that library stopped being maintained. geowright's stability check is built
+ties a testing library to implementation details that are free to change on any release. geowright's stability check is built
 entirely from public surface instead (described below).
 
 All of this sits behind one seam: `CanvasAdapter<W>`, in `src/inpage/types.ts` (additions that are internal until 1.0,
@@ -190,14 +189,14 @@ on every retry:
    the next candidate is tried, at most three probes per aim; then the action fails `occluded`, naming the layer and
    offering `ignoreLayers`. Probing the overlay instead does not work: a translucent radar adds pixels and hides
    nothing. Deciding from the style alone does not either: an opaque-styled raster has transparent gaps. The verdict
-   lives for ONE action: its retries do not probe the same pixel again (keyed by the target, the pixel, the camera, and
+   lives for one action: its retries do not probe the same pixel again (keyed by the target, the pixel, the camera, and
    the gated layers with their sources and opacity), and the next action probes anew. What an overlay draws can change
    without anything a key can see (an animated canvas or video, a paint transition, a colour), so a verdict kept longer
    let a later click through an overlay that had turned opaque, and kept refusing one that had cleared. A heatmap is
    hit-testable over its whole radius on MapLibre >= 5, drawn or not; its hit is never an occluder, and the gate and the
    probe decide on every version, as for the other pixel-only layers. Where the target's opacity is data-driven the probe hides it by `visibility` and its source
    reloads: the action then waits for a rendered frame, the source loaded, and the target back in the hit test at that
-   pixel (event-based; measured: at most 2 frames, 115 ms quiet, 787 ms at load ~300), then aims again. `ignoreLayers`
+   pixel (event-based; measured: at most 2 frames and 115 ms without contention, 787 ms under severe contention), then aims again. `ignoreLayers`
    covers these layers too; `force` skips the check.
 5. **No DOM element covers the pixel** — a popup, a control, an overlay. Checked with
    `document.elementFromPoint`, so a marker or popup sitting exactly on a feature's best interior
@@ -243,11 +242,11 @@ hit test cannot see were weighed against measurements (decision 0022 records the
 
 Two measurements made B affordable (MapLibre 6 and 2, Mapbox GL 1.13; GeoJSON and vector tiles; 5 probes per target and
 route). Hidden by `visibility`, the target left the rendering and the hit test after most probes, for at most 2 frames:
-16 ms median and 115 ms at most on a quiet Mac, but up to 787 ms at a load of ~300. Hidden by its opacity, nothing
+16 ms median and 115 ms at most without contention, but up to 787 ms under severe contention. Hidden by its opacity, nothing
 reloaded and no frame lacked the target, in 135 of 135 probes, with the same pixel differences. So the probe hides by
 opacity, only a target whose opacity is data-driven pays the reload, and the action waits for that by events, never
 for a fixed time (item 4; "Visibility" below). A probe costs 21 ms (median) on MapLibre 6, 15 ms on MapLibre 2 and 45 ms
-on Mapbox GL 1.13, where its four renders are real frames, on a quiet Mac; software GL on Linux is slower. The gate
+on Mapbox GL 1.13, where its four renders are real frames, with one test worker and software rendering; software GL on Linux is slower. The gate
 costs less than 0.1 ms on the 80-layer dense basemap.
 
 Fill-extrusion (3D buildings) features need one more step: their clickable area is not their
@@ -258,7 +257,7 @@ still on screen. Action points for extrusions are lifted toward wherever the sha
 horizontal axis, which camera pitch does not foreshorten, times the sine of the pitch angle). MapLibre
 exposes no public 3D projection to compute this exactly, but an estimate is sufficient because every
 candidate is still verified by the real hit test — a wrong estimate produces a retry, never a wrong
-click. Real data added one case the generated city never had: building PARTS that float (a roof slab from 120 m to
+click. Real data added one case the generated city never had: building parts that float (a roof slab from 120 m to
 132 m, `fill-extrusion-base`). "Half-way up from the ground" is thin air for those, so the tiers run between the
 base and the top; and an extrusion whose footprint is outside the viewport, with at most a sliver reaching into it,
 is reported as off-screen with that explanation rather than as "not found".
@@ -268,7 +267,7 @@ libraries handle `click` and `mousedown` — MouseEvents, whose coordinates the 
 time candidates were verified exactly where they were computed, fractions included, and nothing noticed: features are
 usually many pixels wide. A dense, label-heavy basemap noticed. The edge of a point-of-interest label ran between the
 two positions; the hit test at the fractional pixel said "the building is on top", MapLibre's own click handler, one
-truncation later, said "the label is". Candidates are now snapped to whole client pixels BEFORE they are verified, the
+truncation later, said "the label is". Candidates are now snapped to whole client pixels before they are verified, the
 snapshot lists whole pixels, and for shapes thinner than a pixel (a country squeezed against the limb of a globe) the
 four whole pixels around a candidate are tried as well. The general lesson: verify the pixel the application will see,
 not the pixel you computed.
@@ -282,13 +281,13 @@ It runs at the press; a target that moves off between the press and the `click` 
 Measured before designing: on a light page the freshest pixel is good enough (a 9 px dot at up to 200 px/s: 20 of 20
 first try; at 400 px/s: 0 of 20, every press swallowed, none delivered elsewhere). On MapLibre's own "animate a point"
 example — a full-screen basemap in software GL, ~14 frames a second — it never hit once in 30 s, because input arrives
-200–500 ms after the pixel was computed. So the pointer LEADS: velocity and acceleration are measured over three frames
+200–500 ms after the pixel was computed. So the pointer leads: velocity and acceleration are measured over three frames
 (a straight-line lead of 300 ms leaves a 114 px circle by 5 px), the click-time check is armed before the pixel is
 computed (every round trip after it is lateness), and how far to lead is learnt from each miss — the verdict reports
 where the target was when the event arrived; lead + lateness is that attempt's measured latency, and the median of the
 last few is used (a full-gain correction chased frame-sized jitter and never settled). Result on that example under five
-parallel workers: click 30 of 30 — and one timeout in three full-suite runs on a loaded machine, every late press
-swallowed. Landing the click depends on the machine; not mis-pressing does not, and only that is asserted in the suite (what MapLibre makes of the press at `click`, after the release, can still depend on the machine: "What is still wrong"). `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
+parallel workers: click 30 of 30 — and one timeout in three full-suite runs under contention, every late press
+swallowed. Landing the click depends on rendering and input latency; not mis-pressing does not, and only that is asserted in the suite (what MapLibre makes of the press at `click`, after the release, can still depend on latency: "What is still wrong"). `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
 boundary, so its lateness jitters by whole frames — more than the ~175 ms that dot spends under any pixel (14 of 30
 there); it is dependable when a frame is short compared with the target's dwell time.
 
@@ -374,10 +373,9 @@ built around:
   left edges fell on either side of a multiple of the period (one tiled line read as two features, and
   a click on it as a strict-mode violation).
 
-A residual, unresolved case: under deliberately heavy concurrent load, roughly one time in twenty an
-animated point occasionally reports itself as "ambiguous" rather than the more accurate "unstable" —
-the action still correctly refuses to click either way, but the diagnostic label is sometimes wrong,
-and the specific cause was not isolated.
+The source-data fix described under "Costs and known limitations" removed one cause of a diagnostic
+mismatch. Under heavy contention, an animated point can still rarely report "ambiguous" instead of
+"unstable". The action refuses to click either way; the remaining cause has not been isolated.
 
 ## Visibility: "rendered is not visible"
 
@@ -417,17 +415,18 @@ probe exploits this and MapLibre's public, synchronous `redraw()`: redraw with t
 pixels, hide the layer, redraw again, read pixels again, restore the layer, redraw once more — all in
 one task, so nothing is ever actually composited to the screen and there is no visible flicker. A
 non-zero difference between the two reads means the layer contributed real pixels at that location.
-Measured warm, on a quiet machine, this costs on the order of 25–27 ms per probe (one call was
-measured at 205 ms, attributable to a source reload the first probe triggers, discussed next); an
-early, informal measurement taken while the machine was under heavy unrelated load suggested
-85–180 ms, which is the number to distrust. The probe has two real costs beyond time: it fires
+On the dense stress page, warm probes measured 25–27 ms with one test worker and software rendering;
+the version comparison below measured 21 ms on MapLibre 6, 15 ms on MapLibre 2 and 45 ms on Mapbox GL 1.13.
+One first probe took 205 ms because it triggered a source reload. These are measurements under specific
+conditions, not a fixed action cost. An early uncontrolled measurement under contention was
+85–180 ms and is not comparable with the single-worker results. The probe has two real costs beyond time: it fires
 MapLibre's `styledata` event, so an application with its own `styledata` listeners will see that; and the
 differential it measures is per *layer* at a pixel, not per feature, so a second feature from the same layer under
 the same pixel confounds it.
 
 How it hides the layer matters. With `visibility: none`, MapLibre reloads the layer's source (every source type
 but raster), and the tiles that come back from that reload lack the layer: right after the probe the feature was
-missing from the rendering and from the hit test, for 10–60 ms on a quiet machine and more under load, until the
+missing from the rendering and from the hit test, for 10–60 ms without contention and longer with contention, until the
 reload after the restore landed — on MapLibre 2 and 6 and Mapbox GL 1, GeoJSON and vector tiles alike. A **paint**
 change reloads the source only when the old or the new value is data-driven (feature properties or feature-state) or
 cross-faded (`StyleLayer.setPaintProperty`, the same in all of them). So the probe hides the layer by setting its
@@ -551,7 +550,7 @@ PNG-encoded fast enough for the map to settle within its wait budget at all, and
 zoom was lowered to a level that still comfortably resolves a few kilometres of ridge terrain (tens of
 metres per pixel is more than enough) but generates far less data.
 
-Not covered as of this writing: pitch beyond the point where the horizon itself becomes visible
+Not covered by the current tests: pitch beyond the point where the horizon itself becomes visible
 (would need MapLibre's own maximum-pitch guard respected explicitly) and globe behavior at the poles.
 
 ## Waiting and determinism
@@ -573,7 +572,7 @@ that reason, **retrying assertions are the primary synchronization mechanism**, 
 never sufficient on its own for anything that depends on application logic between an action and an
 expected result. Each assertion's retry loop does still wait for a bounded map-idle before evaluating on
 every poll — idle is the secondary, supporting mechanism, not the primary one — and a verdict of
-**absence** (a `.not`, a count, "not visible") is taken only from a poll in which the map WAS idle, or was
+**absence** (a `.not`, a count, "not visible") is taken only from a poll in which the map was idle, or was
 diagnosed as one that never becomes idle (below). Presence needs no such care: a feature that is found is
 there. The first version waited for that idle and ignored its answer: with a GeoJSON source whose data
 arrived after 2.5 s, `.not.toHaveFeature` passed after half a second, on the half-loaded map, and the
@@ -592,9 +591,9 @@ Some real applications intentionally never idle at all — a `requestAnimationFr
 `setData` every frame, a streaming line, an always-animating canvas source. An explicit
 `waitForIdle()` call against such a map is a trap: it will simply time out. The error therefore says WHY, as far as
 public API can tell: an animated canvas or video source (read from the style — independent of frame rate), a source
-whose data the application keeps replacing (counted `sourcedataloading` events: OBSERVED, not inferred — a first
+whose data the application keeps replacing (counted `sourcedataloading` events: observed, not inferred — a first
 version inferred a `setData` loop from "a GeoJSON source is pending and frames are rendered" and blamed one on an
-application that was merely loading slowly on an overloaded machine; a wrong diagnosis is worse than none), continuous
+application that was merely loading slowly under CPU contention; a wrong diagnosis is worse than none), continuous
 repainting with nothing loading, tiles still loading, or a moving camera.
 Assertions are unaffected, since their own idle wait is bounded rather than blocking, and the same diagnosis
 (an animated source, a source re-set in a loop, continuous repainting — never "still loading", "moving" or "slow")
@@ -605,12 +604,12 @@ that had not arrived yet (the same half-loaded map as above, through another doo
 
 **Timeouts mean what they say.** `waitForIdle()` defaults to two thirds of the test's timeout: the first idle after a
 navigation is a load — style, sources, tiles, first render — and Playwright bounds loads by the test timeout only.
-Measured on five third-party apps: 1.7–2.2 s to the first idle alone, 4–9 s with five parallel software-GL workers on a
-busy machine; the earlier 10 s budget failed exactly where CI is slow. The default action timeout is a third of the test's timeout (at least 10 s) and is
+Measured on five third-party apps: 1.7–2.2 s to the first idle alone, 4–9 s with five parallel software-GL workers
+under contention; the earlier 10 s budget failed exactly where CI is slow. The default action timeout is a third of the test's timeout (at least 10 s) and is
 read when used, so `test.slow()` scales it — a page that is slow enough to need `test.slow()` needed every geowright
 timeout raised by hand before. And an action's `timeout` is wall-clock: a side-effect-free round trip into a busy page
-(finding the pixel) is abandoned at the deadline — measured before: 33 s for `{ timeout: 2000 }` on an overloaded
-machine. Real input is never abandoned half-way. What follows a failure is bounded too: on a page that stopped
+(finding the pixel) is abandoned at the deadline — an earlier implementation took 33 s for `{ timeout: 2000 }` under
+CPU contention. Real input is never abandoned half-way. What follows a failure is bounded too: on a page that stopped
 answering, the map state and the screenshot are skipped (they would wait for it: `click({ timeout: 1000 })` on a page
 blocked for 5 s returned after 5 s, now after 1 s); otherwise they get 2 s. An action with several points (a drag, a
 shape) has one timeout for all of them, not one each. A round trip is never abandoned before it has had 500 ms: a last
@@ -650,15 +649,12 @@ finished its ease-out by the time the check ran — fixed by requiring the camer
 rest in both the affirmative and the negated form of the check); and the animated-source identity edge
 case described under identity. It also catches flaws in the tests themselves: two wild-example specs
 that could fail on a timing or geometry chance (keyboard zooms pressed faster than the map settled; a
-pixel probe covering only a quarter of an animated canvas) were each reproduced in isolation on a quiet
-machine and fixed before the suite was counted. The complete suite as it stood on 2026-09-24 (349 tests,
-plus 13 that are opt-in and skipped) passed **6,980 of 6,980 at `--repeat-each=20`, zero flakes, zero
-retries**, in 56 minutes — the machine's load was logged once a minute through the run, and a number
-is only written here once the machine has produced it without other heavy work, or with only more load
-than a quiet machine (which can cause a failure, never a pass). The same commit passed the full suite
-and the compatibility matrix on Linux in the official Playwright container. The earlier suites passed
-the same way: 312 tests 6,240 of 6,240 in 50 minutes on 2026-09-23, 304 tests 6,080 of 6,080 in about an hour at the end of 2026-09-21, 299 tests 5,980 of
-5,980 in 50 minutes on a quiet machine the same day, 277 tests 5,540 of 5,540 the day before. The same suite has
+pixel probe covering only a quarter of an animated canvas) were each reproduced in isolation without contention
+machine and fixed before the suite was counted. At 349 tests (plus 13 opt-in tests skipped), the suite
+passed **6,980 of 6,980 at `--repeat-each=20`, zero flakes, zero retries**. The same commit passed
+the full suite and compatibility matrix on Linux in the official Playwright container. As the suite
+grew, earlier complete 20x runs passed 6,240 of 6,240 (312 tests), 6,080 of 6,080 (304 tests),
+5,980 of 5,980 (299 tests), and 5,540 of 5,540 (277 tests). The same suite has
 also been run through hosted Linux continuous integration (software rendering, no GPU, few CPU cores),
 which is measurably slower — the base suite alone runs in on the order of 20 minutes there versus about
 two and a half minutes locally — and which found two more, purely hardware-driven issues invisible on a faster
@@ -755,9 +751,8 @@ browser-automation protocol used in these comparisons no longer inlines the acce
 into every response — an agent has to think to go look at it, and tended to reach for a screenshot
 first instead.
 
-One direction considered but not usable at the time of writing: letting a page register its own tools
-for an agent to discover directly (the emerging `navigator.modelContext` web API), which would be the
-most direct integration of all. The API was not yet implemented in the browser versions tested against.
+One direction considered was letting a page register its own tools for an agent to discover directly
+through `navigator.modelContext`. None of the browser versions tested implemented that API.
 
 ## Testing apps we did not write
 
@@ -812,19 +807,20 @@ because a house number, a point-of-interest name, a street name or a neighbourho
 landed on the building that was asked for — after the whole-pixel fix described under actionability, which this
 fixture is what found.
 
-The dense basemap is now the DEFAULT for every wild app that loads a synthetic OpenFreeMap, MapTiler or CARTO style,
+The dense basemap is the default for every wild app that loads a synthetic OpenFreeMap, MapTiler or CARTO style,
 and it is dense at every zoom those apps use, not only up close: around the city core lies a generated region
 (suburbs, villages and towns every few kilometres, arterial roads with names and route numbers drawn as road shields,
 motorways, rivers, lakes, parks, stations, bus stops, airports; cities, states and countries further out), under a
 79-layer style with 24 symbol layers. Measured the same way on both — basemap symbols MapLibre actually placed in the
 same 880×720 px window — the synthetic basemap renders 75, 42, 50, 93, 240 and 171 labels at zoom 11 to 16, the real
 OpenFreeMap style 59, 26, 35, 78, 239 and 130, and the sparse city it replaced 5, 5, 6, 10, 33 and 25. A spec keeps
-it within 0.6–2× of the real numbers at each zoom. The density found a library limitation at once: on a basemap this
-size, `snapshot()` keeps a section for every basemap layer in view and runs out of budget before the application's own
-layer gets a single row (9 app symbols, 0 listed; on the real style, 0 of 1,025 buildings). It is pinned down by a
-spec marked as a known failure until the budget is fixed.
+it within 0.6–2× of the real numbers at each zoom. The density exposed a snapshot budget defect:
+with a section for every visible basemap layer, the old snapshot listed none of 9 app symbols and
+none of 1,025 buildings on the real style. The fix condenses the basemap first, leaving room for
+the app's own rows; regression specs cover the dense synthetic style and, with a local cache,
+the opt-in real style.
 
-A REAL basemap is available too, but only on a developer's own machine: a script caches a small OpenFreeMap extract
+A real basemap is available too, but only from a repository checkout: a script caches a small OpenFreeMap extract
 (OpenStreetMap data, ODbL) outside the repository — never committed, never in CI — and an opt-in spec set runs the same
 example against it, still without touching the network. 120 layers, 25 label layers, ~300 labels and 1,025 real
 buildings in view: 25 buildings → 19 clicked on target (9 of them at a pixel other than the best one, under transit and
@@ -846,7 +842,7 @@ real-basemap realism specs, which are not apps):
 | display-buildings-in-3d | 4 | after a library fix (fill-extrusion lift) |
 | 3d-terrain | 5 | after a library fix — of the snapshot only; every action was already right |
 | create-a-heatmap-layer | 5 | untouched (heatmap is always "visible": documented, by design) |
-| filter-within-a-layer | 5 | untouched — and the upstream example itself is broken; the specs pin that down |
+| filter-within-a-layer | 5 | untouched; in the vendored MapLibre v6.10.0 example, the filter controls throw before `map.setFilter()`; the specs check the page errors and unchanged map |
 | show-polygon-information-on-click | 5 | untouched |
 | select-features-with-boxzoomend-callback | 5 | after a library fix (drag modifiers) |
 | filter-symbols-by-toggling-a-list | 5 | after a library fix (id-less identity; missing-icon message) |
@@ -875,7 +871,7 @@ real-basemap realism specs, which are not apps):
 | vue-maplibre-gl / geojson | 1 | untouched |
 | vue-maplibre-gl / marker-popup | 2 | untouched |
 
-**33 apps, 135 specs (re-counted against `--list` on 2026-09-22). Worked untouched: 17 (52%). Worked after a library fix or addition: 16 (48%).
+**33 apps, 135 specs. Worked untouched: 17 (52%). Worked after a library fix or addition: 16 (48%).
 Could not be tested at all: 0.** That zero deserves its caveats stated alongside it, honestly: some
 applications were excluded before ever being tried, purely on licensing grounds (one video-based
 example with no license found for its video asset; anything that would otherwise need real OSM or
@@ -922,7 +918,8 @@ camera and geometry, off-screen source data — against Mapbox GL JS 1.13 and Ma
 installed side by side under npm aliases. It has its own Playwright config and CI job so that it cannot
 slow down the flake bar of the main suite.
 
-On first contact 50 of 54 tests passed; the API family is that stable. What the four failures taught:
+The initial 54-test matrix passed 50 tests on first contact; the README describes the expanded
+matrix as 96 tests. What the four initial failures taught:
 
 - **Feature-detect, never version-sniff.** `getLayersOrder()` (MapLibre 3+) falls back to the layer list
   of `getStyle()`; `GeoJSONSource.getData()` (4+) falls back to `serialize()`, which echoes what the
@@ -931,11 +928,11 @@ On first contact 50 of 54 tests passed; the API family is that stable. What the 
   `getTerrain()` are optional calls. Marker and popup CSS classes are `mapboxgl-…` on the v1 family.
 - **The pixel probe without `redraw()`.** Mapbox GL JS v1 has no public synchronous render. The same
   read-back works inside the public `render` event, which fires in the task that drew the frame:
-  `triggerRepaint()`, read on `render`, hide the layer, repeat. That costs three REAL frames, and the
+  `triggerRepaint()`, read on `render`, hide the layer, repeat. That costs three real frames, and the
   frame without the layer can reach the screen (a one-frame flicker) — so the seam method may now
   return a promise, and an adapter on such a version lists the difference among its caveats.
 - **A matcher bug only an old version could show.** `toBeVisibleOnMap()` assigned its verdict after
-  the paint check and again after the pixel probe; when the probe THREW (no `redraw()`), the paint
+  the paint check and again after the pixel probe; when the probe threw (no `redraw()`), the paint
   check's "visible" was left standing and the matcher passed at its deadline without ever having looked
   at a pixel. The verdict is now assigned once, after every check has run, and an exception is a "no".
   A capability that silently degrades is the failure mode to fear in a version matrix; this was one.
@@ -944,12 +941,12 @@ What an old version cannot do is reported by the adapter's `caveats()` — print
 diagnostics and in the snapshot — never answered with a guess. The bundled style-spec evaluator being
 NEWER than an old style is harmless (old expressions are a subset); the reverse case is the
 unsupported-expression caveat described under visibility. Globe, terrain, touch, drawing tools and the
-third-party applications are exercised on MapLibre 6 only; the support table in the README says
+fill-extrusion lift and third-party applications are exercised on MapLibre 6 only; the support table in the README says
 "not in the matrix" for them rather than "✓".
 
 ## Costs and known limitations
 
-Measured on a quiet machine (single test worker, software rendering, medians of repeated runs), against
+Measured with a single test worker and software rendering (medians of repeated runs), against
 a dense stress page holding roughly 3,240 point features and 415 polygons in view at once:
 
 | operation | cost |
@@ -961,7 +958,7 @@ a dense stress page holding roughly 3,240 point features and 415 polygons in vie
 | resolve one action point (includes the two-frame stability wait) | 33 ms |
 | build a full text snapshot | 49 ms |
 | build entity list for the accessibility mirror (capped at 80) | 43 ms |
-| pixel probe, warm | 25–27 ms |
+| pixel probe, warm on the dense stress page | 25–27 ms (version-comparison medians: 15–45 ms) |
 | globe: full-world initial idle | 2.4 s |
 | globe: click near side / refuse far side / build snapshot | 14 ms / 1.07 s / 70 ms |
 
@@ -978,14 +975,14 @@ risk worth stating plainly: an application on a MapLibre release newer than the 
 using a style expression the evaluator does not recognize, will silently fall back to the safe-but-
 weaker answer described earlier ("visible," never a false "invisible") rather than failing outright.
 
-**What is still wrong, as of this writing:**
+**Known limitations:**
 
 - `hover({ moving: 'allow' })` is only dependable when a frame of the page is short compared with the time the target
   spends under one pixel; `click` holds up under contention, hover does not (a `mousemove` is frame-aligned).
 - On a page that stalls, the default refusal of a moving target is not absolute. When the renderer (and, for a GeoJSON
   source re-set every frame, its worker) is starved, two consecutive frames can show a perpetually moving feature at the
   same pixel; the stability check then passes and an action goes out without `moving: 'allow'`. Seen once, on Linux in
-  a container at a load of about 30 with other CI jobs on the machine: `hover()` on MapLibre's "animate a point" was
+  a software-rendered Linux container under severe CPU contention: `hover()` on MapLibre's "animate a point" was
   delivered onto the pixel where the point was drawn at that instant. Nothing else was hovered, and `click` stays
   protected by the click-time check, but a `hover` has no such check. "Same pixel over two frames" is too weak a
   definition of "at rest" for a source that changes every frame; a stronger one is planned.
@@ -995,22 +992,22 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   attributes a click to a layer on the DOM `click` event (for a tap, the click the browser synthesizes after `touchend`), after the release, by querying what is drawn then. The press and the release are separate round trips to the
   browser; on a page that re-sets its source every frame, a frame drawn in between can move a small dot off the pointer.
   The action then reports success and the app's click missed the target: it landed on whatever is drawn under it (on
-  that page, no feature). Seen once in 21 runs of MapLibre's "animate a point" at a load of 12–30; 20 of 20 when re-run
-  alone. The planned fix re-checks at `click` too, and reports a miss
+  that page, no feature). Seen once in 21 runs of MapLibre's "animate a point" under contention; 20 of 20 when re-run
+  without contention. A further check at `click` could report a miss
   there as a failure after input: the input was sent and is never sent again.
 - Paint that tests `['has', key]` on a GeoJSON feature is uncertain when the key's value is null: MapLibre draws from
   the worker's feature, which keeps the key, and the hit test decodes the tile, which drops it. The verdict is then
   "visible" and the notes say it is uncertain; where the renderer drew nothing because the key is there, that
   "visible" is wrong (the data is not read for a paint verdict).
 - Identity disambiguation by asking the source only works for GeoJSON sources; a vector-tile source cannot be asked.
-  (A rare "ambiguous instead of unstable" on MapLibre's animated point had a plain cause: its source holds a bare
-  GeoJSON geometry, which was read as "no features", so nothing could be learnt from it. Fixed; the statistical
-  confirmation under contention is still owed.)
+  (For MapLibre's animated point, the adapter now reads its bare GeoJSON geometry as a source feature,
+  fixing one cause of "ambiguous instead of unstable". The rare diagnostic mismatch under contention
+  remains; its cause and rate have not been established.)
 - Two id-less, property-identical shapes that visually touch on screen are still treated as a single feature.
-- Pixel-only layers (raster, image, video, canvas, heatmap, hillshade, …) drawn ABOVE a feature are checked by a pixel
+- Pixel-only layers (raster, image, video, canvas, heatmap, hillshade, …) drawn above a feature are checked by a pixel
   probe of the feature's layer at the chosen pixel (Actionability, item 4). What that costs and misses:
-  - one probe per action on a map with such a layer over its features (four renders: ~15–45 ms on a quiet Mac by
-    version, more under software GL on Linux), up to three when candidates are covered; none without one.
+  - one probe per action on a map with such a layer over its features (four renders; measured medians
+    were 15–45 ms across the versions tested), up to three when candidates are covered; none without one.
   - on Mapbox GL v1 the probe renders real frames: the one without the layer can be seen (a one-frame flicker).
   - where the target's opacity is data-driven, the probe reloads its source and the action waits for it to come back.
   - the verdict threshold is the probe's: any difference counts as "shows through", so a 97%-opaque veil lets the
@@ -1028,7 +1025,7 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
 - A zoom-and-data paint expression on a view whose tile zooms vary (terrain, high pitch, globe) is judged "visible"
   where some tile zoom draws it: an uncertain verdict, said in the caveats, not a confident one. `within` / `distance`
   in paint cannot be evaluated at all (visible, with a caveat).
-- The version matrix covers the core on six versions; globe, terrain, extrusions, touch, drawing tools and the
+- The version matrix covers the core on six versions; globe, terrain, fill-extrusion lift, touch, drawing tools and the
   third-party applications run on MapLibre 6 only.
 - Real-basemap realism exists only as an opt-in, local cache: no real basemap data can be committed under the
   repository's permissive-licenses-only rule.
