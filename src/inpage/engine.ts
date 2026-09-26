@@ -449,6 +449,7 @@ export class Engine<W = unknown> {
     //    cannot see it, so hide the TARGET's layer there and look (the pixel probe). Nothing changes: the pixel is covered;
     //    the next candidate is tried, at most MAX_PROBES per aim. Maps without such a layer never probe (the gate is < 0.1 ms).
     let next: Aimed | undefined;
+    let probeMs = 0; // the slowest probe of this look: one that cannot finish in the time left is not started
     for (let probes = 0; ; ) {
       const r = next ?? (await this.aimStill(q, opts, verdicts));
       next = undefined;
@@ -464,13 +465,17 @@ export class Engine<W = unknown> {
       }
       // Out of time after a probe: say what is known, rather than be abandoned mid-way by a caller that then knows nothing.
       // The FIRST probe of an aim always runs (the caller leaves room for its answer): a last attempt that aimed with
-      // little time left would otherwise end on "no time", burying the verdict the earlier attempts reached.
-      if (probes && performance.now() >= deadline) {
+      // little time left would otherwise end on "no time", burying the verdict the earlier attempts reached. A later one
+      // starts only if it can end in time, at the pace of this look's slowest probe (four renders each: on a loaded
+      // machine a probe took seconds, and the look that started one near its deadline was abandoned, knowing nothing).
+      if (probes && performance.now() + probeMs >= deadline) {
         return fail('occluded', `the ${probes} candidate point(s) checked in the time there was are each covered by a layer the hit test cannot see (now ${names}, drawn above "${aimed.feature.layer}"). If it is see-through there, pass { ignoreLayers: [${pixels.over.map((o) => `'${o.layer}'`).join(', ')}] }; { force: true } acts anyway.`);
       }
       probes++;
       // (a renderer without redraw() needs real frames: at least a few of them)
+      const probeStart = performance.now();
       const p = await this.adapter.probePixels!(aimed.feature.layer, aimed.surface, 2, Math.max(PROBE_MIN_MS, deadline - performance.now()));
+      probeMs = Math.max(probeMs, performance.now() - probeStart);
       if ('inconclusive' in p) return fail('unstable', `could not tell yet whether ${names} covers the target at (${aimed.surface.x}, ${aimed.surface.y}): ${p.inconclusive}`);
       if ('unavailable' in p) {
         // No pixels to read (no WebGL context): as before the check existed, and said in the trace.
