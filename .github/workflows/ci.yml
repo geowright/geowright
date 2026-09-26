@@ -8,10 +8,13 @@ name: ci
 # a repository variable CI_RUNS_ON (a JSON list of runner labels) routes the jobs to another runner, and CI_PORT
 # moves the test servers off the default port when that runner shares a machine with a developer. A pull request from
 # a fork never goes there: its code is a stranger's, and CI_RUNS_ON may name a machine of the maintainers' own.
+# A change under site/ alone starts no run: nothing the jobs below test lives there.
 on:
   push:
     branches: [main]
+    paths-ignore: ['site/**']
   pull_request:
+    paths-ignore: ['site/**']
   workflow_dispatch:
 
 concurrency:
