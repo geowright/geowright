@@ -48,8 +48,10 @@ as written (it adds types only).
   sent again: not when the app re-creates its map in the click handler, not when the click navigates, not when the
   input call itself throws (the action ends with that error). Options: `force`,
   `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for a feature that never stops moving, on `click`,
-  `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never clicks the wrong
-  thing). `dragTo`, `dragBy`, `lngLat` and the location actions (`clickAt`, `tapAt`, …; their options are
+  `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never presses another
+  feature. It is checked at the press, and MapLibre decides its layer click at `click`: a fast target can move off in
+  between, and then the action reports success while the app's click missed the target). `dragTo`, `dragBy`,
+  `lngLat` and the location actions (`clickAt`, `tapAt`, …; their options are
   `SteadyActionOptions`) refuse `moving`, in their types and at run time: they have no check when the input arrives.
   Works on rotated, pitched, globe and terrain maps, inside a container scaled with CSS `transform: scale()`, and in
   an open shadow root (a web component). A location on the far side of the globe or behind a mountain is an error,

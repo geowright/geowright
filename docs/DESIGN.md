@@ -249,6 +249,7 @@ page that keeps drawing (a page that stalls is under "What is still wrong") — 
 can click a slowly moving dot. `{ moving: 'allow' }` drops the two checks a
 moving target cannot pass (map at rest, same pixel two frames running) and keeps every other one; what protects against
 acting on the wrong thing is the click-time verification, which swallows a late press before the application sees it.
+It runs at the press; a target that moves off between the press and the `click` event is under "What is still wrong".
 Measured before designing: on a light page the freshest pixel is good enough (a 9 px dot at up to 200 px/s: 20 of 20
 first try; at 400 px/s: 0 of 20, every press swallowed, none delivered elsewhere). On MapLibre's own "animate a point"
 example — a full-screen basemap in software GL, ~14 frames a second — it never hit once in 30 s, because input arrives
@@ -954,6 +955,13 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   definition of "at rest" for a source that changes every frame; a stronger one is planned.
 - A target moving faster than roughly its own diameter per input latency cannot be clicked at all; the action times
   out honestly (every late press is swallowed), it does not mis-click.
+- A `moving: 'allow'` click is verified at `pointerdown`, but MapLibre attributes a click to a layer on the DOM `click`
+  event, after the release, by querying what is drawn then. The press and the release are separate round trips to the
+  browser; on a page that re-sets its source every frame, a frame drawn in between can move a small dot off the pointer.
+  The action then reports success and the app's click missed the target: it landed on whatever is drawn under it (on
+  that page, no feature). Seen once in 21 runs of MapLibre's "animate a point" at a load of 12–30; 20 of 20 when re-run
+  alone. The planned fix re-checks at `click` too, and reports a miss
+  there as a failure after input: the input was sent and is never sent again.
 - Identity disambiguation by asking the source only works for GeoJSON sources; a vector-tile source cannot be asked.
   (A rare "ambiguous instead of unstable" on MapLibre's animated point had a plain cause: its source holds a bare
   GeoJSON geometry, which was read as "no features", so nothing could be learnt from it. Fixed; the statistical

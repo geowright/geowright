@@ -139,7 +139,8 @@ is id + properties, and id-less look-alikes are told apart by where they are dra
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map; never the target's own layer), `{ autoPan: true }`, `{ timeout }`, and
 `{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
 arrives late, or when the query matches more than one feature, is swallowed before the app sees it — it can time out, it
-never clicks the wrong thing; `dragTo`, `dragBy`,
+never presses another feature; the check is at the press, so a fast target can still slip off before the `click` event,
+see [Limits](#limits); `dragTo`, `dragBy`,
 `lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`…) have no such check and refuse the option). The reasoning and the measurements:
 [DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
 
@@ -332,6 +333,10 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   (a starved renderer draws a perpetually moving feature at the same pixel two frames running), the default refusal of a
   moving target can let a `hover` through, onto where the feature is drawn at that instant. A `click` is still verified
   when the press arrives.
+- **A `moving: 'allow'` click is verified at `pointerdown`, but MapLibre decides which layer was clicked at `click`**, after
+  the release. A fast target can move off in between: the action reports success, and the app's click missed the target
+  (it landed on whatever is drawn under it; on MapLibre's "animate a point", no feature). Seen once in 21 runs, on a loaded
+  machine. A check at `click` as well is planned.
 - **Pixel-only layers above a feature** (raster, image, video, canvas, heatmap, hillshade) are checked with a pixel probe:
   a few renders per action on a map that has one over its features, and not at all for `moving: 'allow'`. Pixels that change
   inside an overlay between the aim and the press are not re-checked: [RECIPES](docs/RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
