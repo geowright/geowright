@@ -542,7 +542,7 @@ export class Engine<W = unknown> {
    * Aiming. Measured first: on a small page the pixel from the freshest frame is good enough up to ~200px/s
    * for a 9px dot (20/20 first try) — and on MapLibre's own "animate a point" (full-screen basemap in software
    * GL, 114px/s, 10px dot) it NEVER hit in 30s, because real input arrives later than the dot's radius allows.
-   * So the pointer leads the target: velocity is measured here over two frames, and how many ms to lead by is
+   * So the pointer leads the target: velocity and acceleration are measured here over three frames, and how many ms to lead by is
    * learnt by the caller from each miss (the verdict says where the target was when the event arrived).
    */
   private async movingActionPoint(q: FeatureQuery, opts: ActionPointOptions): Promise<ActionPointResult> {

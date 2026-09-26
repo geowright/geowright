@@ -155,6 +155,9 @@ from ("Taken from [X](…)", "Copied from https://…").
 |---|---|---|
 | `wild/apps/deck-gl/` | `visgl/deck.gl` at `b28503d8742e3551a37372b9cb911aa1cc9b6706`, MIT, Copyright Vis.gl contributors | `wild/apps/deck-gl/LICENSE`; one-line map hook shown in `UPSTREAM.md` |
 | `wild/apps/pmtiles/` | `protomaps/PMTiles` at `aec8fa1341222fdddb3318e9ffa8e18e19b312f7`, BSD-3-Clause, Copyright 2021 Protomaps LLC | `wild/apps/pmtiles/LICENSE`; copied MapLibre/fflate bundle licenses in `dist/vendor/`; one-line map hook shown in `UPSTREAM.md` |
+| `wild/apps/react-map-gl/` | `visgl/react-map-gl` at `1afe1a98580680c870eeb1139c40a94835333705`, MIT, Copyright Vis.gl contributors | `wild/apps/react-map-gl/LICENSE`; `dist/THIRD_PARTY_LICENSES.md`; one-line map hook shown in `UPSTREAM.md` |
+| `wild/apps/svelte-maplibre-gl/` | `MIERUNE/svelte-maplibre-gl` at `083a6b53a9625d9d6977fce77a3caded1a74cf37`, `(MIT OR Apache-2.0)`, used under MIT (both texts kept, as upstream ships them) | `wild/apps/svelte-maplibre-gl/LICENSE-MIT.txt` and `LICENSE-APACHE.txt`; `dist/THIRD_PARTY_LICENSES.md`; one-line map hook shown in `UPSTREAM.md` |
+| `wild/apps/vue-maplibre-gl/` | `indoorequal/vue-maplibre-gl` at `2d8cb4de10ae686d48ed597eec3b995f1c8b175b`, MIT, Copyright 2021 Volker Nauruhn, 2024 François de Metz | `wild/apps/vue-maplibre-gl/LICENSE`; `dist/THIRD_PARTY_LICENSES.md`; one-line map hook shown in `UPSTREAM.md` |
 
 Every app's committed `dist/` carries `dist/THIRD_PARTY_LICENSES.md`: the license text of each npm package its
 build bundles (React, ReactDOM, Vue, Svelte, `d3-*`, luma.gl / math.gl / loaders.gl, maplibre-gl, …), written by
@@ -183,7 +186,12 @@ license and size) — referenced here rather than duplicated so the two don't dr
 everything vendored there is stated permissive/public-domain by policy ("Rules ... permissive
 licenses only, license files kept" — `wild/README.md`), e.g. MapLibre's own examples (BSD-3-Clause),
 `demotiles` fixtures (BSD-3-Clause + Natural Earth public domain), USGS earthquake data (US
-government work, public domain), and `wild/apps/react-map-gl` (has its own `LICENSE` file in-tree).
+government work, public domain), and every app under `wild/apps/`, each a row in the table above
+(`node wild/scripts/apps.mjs check` fails on an app without one, here or in `wild/README.md`).
+The synthetic basemap in `tests/wild/basemap.ts` is written here, data and style alike. Its source, source-layer and
+field names follow the [OpenMapTiles](https://openmaptiles.org/) vector-tile schema, and its layer ids those of the OSM
+Bright style that MapLibre's examples refer to; no OpenMapTiles data, tiles or design, and nothing of the OSM Bright
+style, is included ([0023](decisions/0023-schema-identifiers-are-an-interface-not-copied-material.md)).
 None of this ships in the npm package (confirmed: `npm pack --dry-run` includes nothing under
 `wild/`, `tests/`, or `demo/` — see the pack review below).
 

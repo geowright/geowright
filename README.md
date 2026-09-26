@@ -128,7 +128,7 @@ Actions refuse an invisible feature unless `{ force: true }`. How it works: [DES
 3. the pixel is **on** the feature — for polygons an interior point far from the edge, never the centroid
 4. the feature is the **topmost visible hit** at that pixel (its own label on top does not count as an occluder; neither does anything the style paints invisibly, e.g. a transparent hit area)
 5. no DOM element (popup, control, overlay) covers the pixel
-6. a layer the hit test cannot see (raster, image, video, canvas, heatmap, hillshade) drawn **above** the feature at that pixel: the feature's own layer is probed there, and if hiding it changes no pixel the point is covered and the next one is tried (a translucent overlay, or a transparent gap in an opaque one, lets the action through). Maps without such a layer above their features pay nothing
+6. a layer the hit test cannot see (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) drawn **above** the feature at that pixel: the feature's own layer is probed there, and if hiding it changes no pixel the point is covered and the next one is tried (a translucent overlay, or a transparent gap in an opaque one, lets the action through). Maps without such a layer above their features pay nothing
 7. at the instant the real `pointerdown` arrives, the hit test is re-run; if the feature the query resolved to is no longer there (a look-alike that slid under the pointer does not count), or a layer of item 6 appeared over it since the aim, the click — or the tap, touch events included — is swallowed and the action retries
 
 Works unchanged on rotated, pitched, globe and terrain maps, and on a map inside a container scaled with CSS `transform: scale()`. A location on the far side of the globe, behind the camera or
@@ -139,7 +139,7 @@ is id + properties, and id-less look-alikes are told apart by where they are dra
 Escape hatches: `{ force: true }`, `{ ignoreLayers: [...] }` (per action or per map; never the target's own layer), `{ autoPan: true }`, `{ timeout }`, and
 `{ moving: 'allow' }` for a target that never stops moving (`click`, `tap`, `hover`: the pointer leads it; a press that
 arrives late, or when the query matches more than one feature, is swallowed before the app sees it — it can time out, it
-never presses another feature; the check is at the press, so a fast target can still slip off before the `click` event,
+never presses another feature (for `dblclick`, its first press); the check is at the press, so a fast target can still slip off before the `click` event,
 see [Limits](#limits); `dragTo`, `dragBy`,
 `lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`…) have no such check and refuse the option). The reasoning and the measurements:
 [DESIGN — Actionability](docs/DESIGN.md#actionability-what-click-a-feature-has-to-verify).
@@ -242,7 +242,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 | `draw.polygon` `draw.line` `(vertices, { finish, vertexDelay? })` | `finish`: `click-last` (default) `click-first` `dblclick` `enter` `none` |
 | `draw.rectangle(a, b, opts?)` · `draw.circle(center, edge, opts?)` · `draw.cancel()` | `gesture`: `click-move-click` (default) or `drag`; Escape |
 | `marker(where)` · `popup(where?)` → `Promise<Locator>` | DOM overlays as normal Locators; `where`: `{ at?, feature?, tolerancePx? }` |
-| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel (waits for a pixel inside the browser window; the lng reported is in [-180, 180]) |
+| `clientPoint(lngLat)` · `lngLatAt({ x, y })` | lng/lat ⇄ client pixel. `clientPoint` waits for a pixel inside the browser window; `lngLatAt` answers at once, for any pixel it is given, and the lng it reports is in [-180, 180] |
 
 | FeatureHandle (`map.feature(q)`) | |
 |---|---|
@@ -333,11 +333,11 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   (a starved renderer draws a perpetually moving feature at the same pixel two frames running), the default refusal of a
   moving target can let a `hover` through, onto where the feature is drawn at that instant. A `click` is still verified
   when the press arrives.
-- **A `moving: 'allow'` click is verified at `pointerdown`, but MapLibre decides which layer was clicked at `click`**, after
-  the release. A fast target can move off in between: the action reports success, and the app's click missed the target
+- **A `moving: 'allow'` click or tap is verified at `pointerdown` (a `dblclick` at its first press only), but MapLibre decides
+  which layer was clicked at `click`**, after the release. A fast target can move off in between: the action reports success, and the app's click missed the target
   (it landed on whatever is drawn under it; on MapLibre's "animate a point", no feature). Seen once in 21 runs, on a loaded
   machine. A check at `click` as well is planned.
-- **Pixel-only layers above a feature** (raster, image, video, canvas, heatmap, hillshade) are checked with a pixel probe:
+- **Pixel-only layers above a feature** (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) are checked with a pixel probe:
   a few renders per action on a map that has one over its features, and not at all for `moving: 'allow'`. Pixels that change
   inside an overlay between the aim and the press are not re-checked: [RECIPES](docs/RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
 - The injected script is about 410 KB, not minified (88 KB gzipped; it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
@@ -347,7 +347,7 @@ The full list, with costs measured on a dense map: [DESIGN — Costs and known l
 ## Supported map library versions
 
 Developed against MapLibre GL JS 6. The same small page and the same core specs run against every major below
-(`npm run test:compat`, `tests/compat/`, its own CI job; 84 tests). "✓" means asserted by that matrix, not assumed.
+(`npm run test:compat`, `tests/compat/`, its own CI job; 96 tests). "✓" means asserted by that matrix, not assumed.
 Newer public methods are feature-detected, never version-sniffed; what an old version cannot do is said in failure
 diagnostics and in the snapshot (`note: …`) instead of being answered wrongly.
 

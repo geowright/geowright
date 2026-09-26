@@ -19,8 +19,8 @@ as written (it adds types only).
   named layer does not exist (to assert that a layer was removed, check `map.layers()`), several features match where
   one is required, the camera is moving (`toHavePopup`), the map was never registered (`toHaveView`). A removed or
   0×0 map is an error for `features(q).count()` and `all()`, never an empty map. On a page too busy to answer, a
-  matcher, `map.marker()` and `map.popup()` fail at their timeout with "the page did not answer" (`toBeVisibleOnMap`'s
-  pixel probe is the exception: it waits for the page).
+  matcher, `map.marker()` and `map.popup()` fail at their timeout with "the page did not answer" (the pixel probes of
+  `toBeVisibleOnMap` and `toHaveLayerPixels` are the exception: they wait for the page).
 - **Query** by `layer`, `layerType`, `source` (for layer ids a wrapper generates), `id`, `where` (equality, RegExp,
   `eq ne gt gte lt lte in matches exists`; any other value, such as an array, an unknown operator or an operator object with none in it, is an error,
   and so is an operand of the wrong kind: `in` that is not an array, `exists` that is not a boolean, a bound that is
@@ -39,8 +39,8 @@ as written (it adds types only).
   (`polygon`, `line`, `rectangle`, `circle`, `cancel`) take explicit finish gestures and are tested with terra-draw and
   mapbox-gl-draw.
 - **Actionability**: before any input, the target must be the only match, painted, still, under the pointer, the
-  topmost visible hit, and not covered by a DOM element. A raster, image, video, canvas, heatmap or hillshade layer
-  drawn above the target at that pixel is checked with a pixel probe of the target's own layer: an opaque one refuses
+  topmost visible hit, and not covered by a DOM element. A raster, image, video, canvas, heatmap, hillshade, color-relief,
+  background or custom layer (deck.gl's interleaved layers are custom layers) drawn above the target at that pixel is checked with a pixel probe of the target's own layer: an opaque one refuses
   the action and is named; a translucent one, or a transparent gap in an opaque one, lets it through (`ignoreLayers`
   skips the probe; `moving: 'allow'` is not checked). For `click`, `dblclick`, `rightClick` and `tap`, the hit test
   runs again when the press arrives and must find the same feature (not a look-alike that slid under the pointer); a
@@ -49,7 +49,7 @@ as written (it adds types only).
   input call itself throws (the action ends with that error). Options: `force`,
   `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for a feature that never stops moving, on `click`,
   `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never presses another
-  feature. It is checked at the press, and MapLibre decides its layer click at `click`: a fast target can move off in
+  feature, and for `dblclick` that holds for its first press only. It is checked at the press, and MapLibre decides its layer click at `click`: a fast target can move off in
   between, and then the action reports success while the app's click missed the target). `dragTo`, `dragBy`,
   `lngLat` and the location actions (`clickAt`, `tapAt`, …; their options are
   `SteadyActionOptions`) refuse `moving`, in their types and at run time: they have no check when the input arrives.

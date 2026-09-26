@@ -15,6 +15,9 @@ licenses, each made testable with **the one-line hook and nothing else**:
 | `apps/` | real open-source apps (React / Svelte / Vue wrappers), source + prebuilt `dist/` | see each app's LICENSE | `/apps/<name>/` |
 | `apps/deck-gl/` | deck.gl's MapLibre `MapboxOverlay` React test app, interleaved WebGL layers | MIT — `apps/deck-gl/LICENSE` | `/apps/deck-gl/` |
 | `apps/pmtiles/` | Protomaps' MapLibre example, custom `pmtiles://` vector protocol and byte-range archive reads | BSD-3-Clause — `apps/pmtiles/LICENSE` | `/apps/pmtiles/` |
+| `apps/react-map-gl/` | vis.gl's react-map-gl MapLibre examples: controls, GeoJSON, filter | MIT — `apps/react-map-gl/LICENSE` | `/apps/react-map-gl/` |
+| `apps/svelte-maplibre-gl/` | MIERUNE's svelte-maplibre-gl examples: clusters, hover styles | `MIT OR Apache-2.0`, used under MIT — `apps/svelte-maplibre-gl/LICENSE-MIT.txt`, `LICENSE-APACHE.txt` | `/apps/svelte-maplibre-gl/` |
+| `apps/vue-maplibre-gl/` | indoorequal's vue-maplibre-gl examples: filter, GeoJSON, marker and popup | MIT — `apps/vue-maplibre-gl/LICENSE` | `/apps/vue-maplibre-gl/` |
 | `fixtures/` | everything the apps fetch from the network, answered by `page.route` | `fixtures/SOURCES.md` | never served by `serve.mjs`; the tests own the network |
 
 Rules: permissive licenses only, license files kept; the apps are not bent
@@ -55,7 +58,7 @@ issue from the "My map app does not work" template, which asks for everything be
    question to answer; `check` (and so the unit suite) fails until none is left.
 4. **Vendor, plus ONE line.** Copy the app's files from that commit into `apps/<name>/` unchanged — as few as the
    failure needs: one example, not the monorepo. Add exactly one line, the hook
-   ([0010](../docs/decisions/0010-wild-apps-not-bent.md)). Our own build files (`package.json`, the bundler config,
+   ([0016](../docs/decisions/0016-wild-apps-not-bent-checked-offline.md)). Our own build files (`package.json`, the bundler config,
    an `index.html` if upstream has none) sit beside them; build with `npm ci && npm run build` and commit `dist/`, which
    `serve.mjs` serves at `/apps/<name>/`. `dist/` redistributes what the build bundles, so it carries their notices:
    in the Vite config, `build: { license: { fileName: 'THIRD_PARTY_LICENSES.md' } }`; a build that only copies files

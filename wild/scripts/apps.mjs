@@ -152,9 +152,15 @@ function check() {
     }
   };
 
+  // The public inventories: a row per app, as the licensing rule asks (CONTRIBUTING, "Licenses"). Skipped in a tree
+  // that has no such file (the unit suite's scratch copies).
+  const inventories = [['docs/THIRD_PARTY_NOTICES.md', (n) => `| \`wild/apps/${n}/\` |`], ['wild/README.md', (n) => `| \`apps/${n}/\` |`]]
+    .filter(([p]) => existsSync(join(ROOT, p))).map(([p, row]) => [p, read(join(ROOT, p)).split('\n'), row]);
+
   for (const name of readdirSync(apps).filter((f) => statSync(join(apps, f)).isDirectory())) {
     const dir = join(apps, name);
     licensesOf(dir);
+    for (const [p, lines, row] of inventories) if (!lines.some((l) => l.startsWith(row(name)))) problems.push(`${rel(dir)}/: no row in ${p}'s table (${row(name)} upstream, commit, license | …)`);
     const up = join(dir, 'UPSTREAM.md');
     if (!existsSync(up)) { problems.push(`${rel(up)}: missing (upstream repository, commit, license, the one added line)`); continue; }
     const text = read(up);
@@ -377,7 +383,7 @@ Every vendored file is byte-identical to upstream except the one hook line below
 ## The one-line change
 
 ${TODO}: where the line is and why there, as a diff against upstream. Exactly one added line
-([0010](../../../docs/decisions/0010-wild-apps-not-bent.md)):
+([0016](../../../docs/decisions/0016-wild-apps-not-bent-checked-offline.md)):
 
 \`\`\`diff
  const map = new maplibregl.Map({ /* … */ });
