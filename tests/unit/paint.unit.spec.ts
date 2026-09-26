@@ -377,7 +377,7 @@ test.describe('the pixel-only-layer gate (decision 0022)', () => {
     expect(gate(m, ['target', 'fill']), 'nothing pixel-only above').toEqual([]);
   });
 
-  test("an image / video / canvas source covers only its quad; a tiled source only its inline bounds; under terrain, everything", () => {
+  test("an image / video / canvas source covers only its quad; a tiled source everything, whatever its bounds; under terrain, everything", () => {
     const layers = { target: { type: 'fill', source: 'points' }, img: { type: 'raster', source: 'img' }, tiles: { type: 'raster', source: 'tiles' } };
     const sources = {
       points: { type: 'geojson' },
@@ -385,11 +385,37 @@ test.describe('the pixel-only-layer gate (decision 0022)', () => {
       tiles: { type: 'raster', bounds: [34, 32, 35, 33] },
     };
     expect(gate(styleMap(layers, sources, { at: [34.5, 32.5] }), Object.keys(layers))).toEqual(['img', 'tiles']);
-    expect(gate(styleMap(layers, sources, { at: [36, 32.5] }), Object.keys(layers))).toEqual([]);
+    // outside the bounds: MapLibre draws every tile that meets them whole (edge tiles reach past them), and a parent
+    // tile of a lower zoom while one loads, so the bounds say nothing about a pixel
+    expect(gate(styleMap(layers, sources, { at: [36, 32.5] }), Object.keys(layers))).toEqual(['tiles']);
     // another world copy of the same place
     expect(gate(styleMap(layers, sources, { at: [34.5 + 360, 32.5] }), Object.keys(layers))).toEqual(['img', 'tiles']);
     expect(gate(styleMap(layers, sources, { at: [36, 32.5], terrain: true }), Object.keys(layers)), 'terrain: no area test').toEqual(['img', 'tiles']);
-    // bounds from a TileJSON are not in the style: the source covers everything
-    expect(gate(styleMap(layers, { ...sources, tiles: { type: 'raster', url: 'x.json' } }, { at: [36, 32.5] }), Object.keys(layers))).toEqual(['tiles']);
+  });
+
+  test('a hillshade at exaggeration 0 draws nothing only with a method that paints nothing on flat ground', () => {
+    const layers = (method?: string) => ({ target: { type: 'fill', source: 'points' }, shade: { type: 'hillshade', source: 'dem', paint: { 'hillshade-exaggeration': 0, ...(method && { 'hillshade-method': method }) } } });
+    const at = (method?: string) => gate(styleMap(layers(method)), ['target', 'shade']);
+    expect(at(), 'standard (the default)').toEqual([]);
+    for (const m of ['standard', 'combined', 'igor']) expect(at(m), m).toEqual([]);
+    // basic and multidirectional light a flat surface: a tint, opaque at a high illumination altitude
+    for (const m of ['basic', 'multidirectional']) expect(at(m), m).toEqual(['shade']);
+  });
+
+  test("the stamp changes with an overlay's opacity and its source's data events, but not with the target's own source", () => {
+    const layers: Record<string, any> = { target: { type: 'circle', source: 'points' }, radar: { type: 'raster', source: 'tiles', paint: { 'raster-opacity': 0.5 } }, heat: { type: 'heatmap', source: 'points' } };
+    const events: Record<string, number> = { tiles: 0, points: 0 };
+    const m = styleMap(layers, { tiles: { type: 'raster' }, points: { type: 'geojson' } });
+    const stamps = () => Object.fromEntries(pixelOccluders(m as any, 'target', { x: 1, y: 1 }, Object.keys(layers), (s) => events[s]).map((o) => [o.layer, o.stamp]));
+    const before = stamps();
+    layers.radar.paint['raster-opacity'] = 1;
+    const opaque = stamps();
+    expect(opaque.radar, 'opacity 0.5 -> 1').not.toBe(before.radar);
+    events.tiles++;
+    expect(stamps().radar, "a data event of the overlay's source").not.toBe(opaque.radar);
+    // a probe that hides the target by visibility reloads ITS source: the heatmap on that source keeps its stamp
+    const heat = stamps().heat;
+    events.points += 5;
+    expect(stamps().heat, "the target's own source").toBe(heat);
   });
 });

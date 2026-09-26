@@ -622,7 +622,8 @@ export function reloadFreeOpacity(map: MlMap, layerId: string): string[] | undef
 /**
  * The layer types the hit test never returns (they draw pixels, not features), with the paint property that, at 0, makes
  * each draw nothing (null: none). A heatmap is hit-testable over its radius on MapLibre >= 5 but not before: it is here
- * on every version, which costs a probe, never a false pass.
+ * on every version, and its hit is never taken as an occluder (the adapter's `pixelOnly`), so the gate and the probe
+ * decide on every version.
  */
 const PIXEL_ONLY_OPACITY: Record<string, string | null> = {
   raster: 'raster-opacity',
@@ -632,6 +633,9 @@ const PIXEL_ONLY_OPACITY: Record<string, string | null> = {
   heatmap: 'heatmap-opacity',
   custom: null,
 };
+
+/** Does a layer of this type draw pixels rather than features (the gate's types)? */
+export const isPixelOnlyType = (type: string | undefined): boolean => type !== undefined && type in PIXEL_ONLY_OPACITY;
 
 /** Web Mercator, as MapLibre places an image / video / canvas source: x and y in [0, 1] over the world. */
 export function mercator([lng, lat]: number[]): [number, number] {
@@ -654,10 +658,24 @@ const serials = new WeakMap<object, number>();
 let lastSerial = 0;
 const serial = (o: object) => serials.get(o) ?? (serials.set(o, ++lastSerial), lastSerial);
 
+/** Does this hillshade draw nothing on flat ground (exaggeration 0)? Its method decides; unknown: no. */
+function hillshadeFlatIsBlank(map: MlMap, layerId: string): boolean {
+  let method: unknown;
+  try {
+    method = map.getPaintProperty(layerId, 'hillshade-method' as any);
+  } catch {
+    return false;
+  }
+  return method === undefined || method === null || method === 'standard' || method === 'combined' || method === 'igor';
+}
+
 /** Is the layer's opacity exactly 0 at the camera zoom? Anything the evaluator cannot read: no (it may draw). */
 function opacityZero(map: MlMap, layerId: string, type: string): boolean {
   const name = PIXEL_ONLY_OPACITY[type];
   if (!name) return false;
+  // At exaggeration 0 the `basic` and `multidirectional` hillshade methods still paint a flat tint (their shaders light a
+  // flat surface); `standard` (the default), `combined` and `igor` paint nothing.
+  if (type === 'hillshade' && !hillshadeFlatIsBlank(map, layerId)) return false;
   try {
     const raw = map.getPaintProperty(layerId, name as any) as unknown;
     if (raw === undefined || raw === null) return false; // the spec's defaults are all > 0
@@ -672,18 +690,22 @@ function opacityZero(map: MlMap, layerId: string, type: string): boolean {
 
 /**
  * The pixel-only layers drawn ABOVE `target` that may draw at the surface pixel `at` (bottom to top): visible, inside
- * their zoom range, opacity not exactly 0, and — where it can be told — whose source covers `at`: an image / video /
- * canvas source's `coordinates` (a quad in Mercator, as MapLibre warps it), a tiled source's `bounds` when the style
- * gives them inline. Under terrain there is no area test (a draped raster is not where `unproject` says). It may say too
- * much, which costs a probe; it must never say too little, which is a false pass (decision 0022).
- * `stamp`: changes when what the layer draws may have changed — its source (another object: removed and added again), the
- * source's data events (`dataEvents`), its `coordinates`, and the layer's opacity.
+ * their zoom range, drawing something (opacity not exactly 0), and — where it can be told — whose source covers `at`: an
+ * image / video / canvas source's `coordinates` (a quad in Mercator, as MapLibre warps it). Under terrain there is no
+ * area test (a draped raster is not where `unproject` says). It may say too much, which costs a probe; it must never say
+ * too little, which is a false pass (decision 0022).
+ * `stamp`: changes when what the layer draws may have changed in a way it can see — its source (another object: removed
+ * and added again), the source's data events (`dataEvents`; not for the target's own source), its `coordinates`, and the
+ * layer's opacity. It only serves one action's retries (the engine keeps verdicts per action).
  */
 export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: number }, ids: string[], dataEvents: (source: string) => number): { layer: string; type: string; stamp: string }[] {
   const out: { layer: string; type: string; stamp: string }[] = [];
   const from = ids.indexOf(target);
   if (from < 0) return out;
   const zoom = map.getZoom();
+  // The target's own source is left out of the stamps: a probe that hides the target by `visibility` reloads it, and a
+  // stamp that changed with that reload would never find the verdict just reached (probe, reload, probe… for ever).
+  const targetSource = (map.getLayer(target) as { source?: string } | undefined)?.source;
   let terrain: unknown;
   try {
     terrain = (map as any).getTerrain?.();
@@ -698,7 +720,7 @@ export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: n
     }
     return where;
   };
-  let style: { sources?: Record<string, { coordinates?: number[][]; bounds?: number[] }> } | undefined;
+  let style: { sources?: Record<string, { coordinates?: number[][] }> } | undefined;
   const styleSource = (id: string) => (style ??= (map.getStyle() ?? {}) as unknown as typeof style)!.sources?.[id];
   for (let i = from + 1; i < ids.length; i++) {
     const id = ids[i];
@@ -710,19 +732,12 @@ export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: n
     const sourceId = (layer as { source?: string }).source;
     const src = sourceId ? (map.getSource(sourceId) as { coordinates?: number[][] } | undefined) : undefined;
     const coordinates = src?.coordinates ?? (sourceId ? styleSource(sourceId)?.coordinates : undefined);
-    if (sourceId && !terrain) {
-      const bounds = styleSource(sourceId)?.bounds;
+    // Only a quad says where a layer draws. A tiled source's `bounds` do not: MapLibre draws every tile that meets them
+    // whole, edge tiles past the bounds included, and a parent tile of a lower zoom while one loads.
+    if (sourceId && !terrain && Array.isArray(coordinates) && coordinates.length === 4) {
       try {
-        if (Array.isArray(coordinates) && coordinates.length === 4) {
-          const quad = coordinates.map(mercator);
-          if (!here().some((p) => inQuad(p, quad))) continue;
-        } else if (Array.isArray(bounds) && bounds.length === 4) {
-          const [w, s, e, n] = bounds;
-          const ll = map.unproject([at.x, at.y] as any);
-          const lng = ((((ll.lng + 180) % 360) + 360) % 360) - 180;
-          const inLng = w <= e ? lng >= w && lng <= e : lng >= w || lng <= e;
-          if (!inLng || ll.lat < s || ll.lat > n) continue;
-        }
+        const quad = coordinates.map(mercator);
+        if (!here().some((p) => inQuad(p, quad))) continue;
       } catch {
         /* cannot tell: it may cover `at` */
       }
@@ -734,7 +749,7 @@ export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: n
     } catch {
       paint = undefined;
     }
-    out.push({ layer: id, type: layer.type, stamp: `${src ? serial(src) : 0}|${sourceId ? dataEvents(sourceId) : 0}|${JSON.stringify(coordinates ?? null)}|${JSON.stringify(paint ?? null)}` });
+    out.push({ layer: id, type: layer.type, stamp: `${src ? serial(src) : 0}|${sourceId && sourceId !== targetSource ? dataEvents(sourceId) : 0}|${JSON.stringify(coordinates ?? null)}|${JSON.stringify(paint ?? null)}` });
   }
   return out;
 }

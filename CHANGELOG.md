@@ -40,10 +40,12 @@ as written (it adds types only).
   mapbox-gl-draw.
 - **Actionability**: before any input, the target must be the only match, painted, still, under the pointer, the
   topmost visible hit, and not covered by a DOM element. A raster, image, video, canvas, heatmap, hillshade, color-relief,
-  background or custom layer (deck.gl's interleaved layers are custom layers) drawn above the target at that pixel is checked with a pixel probe of the target's own layer: an opaque one refuses
+  background or custom layer (deck.gl's interleaved layers are custom layers; MapLibre 3 and later) drawn above the target at that pixel is checked with a pixel probe of the target's own layer: an opaque one refuses
   the action and is named; a translucent one, or a transparent gap in an opaque one, lets it through (`ignoreLayers`
-  skips the probe; `moving: 'allow'` is not checked). For `click`, `dblclick`, `rightClick` and `tap`, the hit test
-  runs again when the press arrives and must find the same feature (not a look-alike that slid under the pointer); a
+  skips the probe; `moving: 'allow'` is not checked). Every action probes anew. A heatmap, which MapLibre 5 and later
+  hit-test over its whole radius, covers only by its pixels, as on every other version. For `click`, `dblclick`,
+  `rightClick` and `tap`, the hit test runs again when the press arrives and must find the same feature, still painted
+  (not a look-alike that slid under the pointer, not one made invisible since the aim); a
   late press is swallowed, a tap's touch events included, and retried. A press that reached the app is never
   sent again: not when the app re-creates its map in the click handler, not when the click navigates, not when the
   input call itself throws (the action ends with that error). Options: `force`,
@@ -85,6 +87,8 @@ as written (it adds types only).
 - **Browser agents** (Playwright MCP): a text snapshot of the map with clickable pixels and evaluated colours, and an
   accessibility mirror that makes features clickable buttons (`dist/inpage.js`, `dist/inpage-agent.js`, `--init-script`).
   On a basemap with 100 layers, the snapshot shrinks the basemap first so that the app's own features stay listed.
+  The snapshot does not probe pixels: a feature under a raster, image or other layer the hit test cannot see is listed
+  with `under-pixel-layer:<ids>` (EntityView `blocked`), since that layer may hide it there.
 - `npx geowright init` writes a fixture, the software-WebGL flags and a first spec that prints the snapshot. It also
   prints the hook for your wrapper (react-map-gl, `@vis.gl/react-maplibre`, svelte-maplibre-gl, vue-maplibre-gl). A whole
   `playwright.config` is written only where there is none; where there is one, `init` prints the two lines to add to it.

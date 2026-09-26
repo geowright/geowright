@@ -124,6 +124,12 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    */
   pixelOccluders?(layer: string, at: PixelPoint): PixelOccluder[];
   /**
+   * Optional, with `pixelOccluders`: does `layer` draw pixels rather than features (a type `pixelOccluders` reports)? Such
+   * a layer may still come back from `queryFeatures` (a heatmap does on MapLibre >= 5, over its whole radius, drawn or
+   * not): that hit is never an occluder. Whether it hides the target is for the gate and the probe.
+   */
+  pixelOnly?(layer: string): boolean;
+  /**
    * Optional, after a probe that answered `reloads`: resolves once a frame has been rendered since the probe and the
    * layer's source is loaded again — true then, false when `budgetMs` ran out first.
    */

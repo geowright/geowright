@@ -177,6 +177,115 @@ for (const lib of LIBS) {
       await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
     });
 
+    // Decision 0022 on every version: a heatmap's hit (MapLibre >= 5 hit-tests its whole radius, drawn or not) is never an
+    // occluder; the gate and the probe decide. Drawing nothing (opacity 0) it hides nothing; translucent, the probe sees
+    // the target through it. On its target's OWN source, with the target's opacity data-driven (the probe reloads that
+    // source), the verdict still holds for the retry.
+    test('pixel-only layers: a heatmap over a feature hides it only by its pixels, on any source', async ({ map, page }) => {
+      const heat = (o: { opacity: number; shared?: boolean }) =>
+        page.evaluate((o) => {
+          const m = (window as any).__geowright_maps.main;
+          if (m.getLayer('heat')) m.removeLayer('heat');
+          if (m.getSource('heat')) m.removeSource('heat');
+          if (o.shared) m.setPaintProperty('places', 'circle-opacity', ['case', ['==', ['get', 'kind'], 'none'], 0.5, 1]);
+          else m.addSource('heat', { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 900, properties: { w: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.08] } }] } });
+          m.addLayer({ id: 'heat', type: 'heatmap', source: o.shared ? 'places' : 'heat', paint: { 'heatmap-radius': 30, 'heatmap-opacity': o.opacity } });
+          document.getElementById('clicked')!.textContent = '-';
+        }, o);
+      const bravo = map.feature({ layer: 'places', where: { name: 'Bravo' } });
+      for (const o of [{ opacity: 0 }, { opacity: 0.3 }, { opacity: 0.4, shared: true }]) {
+        await heat(o);
+        await map.waitForIdle();
+        const e = await bravo.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e.message.split('\n\n')[0]);
+        baseExpect({ ...o, error: e }).toEqual({ ...o, error: null });
+        await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
+      }
+    });
+
+    // Decision 0022's other cases on every version (Mapbox GL v1 has its own code for them: a probe over real frames, a
+    // reload that starts a frame later): a pixel-only layer BELOW the features (the page's background) costs no probe; a
+    // veil shown as the pointer arrives is caught at the press; the action waits out a reload after a visibility probe.
+    test('pixel-only layers: none above costs nothing; a veil shown at the press is caught; the reload after a probe is waited for', async ({ map, page }) => {
+      const bravo = map.feature({ layer: 'places', where: { name: 'Bravo' } });
+      await page.evaluate(() => {
+        const w = window as any;
+        w.__styledata = 0;
+        w.__presses = 0;
+        w.__geowright_maps.main.on('styledata', () => w.__styledata++);
+        window.addEventListener('pointerdown', () => w.__presses++, true);
+      });
+      await bravo.click();
+      await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
+      baseExpect(await page.evaluate(() => (window as any).__styledata), 'a background below the features: no probe').toBe(0);
+
+      // a veil at opacity 0 (the gate leaves it out) shown by the app as the pointer arrives
+      await page.evaluate(() => {
+        const w = window as any;
+        const m = w.__geowright_maps.main;
+        const c = document.createElement('canvas');
+        c.width = c.height = 64;
+        const g = c.getContext('2d')!;
+        g.fillStyle = '#888';
+        g.fillRect(0, 0, 64, 64);
+        const b = m.getBounds();
+        m.addSource('veil', { type: 'image', url: c.toDataURL(), coordinates: [[b.getWest(), b.getNorth()], [b.getEast(), b.getNorth()], [b.getEast(), b.getSouth()], [b.getWest(), b.getSouth()]] });
+        m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-opacity': 0, 'raster-fade-duration': 0 } });
+      });
+      await map.waitForIdle();
+      await page.evaluate(() => {
+        const w = window as any;
+        const m = w.__geowright_maps.main;
+        document.getElementById('clicked')!.textContent = '-';
+        w.__presses = 0;
+        window.addEventListener('mousemove', () => m.setPaintProperty('veil', 'raster-opacity', 1), { capture: true, once: true });
+        window.addEventListener('pointerdown', () => void (w.__presses === 1 && setTimeout(() => m.setPaintProperty('veil', 'raster-opacity', 0))), true);
+      });
+      await bravo.click();
+      await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
+      baseExpect(await page.evaluate(() => (window as any).__presses), 'the press under the veil was swallowed, the retry landed').toBe(2);
+
+      // the veil translucent, the target's opacity data-driven: the probe hides it by visibility and its source reloads;
+      // right after, the page takes the layer out for 400 ms (removed, added back as it was). One press: none was sent then.
+      await page.evaluate(() => {
+        const w = window as any;
+        const m = w.__geowright_maps.main;
+        m.setPaintProperty('veil', 'raster-opacity', 0.5);
+        m.setPaintProperty('places', 'circle-opacity', ['case', ['==', ['get', 'kind'], 'none'], 0.5, 1]);
+      });
+      await map.waitForIdle();
+      await page.evaluate(() => {
+        const w = window as any;
+        const m = w.__geowright_maps.main;
+        document.getElementById('clicked')!.textContent = '-';
+        w.__presses = 0;
+        const set = m.setLayoutProperty.bind(m);
+        let armed = true;
+        m.setLayoutProperty = (layer: string, name: string, value: unknown, ...rest: unknown[]) => {
+          set(layer, name, value, ...rest);
+          if (armed && layer === 'places' && name === 'visibility' && value !== 'none') {
+            armed = false;
+            const spec = m.getStyle().layers.find((l: { id: string }) => l.id === 'places');
+            setTimeout(() => {
+              m.removeLayer('places');
+              setTimeout(() => m.addLayer(spec, 'place-labels'), 400);
+            });
+          }
+        };
+      });
+      await bravo.click();
+      await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
+      baseExpect(await page.evaluate(() => (window as any).__presses), 'one press').toBe(1);
+    });
+
+    // A version without getLayersOrder() reports the style's layers from getStyle(), which leaves custom layers out: it
+    // says so, since an action cannot check a custom layer drawn over its target there.
+    test('a version without getLayersOrder() says that custom layers are not checked', async ({ map, page }) => {
+      const has = await page.evaluate(() => typeof (window as any).__geowright_maps.main.getLayersOrder === 'function');
+      const note = 'no getLayersOrder()';
+      if (has) baseExpect(await map.snapshot()).not.toContain(note);
+      else baseExpect(await map.snapshot()).toContain(note);
+    });
+
     // style evaluation on every version — zoom- and feature-state-driven paint, a legacy { stops } function, promoteId.
     test('style evaluation: zoom and feature-state paint, legacy stops, promoteId', async ({ map, page }) => {
       await page.evaluate(() => {
