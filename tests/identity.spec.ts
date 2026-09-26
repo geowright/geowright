@@ -143,3 +143,37 @@ test.describe('vector tiles: ids are unique per source-layer only', () => {
     expect(e?.message).toContain('covered by another feature; topmost is twin-over#7');
   });
 });
+
+/** `generateId: true`: MapLibre replaces every GeoJSON id with the feature's index. A query by the data's id is by the data. */
+test.describe('a GeoJSON source with generateId', () => {
+  const add = (page: Page) =>
+    page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('gen', {
+        type: 'geojson',
+        generateId: true,
+        data: { type: 'FeatureCollection', features: [
+          { type: 'Feature', id: 1, properties: { name: 'first, data id 1' }, geometry: { type: 'Point', coordinates: [34.79, 32.07] } },
+          { type: 'Feature', id: 0, properties: { name: 'second, data id 0' }, geometry: { type: 'Point', coordinates: [34.81, 32.07] } },
+        ] },
+      });
+      m.addLayer({ id: 'gen', type: 'circle', source: 'gen', paint: { 'circle-radius': 10, 'circle-color': '#0a0' } });
+      const w = window as any;
+      w.__genClicks = [];
+      m.on('click', 'gen', (e: any) => w.__genClicks.push(e.features[0].properties.name));
+    });
+
+  test("feature({ id }) is the feature with that id in the app's data, not the one at that index", async ({ map, page }) => {
+    await add(page);
+    await map.waitForIdle();
+    expect((await map.feature({ layer: 'gen', id: 1 }).info()).properties.name).toBe('first, data id 1');
+    await map.feature({ layer: 'gen', id: 1 }).click();
+    expect(await page.evaluate(() => (window as any).__genClicks)).toEqual(['first, data id 1']);
+  });
+
+  test('the snapshot does not call the drawn features "not drawn individually"', async ({ map, page }) => {
+    await add(page);
+    await map.waitForIdle();
+    expect(await map.snapshot()).not.toMatch(/\[source gen\] \d+ feature\(s\) are inside the view but not drawn individually/);
+  });
+});

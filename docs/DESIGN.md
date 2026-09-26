@@ -210,7 +210,9 @@ on every retry:
 7. **At the instant the real pointer event fires, the hit test is re-run at that exact pixel.** Between
    computing a target pixel in the page and Playwright dispatching input for it a few milliseconds
    later in the test process, the application could have moved the map. An armed, capture-phase
-   listener re-checks the hit test at the pixel and moment of the real `pointerdown` (the target must still be painted:
+   listener re-checks the hit test at the pixel and moment of the real `pointerdown` (an app's own listener registered
+   before it on `window` in the capture phase that stops the press hides it from the check: the rest of the press still
+   arrives, and the action then fails "sent once, not verified", never sending it again; the target must still be painted:
    the hit test finds a feature at opacity 0, and with nothing visible under it, it would be "topmost"); on a mismatch it
    swallows the whole click sequence (a tap's touch events included) before it reaches the application,
    and the action retries from the top. The browser still counts a swallowed tap, so the retried tap
@@ -324,7 +326,9 @@ The key is safe, but not collision-free, and a query is by the app's id, not the
   feature's own geometry. On a tiled source such an id can never be drawn, so the query is an error that
   names `promoteId` (the id then comes from a property and is kept as it is) instead of matching nothing,
   which made every negative assertion by it pass. Left as a limit: in a source that mixes both kinds of
-  id, a query by an integer id also matches a feature whose id is drawn as that integer.
+  id, a query by an integer id also matches a feature whose id is drawn as that integer. A GeoJSON source with
+  `generateId` keeps no data id at all (every feature is drawn with its index), so every query by id on it goes
+  through the data: before, `{ id: 1 }` matched whichever feature was second in the data.
 - **Look-alikes whose ids are drawn as one number** (`'north-gate'` and `'south-gate'`, both `0`, same
   properties) share a key. When the pieces of such a key do not touch, the source is asked how many
   features it holds with those properties that could have been drawn with that id; if more than one,
@@ -595,7 +599,9 @@ repainting with nothing loading, tiles still loading, or a moving camera.
 Assertions are unaffected, since their own idle wait is bounded rather than blocking, and the same diagnosis
 (an animated source, a source re-set in a loop, continuous repainting — never "still loading", "moving" or "slow")
 lets a negative verdict be taken on such a map without idle; only an explicit, unconditional wait for idle needs
-to be opted out for a map like this.
+to be opted out for a map like this. "Never idle" is said only when nothing ELSE is loading: the first version said it
+for an animated canvas while another source was still on its way, and a `.not` or a count of 0 passed on the source
+that had not arrived yet (the same half-loaded map as above, through another door).
 
 **Timeouts mean what they say.** `waitForIdle()` defaults to two thirds of the test's timeout: the first idle after a
 navigation is a load — style, sources, tiles, first render — and Playwright bounds loads by the test timeout only.
@@ -989,6 +995,10 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   that page, no feature). Seen once in 21 runs of MapLibre's "animate a point" at a load of 12–30; 20 of 20 when re-run
   alone. The planned fix re-checks at `click` too, and reports a miss
   there as a failure after input: the input was sent and is never sent again.
+- Paint that tests `['has', key]` on a GeoJSON feature is uncertain when the key's value is null: MapLibre draws from
+  the worker's feature, which keeps the key, and the hit test decodes the tile, which drops it. The verdict is then
+  "visible" and the notes say it is uncertain; where the renderer drew nothing because the key is there, that
+  "visible" is wrong (the data is not read for a paint verdict).
 - Identity disambiguation by asking the source only works for GeoJSON sources; a vector-tile source cannot be asked.
   (A rare "ambiguous instead of unstable" on MapLibre's animated point had a plain cause: its source holds a bare
   GeoJSON geometry, which was read as "no features", so nothing could be learnt from it. Fixed; the statistical

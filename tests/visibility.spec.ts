@@ -373,3 +373,62 @@ test.describe('the pixel probe hides a layer by its opacity', () => {
     });
   });
 });
+
+/**
+ * MapLibre draws a GeoJSON feature from the worker's copy, which keeps a property whose value is null; the hit test decodes
+ * the tile, which drops it. So `['has', key]` on such a property is not the same question for the renderer and for us: a
+ * verdict that rests on it is uncertain. Visible, never a false "invisible", and said in the notes.
+ */
+test.describe("paint that tests ['has', key] on a GeoJSON property whose value is null", () => {
+  const add = (page: import('@playwright/test').Page, opacity: unknown) =>
+    page.evaluate((opacity) => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('quakes', { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 7, properties: { name: 'q7', felt: null }, geometry: { type: 'Point', coordinates: [34.8, 32.07] } }] } });
+      m.addLayer({ id: 'quakes', type: 'circle', source: 'quakes', paint: { 'circle-radius': 12, 'circle-color': '#c0f', 'circle-opacity': opacity, 'circle-stroke-width': 0 } });
+    }, opacity);
+  const note = "visibility uncertain for layer quakes: circle-opacity — it tests ['has', …]";
+
+  test('drawn by the renderer (the key is there, null): visible, not "circle-opacity evaluates to 0"', async ({ map, page }) => {
+    await add(page, ['case', ['has', 'felt'], 1, 0]);
+    await map.waitForIdle();
+    await expect(map, 'the premise: the pixels are drawn').toHaveLayerPixels('quakes', { at: { lng: 34.8, lat: 32.07 }, radiusPx: 4 });
+    await expect(map).toHaveFeature({ layer: 'quakes', id: 7 });
+    expect(await map.snapshot()).toContain(note);
+  });
+
+  // The other way round the renderer draws nothing and the verdict is still "visible" (the data is not read here): a
+  // stated limit, and the notes say it.
+  test('not drawn by the renderer: the verdict is visible, and the notes say it is uncertain', async ({ map, page }) => {
+    await add(page, ['case', ['has', 'felt'], 0, 1]);
+    await map.waitForIdle();
+    await expect(map, 'the premise: nothing is drawn').not.toHaveLayerPixels('quakes', { at: { lng: 34.8, lat: 32.07 }, radiusPx: 4 });
+    expect(await map.snapshot()).toContain(note);
+  });
+});
+
+/** toHaveLayerPixels' `radiusPx` is in CSS pixels, as its message says, on a HiDPI screen too. */
+for (const dpr of [1, 2]) {
+  test.describe(`deviceScaleFactor ${dpr}`, () => {
+    test.use({ deviceScaleFactor: dpr });
+    test(`an image 18 CSS px from 'at' is within radiusPx 24 (device pixel ratio ${dpr})`, async ({ map, page }) => {
+      // a 6x6 CSS px opaque image whose centre is 18 CSS px east of the view centre
+      const at = await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        const c = document.createElement('canvas');
+        c.width = c.height = 64;
+        const g = c.getContext('2d')!;
+        g.fillStyle = '#000';
+        g.fillRect(0, 0, 64, 64);
+        const cx = m.getCanvas().clientWidth / 2, cy = m.getCanvas().clientHeight / 2;
+        const ll = (x: number, y: number) => { const p = m.unproject([x, y]); return [p.lng, p.lat]; };
+        m.addSource('speck', { type: 'image', url: c.toDataURL(), coordinates: [ll(cx + 15, cy - 3), ll(cx + 21, cy - 3), ll(cx + 21, cy + 3), ll(cx + 15, cy + 3)] });
+        m.addLayer({ id: 'speck', type: 'raster', source: 'speck', paint: { 'raster-fade-duration': 0 } });
+        const p = m.unproject([cx, cy]);
+        return { lng: p.lng, lat: p.lat };
+      });
+      await map.waitForIdle();
+      await expect(map).toHaveLayerPixels('speck', { at, radiusPx: 24, timeout: FAIL_FAST_MS });
+      await expect(map).not.toHaveLayerPixels('speck', { at, radiusPx: 12, timeout: FAIL_FAST_MS });
+    });
+  });
+}

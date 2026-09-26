@@ -193,7 +193,9 @@ const api = {
 };
 
 export type InPageApi = typeof api;
-(window as any).__geowright = api;
+// Once per document: a second evaluation of this bundle (concurrent first calls, an init script and a call) must not
+// replace the engines, and with them the map listeners and the checks armed in them.
+(window as any).__geowright ??= api;
 
 /**
  * Agent integration, best effort: if the browser exposes the experimental WebMCP API
