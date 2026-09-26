@@ -216,7 +216,7 @@ const MIN_ANSWER_MS = 500;
 const DIAGNOSTIC_GRACE_MS = 2000;
 
 /**
- * The time an in-page look (actionPoint) may spend on its own waits — pixel probes and the wait after one: what is
+ * The time an in-page look (actionPoint) may spend on its own waits — pixel probes and the wait after one (decision 0022): what is
  * left, less room for its answer to come back, so that it answers with what it found instead of being abandoned.
  */
 const lookBudget = (deadline: number) => (deadline === Infinity ? undefined : Math.max(0, Math.round(deadline - Date.now() - Math.min(MIN_ANSWER_MS, (deadline - Date.now()) / 4))));

@@ -2,7 +2,7 @@ import { brightBasemap } from './basemap';
 import { example, test } from './harness';
 
 /**
- * Measurement (d) for an earlier issue option B — NOT part of the suite: runs only with GEOWRIGHT_MEASURE=1.
+ * The gate's cost, measured before the gated pixel probe (decision 0022) was built — NOT part of the suite: runs only with GEOWRIGHT_MEASURE=1.
  *   uptime && GEOWRIGHT_MEASURE=1 npx playwright test tests/wild/gate-measure.spec.ts --workers=1
  * The cost of the gate ("does a visible pixel-only layer drawn above the target cover the aimed pixel?") on the largest
  * style in the repository: the dense synthetic basemap, 79 layers. A PROTOTYPE of the gate, from the design comment's

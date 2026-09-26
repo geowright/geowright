@@ -3,6 +3,7 @@
 - Status: Accepted
 - Date: 2026-09-26
 - Decided by: Shai Sinai
+- Amended 2026-09-26: issue references replaced by descriptions; the decision is unchanged.
 
 ## Decision
 Before real input goes to a feature, if a visible layer that the hit test cannot see (raster, image, video, canvas,
@@ -12,9 +13,10 @@ occluded. With no such layer, no probe runs and the action pays nothing. The pro
 
 ## Why
 The hit test returns features only, so an opaque overlay above a feature did not stop an action. Probing the
-overlay is unsound: a translucent radar adds pixels and hides nothing. A verdict from style alone (option C in an earlier issue) refuses clicks in
+overlay is unsound: a translucent radar adds pixels and hides nothing. A verdict from style alone (option C) refuses clicks in
 the transparent gaps of an opaque-styled raster. Probing on every action (option A) costs every map four renders and a
-source reload. The gate limits the cost to maps that have an overlay above their features. This rules out
+source reload (the options and the measurements: docs/DESIGN.md "Actionability", "Pixel-only layers: the options
+weighed"). The gate limits the cost to maps that have an overlay above their features. This rules out
 probing at click time, because the probe would reload the target's source while the app's own click handler runs.
 
 ## Consequences
@@ -25,11 +27,12 @@ probing at click time, because the probe would reload the target's source while 
   at all (the target's pixel changes between a probe and the press).
 - This widens "topmost" in 0019 to pixel-only layers. It makes the probe of 0005 automatic inside actions, only when gated.
   0005's "opt-in" stands for visibility queries.
-- enforced by: the 66 specs in `tests/act.spec.ts`: opaque veil refused, translucent and gap cases pass, a raster below
+- enforced by: the pixel-only-layer specs in `tests/act.spec.ts`: opaque veil refused, translucent and gap cases pass, a raster below
   costs no probe, the reload race, and a sabotage spec for a veil that appears between aim and press; the same on every
   version in `tests/compat/compat.spec.ts`, and on a globe in `tests/wild/globe-vector.spec.ts`.
 
 ## More
-- 66 (the design comment, with evidence); 0005, 0019
-- docs/DESIGN.md "Actionability" item 4, "Costs and known limitations"
+- docs/DESIGN.md "Actionability": item 4, and "Pixel-only layers: the options weighed" (with the evidence);
+  "Costs and known limitations"
+- 0005, 0019
 - src/inpage/maplibre-adapter.ts `probePixels`; src/inpage/types-internal.ts

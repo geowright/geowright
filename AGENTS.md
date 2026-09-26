@@ -14,7 +14,12 @@ They are not repeated here, so there is one copy to keep true.
   area you touch. Nothing else is required reading.
 - **Decisions are in [`docs/decisions/`](docs/decisions/)** — short, numbered, never edited after they are
   accepted. Do not re-open an accepted decision in code or in conversation; if new evidence says it is
-  wrong, draft a new record that supersedes it (status `Proposed`) and say so in the issue.
+  wrong, draft a new record that supersedes it (status `Proposed`) and say so in the issue. The one exception:
+  an Accepted record may be amended only to replace a reference its readers cannot follow; the decision never
+  changes, and the record says so.
+- **Issues are cited by full URL** (`https://github.com/<owner>/<repo>/issues/N`), never as a bare `#N`, in code,
+  comments, docs and tests: a bare `#N` means a different issue wherever the file is read. Describe the evidence in
+  the file, or in `docs/DESIGN.md`, rather than pointing at a thread.
 - **Questions only the maintainer can answer** (API shape, scope, licensing, anything outward-facing): ask
   in the issue and label it `owner-decision`. Keep working on whatever the question does not block.
 - **Direction** is in [ROADMAP.md](ROADMAP.md). Work that is not on it needs an issue that says why.

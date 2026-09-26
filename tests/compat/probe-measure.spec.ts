@@ -5,7 +5,7 @@ import { cpuSlowdown, throttleFromEnv } from '../slow-machine';
 import { LIBS } from './libs';
 
 /**
- * Measurements for an earlier issue option B, step 1 — NOT part of the matrix: runs only with GEOWRIGHT_MEASURE=1, one worker.
+ * Measurements for the gated pixel probe (decision 0022), before it was built — NOT part of the matrix: runs only with GEOWRIGHT_MEASURE=1, one worker.
  *   uptime && GEOWRIGHT_MEASURE=1 npx playwright test -c playwright.compat.config.ts probe-measure --workers=1
  * (and again with GEOWRIGHT_CPU_THROTTLE=4). Check `uptime` first.
  *
