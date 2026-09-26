@@ -547,9 +547,11 @@ export class MapHandle {
     await step(`map.waitForIdle()`, () =>
       this._retry('map.waitForIdle()', timeout, async (deadline) => {
         // Abandoned at the deadline like every other wait: the in-page wait bounds itself (<= 2s), but a page whose main
-        // thread is busy answers when it can. The in-page wait ends early enough for its answer to come back in time,
-        // with the diagnosis ("an animated source: never idle") that is the point of the error message.
-        const ok = await this._callBy<boolean>(deadline, 'waitForIdle', Math.max(50, Math.min(lookBudget(deadline) ?? 2000, 2000)));
+        // thread is busy answers when it can. The in-page wait takes half the time left, so that its answer, with the
+        // diagnosis ("the app keeps replacing the data: never idle") that is the point of the error message, comes back
+        // in time on a page that animates itself (a setData loop answered late when the wait took all but 500 ms).
+        const left = deadline === Infinity ? 4000 : deadline - Date.now();
+        const ok = await this._callBy<boolean>(deadline, 'waitForIdle', Math.round(Math.max(50, Math.min(left / 2, 2000))));
         if (!ok) {
           const why = await this._callBy<string | undefined>(Date.now() + DIAGNOSTIC_GRACE_MS, 'idleDiagnosis').catch(() => undefined);
           return { retry: `map did not become idle (still moving, loading tiles, or repainting)${why ? ` — ${why}` : ''}` };
