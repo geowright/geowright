@@ -3,7 +3,7 @@ import { geowright, expect, type MapHandle } from '../../src/playwright';
 import { routeVectorTiles } from '../../src/playwright/tiles';
 import { guardNetwork } from '../fixtures';
 import { LIBS } from './libs';
-import { FAIL_FAST_MS } from '../slow-machine';
+import { FAIL_FAST_MS, PROBE_FAIL_FAST_MS } from '../slow-machine';
 
 /**
  * The version matrix: the SAME page and the SAME specs against every MapLibre / Mapbox-GL-v1-API major.
@@ -162,7 +162,7 @@ for (const lib of LIBS) {
 
       await veil({ opacity: 1 });
       await expect(map, 'the premise: the veil is drawn over Bravo').toHaveLayerPixels('veil', { at: bravo });
-      const err = await target.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      const err = await target.click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
       baseExpect(err?.message.split('\n\n')[0]).toMatch(/occluded: .*raster layer "veil", drawn above "places"/);
       await baseExpect(page.getByTestId('clicked')).toHaveText('-');
 
@@ -196,7 +196,7 @@ for (const lib of LIBS) {
       for (const o of [{ opacity: 0 }, { opacity: 0.3 }, { opacity: 0.4, shared: true }]) {
         await heat(o);
         await map.waitForIdle();
-        const e = await bravo.click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e.message.split('\n\n')[0]);
+        const e = await bravo.click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e.message.split('\n\n')[0]);
         baseExpect({ ...o, error: e }).toEqual({ ...o, error: null });
         await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');
       }
