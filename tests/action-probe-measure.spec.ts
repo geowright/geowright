@@ -22,6 +22,47 @@ test.describe('measure: an action round trip with a pixel probe', () => {
   test.skip(!process.env.GEOWRIGHT_MEASURE, 'set GEOWRIGHT_MEASURE=1');
   test.setTimeout(180_000 * cpuSlowdown());
 
+  // The heaviest overlays the pixel-only specs use: a heatmap of radius 150 over the target (offscreen passes on every
+  // render), and an animated canvas source (re-uploaded on every render) over a 2 px dot.
+  const heavy: [string, (page: import('@playwright/test').Page) => Promise<unknown>, object][] = [
+    ['a heatmap of radius 150 over alert 1', (page) => page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('heat', { type: 'geojson', data: { type: 'FeatureCollection', features: Array.from({ length: 20 }, () => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: [34.774, 32.085] } })) } });
+      m.addLayer({ id: 'heat', type: 'heatmap', source: 'heat', paint: { 'heatmap-radius': 150, 'heatmap-intensity': 5, 'heatmap-opacity': 1 } });
+    }), { layer: 'alerts', id: 1 }],
+    ['an animated canvas veil over a 2 px dot', (page) => page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('dot', { type: 'geojson', data: { type: 'Feature', id: 9, properties: {}, geometry: { type: 'Point', coordinates: [34.77, 32.085] } } });
+      m.addLayer({ id: 'dot', type: 'circle', source: 'dot', paint: { 'circle-radius': 2, 'circle-color': '#e0a' } });
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const g = c.getContext('2d')!;
+      g.fillStyle = '#888';
+      g.fillRect(0, 0, 64, 64);
+      const d = 0.01;
+      m.addSource('veil', { type: 'canvas', canvas: c, animate: true, coordinates: [[34.77 - d, 32.085 + d], [34.77 + d, 32.085 + d], [34.77 + d, 32.085 - d], [34.77 - d, 32.085 - d]] });
+      m.addLayer({ id: 'veil', type: 'raster', source: 'veil', paint: { 'raster-fade-duration': 0 } });
+    }), { layer: 'dot' }],
+  ];
+  for (const [name, add, q] of heavy) {
+    test(name, async ({ map, page }) => {
+      await add(page);
+      await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
+      await map.layers();
+      const trip: number[] = [];
+      const outcomes = new Set<string>();
+      for (let i = 0; i < TRIALS; i++) {
+        const t0 = Date.now();
+        const r = await page.evaluate(async (q) => (await (window as any).__geowright.actionPoint('main', q, { budgetMs: 60_000, action: `measure-${Math.random()}` })), q);
+        trip.push(Date.now() - t0);
+        outcomes.add(r.ok ? 'ok' : r.reason);
+      }
+      const line = `${name} (throttle ${cpuSlowdown()}): outcomes ${[...outcomes].join(',')}; round trip ${stats(trip)}`;
+      console.log(line);
+      test.info().annotations.push({ type: 'measure', description: line });
+    });
+  }
+
   for (const opacity of [1, 0.5]) {
     test(`a veil at opacity ${opacity} over alert 1`, async ({ map, page }) => {
       await page.evaluate((opacity) => {

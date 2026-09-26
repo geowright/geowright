@@ -32,8 +32,9 @@ export const FAIL_FAST_MS = 2000 * cpuSlowdown();
 /**
  * The same, for an action that probes a pixel-only layer above its target (decision 0022): its look renders four times per
  * probe, up to three probes per aim, and must still be answered in time. Measured (tests/action-probe-measure.spec.ts, one
- * worker, this shared Mac at load ~18): an opaque veil's refused look took 419 ms median, 631 ms at most; at 4x CPU
- * throttling 558 / 879 ms (the renders are the GPU process's: the throttle barely moves them, load does). A CI run at
- * load 37–75 went past FAIL_FAST_MS. Twice it leaves about six times the largest look measured.
+ * worker, this shared Mac): an opaque veil's refused look took 419 ms median, 631 ms at most at load ~18, and 2460 /
+ * 4648 ms at load 80–105; a radius-150 heatmap 831 / 2157 ms and an animated canvas over a 2 px dot 1455 / 3134 ms at
+ * load 80–105. The renders are the GPU process's: 4x CPU throttling barely moves them (558 / 879 ms), load does. A CI run
+ * at load 37–75 went past FAIL_FAST_MS. Three times it covers the largest look measured, at the worst load seen.
  */
-export const PROBE_FAIL_FAST_MS = 2 * FAIL_FAST_MS;
+export const PROBE_FAIL_FAST_MS = 3 * FAIL_FAST_MS;
