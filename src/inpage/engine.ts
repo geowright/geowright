@@ -154,7 +154,7 @@ export class Engine<W = unknown> {
   private byDataId = new Map<string, { feature: RenderedFeature; props: string; alone: boolean }[]>();
 
   /**
-   * Pixel-probe verdicts of actions: does the target show through the pixel-only layers above it at this pixel?
+   * Pixel-probe verdicts of actions (decision 0022): does the target show through the pixel-only layers above it at this pixel?
    * Keyed by the target, the pixel, the camera and those layers with their stamps (pixelKey), so that the aim after a
    * probe does not probe again (a probe that reloads the source would make the next aim miss, probe, reload… for ever).
    * Anything that may change the answer changes the key. Bounded like the style caches.
@@ -481,7 +481,7 @@ export class Engine<W = unknown> {
         return { ...aimed, why: `${aimed.why}; seen through ${names} (pixel probe)` };
       }
       // The target's opacity is data-driven, so the probe hid it by `visibility` and its source reloads: until the second
-      // reload lands the target is missing from the rendering and the hit test (, measured: up to 2 frames; 787 ms at
+      // reload lands the target is missing from the rendering and the hit test (measured: up to 2 frames; 787 ms at
       // load ~300). Wait for exactly that — a frame, the source loaded, the target hit-tested there again — then aim anew
       // (the verdict is kept: no second probe).
       const settled = (await this.adapter.settleAfterProbe?.(aimed.feature.layer, Math.max(0, deadline - performance.now()))) ?? true;
@@ -2013,7 +2013,7 @@ const round = (p: PixelPoint): PixelPoint => ({ x: Math.round(p.x * 10) / 10, y:
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const oneFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
-/** Probes per aim: each is four renders; a user does not hunt through an overlay either. */
+/** Probes per aim (decision 0022): each is four renders; a user does not hunt through an overlay either. */
 const MAX_PROBES = 3;
 /** The least time a probe is given, even at the deadline: four frames of a renderer without redraw() (Mapbox GL v1). */
 const PROBE_MIN_MS = 250;

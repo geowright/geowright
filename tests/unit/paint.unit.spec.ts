@@ -321,7 +321,7 @@ test.describe("filterAdmits: does the layer's filter let a data feature through"
   });
 });
 
-test.describe('the pixel-only-layer gate', () => {
+test.describe('the pixel-only-layer gate (decision 0022)', () => {
   test('point in quad, in Mercator: a rectangle, a trapezoid, a concave quad', () => {
     const rect = [[34, 33], [35, 33], [35, 32], [34, 32]].map(mercator);
     expect(inQuad(mercator([34.5, 32.5]), rect)).toBe(true);

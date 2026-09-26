@@ -341,11 +341,11 @@ test.describe('act gap', () => {
 });
 
 /**
- * the hit test never returns pixel-only layers (raster, image, video, canvas, heatmap, hillshade). An action whose
+ * Decision 0022: the hit test never returns pixel-only layers (raster, image, video, canvas, heatmap, hillshade). An action whose
  * chosen pixel is under one that is drawn ABOVE the target probes the target's own layer there: hiding it changes
  * nothing → covered. Decision 0022.
  */
-test.describe('pixel-only layers above the target', () => {
+test.describe('pixel-only layers above the target (decision 0022)', () => {
   /**
    * An image layer on top of everything: over the whole view, or over a square of ±`d`° around `around`. Its image is
    * grey, with a transparent `hole` (the centre quarter, or a corner) — what an opaque-styled raster with gaps is.

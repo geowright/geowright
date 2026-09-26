@@ -675,7 +675,7 @@ function opacityZero(map: MlMap, layerId: string, type: string): boolean {
  * their zoom range, opacity not exactly 0, and — where it can be told — whose source covers `at`: an image / video /
  * canvas source's `coordinates` (a quad in Mercator, as MapLibre warps it), a tiled source's `bounds` when the style
  * gives them inline. Under terrain there is no area test (a draped raster is not where `unproject` says). It may say too
- * much, which costs a probe; it must never say too little, which is a false pass.
+ * much, which costs a probe; it must never say too little, which is a false pass (decision 0022).
  * `stamp`: changes when what the layer draws may have changed — its source (another object: removed and added again), the
  * source's data events (`dataEvents`), its `coordinates`, and the layer's opacity.
  */

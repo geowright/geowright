@@ -32,7 +32,7 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     await gabon.click();
   });
 
-  // on a globe: an image layer over Gabon. Opaque: the click is refused and names it; translucent: it lands.
+  // Decision 0022 on a globe: an image layer over Gabon. Opaque: the click is refused and names it; translucent: it lands.
   test('an image layer drawn over a country on the globe: opaque refused, translucent clicked through', async ({ wild, page }) => {
     const map = await open(wild);
     const gabon = map.feature({ layer: 'countries-fill', at: { lng: 11.6, lat: -0.8 } });

@@ -179,7 +179,7 @@ on every retry:
    "Visibility" below) is likewise not counted as an occluder, on the reasoning that occlusion is
    about what a person can see, not about which layer receives an event first. The map's hit test returns
    features only, so a raster, image, video, canvas, hillshade, color-relief, background, custom or heatmap layer drawn
-   above the feature needs pixels to decide (, decision 0022). A **gate** first: is such a layer drawn above the
+   above the feature needs pixels to decide (decision 0022; the options weighed are below the list). A **gate** first: is such a layer drawn above the
    target, visible, in its zoom range, with an opacity that is not exactly 0, and — where the style says where it draws —
    does its area hold the chosen pixel (an image, video or canvas source's `coordinates`, a point-in-quad test in
    Mercator; a tiled source's inline `bounds`; under terrain, no area test)? The gate may say yes too often, which costs
@@ -220,6 +220,27 @@ on every retry:
    one that happens to be under the pointer is not the one that was asked for. This closes the same class of race Playwright's own hit-target interception closes for
    ordinary DOM elements, and it was verified with a targeted mutation test: with the check disabled,
    a spec built to provoke the race fails; with it enabled, the same spec passes.
+
+**Pixel-only layers: the options weighed.** Before item 4's check was written, four ways to handle an overlay that the
+hit test cannot see were weighed against measurements (decision 0022 records the choice):
+- **A. Probe the target's layer on every action.** Sound, but every action on every map pays four renders (the probe
+  draws twice with the layer, once without it, and once after putting it back), and the probe as it was then, hiding the
+  layer by `visibility`, reloaded the target's source right before the hit test that verifies the click.
+- **B. Probe only when a gate says a pixel-only layer above the target may draw at the aimed pixel.** Chosen: a map
+  without such a layer pays nothing, a map with one pays A's probe per action.
+- **C. Decide from the style alone** (an overlay whose opacity is about 0.95 or more occludes). Cheap, but it guesses: a
+  fully opaque radar raster is mostly transparent pixels, so clicks on features in its gaps would be refused. A false
+  failure there is worse than the rare false pass it would replace.
+- **Probe the overlay instead of the target.** Unsound: a translucent overlay changes the pixels and hides nothing.
+
+Two measurements made B affordable (MapLibre 6 and 2, Mapbox GL 1.13; GeoJSON and vector tiles; 5 probes per target and
+route). Hidden by `visibility`, the target left the rendering and the hit test after most probes, for at most 2 frames:
+16 ms median and 115 ms at most on a quiet Mac, but up to 787 ms at a load of ~300. Hidden by its opacity, nothing
+reloaded and no frame lacked the target, in 135 of 135 probes, with the same pixel differences. So the probe hides by
+opacity, only a target whose opacity is data-driven pays the reload, and the action waits for that by events, never
+for a fixed time (item 4; "Visibility" below). A probe costs 21 ms (median) on MapLibre 6, 15 ms on MapLibre 2 and 45 ms
+on Mapbox GL 1.13, where its four renders are real frames, on a quiet Mac; software GL on Linux is slower. The gate
+costs less than 0.1 ms on the 80-layer dense basemap.
 
 Fill-extrusion (3D buildings) features need one more step: their clickable area is not their
 footprint. A tall building's footprint can be scrolled entirely out of view while the tower itself is

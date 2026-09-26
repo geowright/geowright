@@ -106,7 +106,7 @@ for (const lib of LIBS) {
       expect(e, 'toBeVisibleOnMap passed for a feature that changes no pixel, because the pixels under it change by themselves').not.toBeNull();
     });
 
-    // hidden by `visibility`, the probed layer's source reloaded and the feature left the hit test for a while. Hidden
+    // Hidden by `visibility`, the probed layer's source reloaded and the feature left the hit test for a while. Hidden
     // by its opacity (with a zero transition, the app's own put back after) nothing reloads, on every version.
     test('pixel probe: hides by opacity — no source reload, the feature is still in the hit test right after', async ({ map, page }) => {
       await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('zones', 'fill-opacity-transition', { duration: 5000, delay: 0 }));
@@ -137,7 +137,7 @@ for (const lib of LIBS) {
       await baseExpect.poll(paint).toEqual([0.8, { duration: 5000, delay: 0 }]);
     });
 
-    // on every version: an image layer drawn above a feature. (A 64px image: an 8px one with 'raster-resampling': 'nearest'
+    // Decision 0022 on every version: an image layer drawn above a feature. (A 64px image: an 8px one with 'raster-resampling': 'nearest'
     // is drawn solid black by MapLibre 2–5 and Mapbox GL 1, hole and all — and the probe then rightly says covered.) Opaque: refused, and named; translucent, or opaque with a
     // transparent hole over the feature: the click lands (a pixel probe decides, not the style).
     test('pixel-only layers above a feature: opaque refused and named; translucent, or a hole, lets the click through', async ({ map, page }) => {

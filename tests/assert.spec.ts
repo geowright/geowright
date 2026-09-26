@@ -10,7 +10,7 @@ test.describe('assert gap', () => {
   test('initial map content', async ({ map }) => {
     await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'high' } });
     await expect(map).toHaveFeature({ layer: 'parcels', id: 105 });
-    await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3); // 4 exists but is off-screen
+    await expect(map.features({ layer: 'alerts' })).toHaveFeatureCount(3); // alert 4 exists but is off-screen
     await expect(map.features({ layer: 'parcels' })).toHaveFeatureCount(6);
     await expect(map.features({ layer: 'parcels', where: { zoning: 'nope' } })).toHaveFeatureCount(0);
   });

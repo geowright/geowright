@@ -119,7 +119,7 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
   probePixels?(layer: string, at: PixelPoint, radiusPx: number, budgetMs: number): ProbeResult | Promise<ProbeResult>;
   /**
    * Optional, with `probePixels`: the layers the hit test cannot see that are drawn above `layer` and may draw at `at`
-   * (the gate before an action's pixel probe, ). It may list too many (a probe is spent); it must never leave one
+   * (the gate before an action's pixel probe, decision 0022). It may list too many (a probe is spent); it must never leave one
    * out (a click through an opaque overlay passes). Cheap: no rendering. Empty: nothing of the kind can cover `at`.
    */
   pixelOccluders?(layer: string, at: PixelPoint): PixelOccluder[];

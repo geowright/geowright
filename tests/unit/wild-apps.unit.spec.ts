@@ -153,7 +153,7 @@ test('check fails when an app\'s dist/ ships no notices, or a notice without its
 test('check fails when an app\'s notices list maplibre-gl but not the packages MapLibre\'s dist bundles inside itself', () => {
   const tree = scratchTree();
   const planted = plantApp(tree);
-  // A real app's notices, as its build writes them (maplibreNotices), then as Vite alone wrote them before an earlier issue.
+  // A real app's notices, as its build writes them (maplibreNotices), then as Vite alone writes them (no source-map expansion).
   const real = readFileSync(join(ROOT, 'wild/apps/react-map-gl', NOTICES), 'utf8');
   writeFileSync(join(planted, NOTICES), real);
   expect(run(tree, 'check').code, 'maplibre-gl with the packages its dist bundles: passes').toBe(0);
