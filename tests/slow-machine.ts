@@ -28,3 +28,12 @@ export function cpuSlowdown(): number {
  * GEOWRIGHT_CPU_THROTTLE.
  */
 export const FAIL_FAST_MS = 2000 * cpuSlowdown();
+
+/**
+ * The same, for an action that probes a pixel-only layer above its target (decision 0022): its look renders four times per
+ * probe, up to three probes per aim, and must still be answered in time. Measured (tests/action-probe-measure.spec.ts, one
+ * worker, this shared Mac at load ~18): an opaque veil's refused look took 419 ms median, 631 ms at most; at 4x CPU
+ * throttling 558 / 879 ms (the renders are the GPU process's: the throttle barely moves them, load does). A CI run at
+ * load 37–75 went past FAIL_FAST_MS. Twice it leaves about six times the largest look measured.
+ */
+export const PROBE_FAIL_FAST_MS = 2 * FAIL_FAST_MS;

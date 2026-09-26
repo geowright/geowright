@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { geowright } from '../src/playwright';
-import { FAIL_FAST_MS } from './slow-machine';
+import { FAIL_FAST_MS, PROBE_FAIL_FAST_MS } from './slow-machine';
 import { makeTilePng } from './tile-png';
 
 /** ACT gap: actions that originate ON the map, with real mouse input at projected pixels. */
@@ -388,7 +388,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     // the premise: the veil really is drawn over alert 1 (34.77, 32.085)
     await expect(map, 'the premise: the opaque veil is drawn over alert 1').toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
     await watch(page, 'alerts');
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e?.message.split('\n\n')[0]).toMatch(/occluded: .*raster layer "veil", drawn above "alerts".*ignoreLayers: \['veil'\]/);
     expect((await counts(page)).clicks, 'nothing reached the app').toEqual([]);
     // it is the user's call that the veil is see-through: then it costs nothing, and the click lands
@@ -422,7 +422,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     await addVeil(page, { opacity: 1, around: alert, d: 0.01, hole: 'corner' });
     // the premise: the new image is drawn, over alert 1 (a probe before that sees the target, and is right to)
     await expect(map, 'the premise: the image, opaque at alert 1, is drawn').toHaveLayerPixels('veil', { at: alert });
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(e?.message.split('\n\n')[0]).toMatch(/occluded: .*raster layer "veil"/);
     expect((await counts(page)).clicks, 'no second click reached the app').toEqual([1]);
   });
@@ -543,7 +543,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     expect((await counts(page)).clicks).toEqual([1]);
     await page.evaluate(() => (window as any).__paintVeil(true));
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     await expect(map, 'the premise: the canvas veil is drawn, opaque, over alert 1').toHaveLayerPixels('veil', { at: ALERT1 });
     await expect(map.feature({ layer: 'alerts', id: 1 }), 'the premise: alert 1 cannot be seen').not.toBeVisibleOnMap();
     expect({ error: refusal(e), clicks: (await counts(page)).clicks }).toEqual({ error: expect.stringMatching(/occluded: .*veil/s), clicks: [1] });
@@ -559,7 +559,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     await map.feature({ layer: 'alerts', id: 1 }).click(); // during the fade the alert shows through: it lands (right, then)
     expect((await counts(page)).clicks).toEqual([1]);
     await map.waitForIdle({ timeout: 60_000 }); // idle waits for paint transitions: the veil is opaque now
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     await expect(map.feature({ layer: 'alerts', id: 1 }), 'the premise: alert 1 cannot be seen').not.toBeVisibleOnMap();
     expect({ error: refusal(e), clicks: (await counts(page)).clicks }).toEqual({ error: expect.stringMatching(/occluded: .*veil/s), clicks: [1] });
   });
@@ -572,7 +572,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     expect((await counts(page)).clicks).toEqual([1]);
     await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('dim', 'background-color', '#000'));
     await map.waitForIdle();
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     await expect(map.feature({ layer: 'alerts', id: 1 }), 'the premise: alert 1 cannot be seen').not.toBeVisibleOnMap();
     expect({ error: refusal(e), clicks: (await counts(page)).clicks }).toEqual({ error: expect.stringMatching(/occluded: .*background layer "dim"/s), clicks: [1] });
   });
@@ -590,7 +590,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     expect((await counts(page)).clicks).toEqual([1]);
     await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('heat', 'heatmap-radius', 150));
     await map.waitForIdle();
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     await expect(map.feature({ layer: 'alerts', id: 1 }), 'the premise: alert 1 cannot be seen').not.toBeVisibleOnMap();
     expect({ error: refusal(e), clicks: (await counts(page)).clicks }).toEqual({ error: expect.stringMatching(/occluded: .*heatmap layer "heat"/s), clicks: [1] });
   });
@@ -608,11 +608,11 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     }, ALERT1);
     await addCanvasVeil(page, true);
     await expect(map, 'the premise: the canvas veil is drawn over the dot').toHaveLayerPixels('veil', { at: ALERT1 });
-    const e = await map.feature({ layer: 'dot' }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'dot' }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(refusal(e), 'the premise: every candidate was probed and found covered').toMatch(/occluded: .*veil/s);
     await page.evaluate(() => (window as any).__paintVeil(false)); // the app clears its overlay
     await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(r))));
-    const e2 = await map.feature({ layer: 'dot' }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e2 = await map.feature({ layer: 'dot' }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect({ error: refusal(e2), clicks: await page.evaluate(() => (window as any).__dotClicks) }).toEqual({ error: null, clicks: 1 });
   });
 
@@ -634,7 +634,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
       return m.queryRenderedFeatures(m.project([a.lng, a.lat])).map((f: any) => f.layer.id);
     }, ALERT1);
     expect(hits, 'the premise: MapLibre 6 hit-tests the heatmap at the alert').toContain('heat');
-    await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS });
+    await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS });
     expect(await counts(page)).toEqual({ clicks: [1], styledata: 0 });
   });
 
@@ -648,7 +648,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     await addHeat(page, { at, opacity: 0.3, radius: 40 });
     await map.waitForIdle();
     await watch(page, 'alerts');
-    await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS });
+    await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS });
     const c = await counts(page);
     expect(c.clicks).toEqual([1]);
     expect(c.styledata, 'the pixels were probed').toBeGreaterThan(0);
@@ -663,7 +663,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     await page.evaluate(() => (window as any).__geowright_maps.main.addLayer({ id: 'sensor-heat', type: 'heatmap', source: 'sensors', paint: { 'heatmap-radius': 10, 'heatmap-opacity': 0.3 } }));
     await map.waitForIdle();
     await watch(page, 'sensors');
-    await map.feature({ layer: 'sensors', id: 501 }).click({ timeout: FAIL_FAST_MS });
+    await map.feature({ layer: 'sensors', id: 501 }).click({ timeout: PROBE_FAIL_FAST_MS });
     expect((await counts(page)).clicks).toEqual([501]);
   });
 
@@ -680,7 +680,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     await map.waitForIdle();
     await expect(map, 'the premise: the opaque tile is drawn over alert 1').toHaveLayerPixels('veil', { at: ALERT1 });
     await watch(page, 'alerts');
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect({ error: refusal(e), clicks: (await counts(page)).clicks }).toEqual({ error: expect.stringMatching(/occluded: .*raster layer "veil"/s), clicks: [] });
   });
 
@@ -691,7 +691,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
     await map.waitForIdle();
     const snap = await map.snapshot();
     expect(snap).toMatch(/#1 Point @\(\d+,\d+\) under-pixel-layer:veil/);
-    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(refusal(e)).toMatch(/occluded: .*raster layer "veil"/s);
   });
 });
