@@ -325,6 +325,27 @@ test('every file under demo/public is named by its path in docs/THIRD_PARTY_NOTI
   expect(run(tree, 'check').code, 'named by its path: passes').toBe(0);
 });
 
+test('check fails when a wild app has no row in the public inventories (THIRD_PARTY_NOTICES, wild/README)', () => {
+  const tree = scratchTree();
+  for (const p of ['docs/THIRD_PARTY_NOTICES.md', 'wild/README.md']) {
+    mkdirSync(dirname(join(tree, p)), { recursive: true });
+    cpSync(join(ROOT, p), join(tree, p));
+  }
+  expect(run(tree, 'check').code, 'the committed apps: a row each').toBe(0);
+
+  plantApp(tree);
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain("wild/apps/planted/: no row in docs/THIRD_PARTY_NOTICES.md's table");
+  expect(r.out).toContain("wild/apps/planted/: no row in wild/README.md's table");
+
+  const add = (p: string, row: string) => writeFileSync(join(tree, p), readFileSync(join(tree, p), 'utf8').replace(/^(\| `(wild\/)?apps\/pmtiles\/` \|.*\n)/m, `$1${row}\n`));
+  add('docs/THIRD_PARTY_NOTICES.md', '| `wild/apps/planted/` | example/planted, MIT | `wild/apps/planted/LICENSE` |');
+  expect(run(tree, 'check').out).not.toContain('THIRD_PARTY_NOTICES');
+  add('wild/README.md', '| `apps/planted/` | a planted app | MIT | `/apps/planted/` |');
+  expect(run(tree, 'check').code, 'a row in both: passes').toBe(0);
+});
+
 test('check fails on a vendored build under wild/fixtures/vendor/ without its license and its notices beside it', () => {
   const tree = scratchTree();
   const vendor = join(tree, 'wild/fixtures/vendor/planted@1');

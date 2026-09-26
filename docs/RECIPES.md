@@ -95,7 +95,9 @@ The MapLibre map remains accessible through the usual one-line hook, even when d
 its WebGL canvas. `map.layers()` can show those custom layer IDs, and geowright can act on MapLibre-rendered features
 underneath. deck.gl's own scatterplots, arcs, and text are picked by deck.gl, not by MapLibre's `queryRenderedFeatures`,
 so they are not addressable with `map.feature()`. The [vendored MapboxOverlay app](../wild/apps/deck-gl/) exercises that
-boundary offline.
+boundary offline. An interleaved deck.gl layer drawn above a MapLibre feature is a custom layer, which the hit test cannot
+see: an action on the feature there probes its pixels, and fails `occluded` naming the custom layer if deck.gl's drawing
+hides it ([A raster or image layer is drawn over my features](#a-raster-or-image-layer-is-drawn-over-my-features)).
 
 ## Labels of the basemap cover my features
 

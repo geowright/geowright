@@ -280,7 +280,7 @@ computed (every round trip after it is lateness), and how far to lead is learnt 
 where the target was when the event arrived; lead + lateness is that attempt's measured latency, and the median of the
 last few is used (a full-gain correction chased frame-sized jitter and never settled). Result on that example under five
 parallel workers: click 30 of 30 — and one timeout in three full-suite runs on a loaded machine, every late press
-swallowed. Landing the click depends on the machine; not mis-clicking does not, and only that is asserted in the suite. `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
+swallowed. Landing the click depends on the machine; not mis-pressing does not, and only that is asserted in the suite (what MapLibre makes of the press at `click`, after the release, can still depend on the machine: "What is still wrong"). `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
 boundary, so its lateness jitters by whole frames — more than the ~175 ms that dot spends under any pixel (14 of 30
 there); it is dependable when a frame is short compared with the target's dwell time.
 
@@ -976,8 +976,8 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   definition of "at rest" for a source that changes every frame; a stronger one is planned.
 - A target moving faster than roughly its own diameter per input latency cannot be clicked at all; the action times
   out honestly (every late press is swallowed), it does not mis-click.
-- A `moving: 'allow'` click is verified at `pointerdown`, but MapLibre attributes a click to a layer on the DOM `click`
-  event, after the release, by querying what is drawn then. The press and the release are separate round trips to the
+- A `moving: 'allow'` click or tap is verified at `pointerdown` (a `dblclick` at its first press only), but MapLibre
+  attributes a click to a layer on the DOM `click` event (for a tap, the click the browser synthesizes after `touchend`), after the release, by querying what is drawn then. The press and the release are separate round trips to the
   browser; on a page that re-sets its source every frame, a frame drawn in between can move a small dot off the pointer.
   The action then reports success and the app's click missed the target: it landed on whatever is drawn under it (on
   that page, no feature). Seen once in 21 runs of MapLibre's "animate a point" at a load of 12–30; 20 of 20 when re-run

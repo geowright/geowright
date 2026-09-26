@@ -215,7 +215,7 @@ export type ActionPointFailure =
 
 export type ActionPointResult =
   /** `why`: which candidate pixel was chosen and what was skipped before it — for traces. */
-  | { ok: true; client: PixelPoint; surface: PixelPoint; feature: FeatureSummary; why: string; /** with `moving`: px per ms, measured over two frames */ velocity?: PixelPoint }
+  | { ok: true; client: PixelPoint; surface: PixelPoint; feature: FeatureSummary; why: string; /** with `moving`: px per ms at the last of three looks one frame apart (velocity and acceleration) */ velocity?: PixelPoint }
   | { ok: false; reason: ActionPointFailure; message: string };
 
 export interface ClickVerdict {
@@ -239,8 +239,10 @@ export interface ActionPointOptions {
    * frames in a row" checks are skipped; the pixel is taken from the freshest rendered frame, and the ONLY guard
    * is the verification at the instant the real event arrives: if the target is no longer under the pointer by
    * then, a click or tap is swallowed before the app sees it, and a hover — which cannot be taken back — is
-   * detected as a miss; either way the action tries again. It can take several attempts; a click or tap never
-   * lands on the wrong thing. `dragTo`, `dragBy`, `lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`, …)
+   * detected as a miss; either way the action tries again. It can take several attempts; the press of a click or
+   * tap never lands on another feature. MapLibre decides which layer was clicked later, at the DOM `click` after the
+   * release: a fast target can move off in between, and then the action reports success while the app's click missed
+   * the target. For `dblclick` only the first press is checked. `dragTo`, `dragBy`, `lngLat` and the location actions (`clickAt`, `hoverAt`, `tapAt`, …)
    * have no such check and refuse the option.
    */
   moving?: 'allow';

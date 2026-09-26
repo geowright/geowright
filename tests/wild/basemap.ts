@@ -11,7 +11,9 @@ import { makeSprite } from './png';
  * app depends on is the CONTRACT, and that is reproduced: the same URLs, the OpenMapTiles source
  * name and source-layers (`building` with render_height, `transportation`, `poi`, `place`, …), the
  * well-known layer ids examples refer to (`water`, `building`, `poi_r1`, …), sprite and glyphs. The
- * style below, the colours and the "city" are written for this repo; nothing is copied.
+ * style below, the colours and the "city" are written for this repo; nothing is copied. The source, source-layer and
+ * field names follow the OpenMapTiles vector-tile schema (https://openmaptiles.org/), the layer ids the OSM Bright
+ * style's; no OpenMapTiles data or design, and nothing of the OSM Bright style, is included (decision 0023).
  *
  * The city is generated around `center` (apps look at different places): a street grid, 400
  * buildings with heights, a lake, a park, POIs with icons + names, place labels. Real MVT tiles are cut
