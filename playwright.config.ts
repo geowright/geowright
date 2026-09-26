@@ -30,6 +30,7 @@ export default defineConfig({
   fullyParallel: true,
   retries: 0, // flakes must be visible
   reporter: [['list']],
+  forbidOnly: !!process.env.CI, // a stray test.only would make CI and the 20x run only it, and pass
   timeout: 30_000,
   expect: { timeout: 7_000 },
   use: {

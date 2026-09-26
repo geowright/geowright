@@ -71,6 +71,32 @@ test.describe("moving: 'allow'", () => {
     });
   }
 
+  // The click-time check, made certain (0019): as the pointer arrives, the app jumps the map so that the look-alike (P-2,
+  // same layer, same look) is where P-1 was. A camera jump is instant for the hit test, so the check sees P-2 under the
+  // pointer and must swallow the press; the retry then clicks P-1. Without the check the app gets a click on P-2. (The
+  // race test above catches a missing check only when the prediction happens to miss: 1 run in 20.)
+  test("a look-alike moved under the pointer as it arrives is not clicked (moving: 'allow')", async ({ page }) => {
+    const map = geowright(page);
+    await page.getByTestId('speed').fill('150');
+    await page.evaluate(() => {
+      const w = window as any;
+      const m = w.__geowright_maps.main;
+      w.__sabotaged = 0;
+      window.addEventListener('mousemove', () => {
+        const at = (unit: string) => m.queryRenderedFeatures({ layers: ['patrols'] }).find((f: any) => f.properties.unit === unit);
+        const p1 = at('P-1'), p2 = at('P-2');
+        if (!p1 || !p2) return;
+        const a = m.project(p1.geometry.coordinates), b = m.project(p2.geometry.coordinates);
+        w.__sabotaged++;
+        m.panBy([b.x - a.x, b.y - a.y], { animate: false }); // P-2 now where P-1 was
+      }, { capture: true, once: true });
+    });
+    await map.feature({ layer: 'patrols', id: 1 }).click({ moving: 'allow', timeout: 8000 });
+    expect(await page.evaluate(() => (window as any).__sabotaged), 'the premise: the look-alike was moved under the pointer').toBe(1);
+    await baseExpect(page.getByTestId('click-count')).toHaveText('1'); // the swallowed press never reached the app
+    await baseExpect(page.getByTestId('clicked')).toHaveText('P-1');
+  });
+
   // a drag's press and lngLat()'s answer have no check at the instant the real event arrives, so on a moving target
   // they would act on a predicted, never-verified pixel. The option is refused — in the typings and at runtime.
   test("dragTo, dragBy and lngLat refuse { moving: 'allow' } and send no input", async ({ page }) => {
