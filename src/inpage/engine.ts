@@ -354,6 +354,7 @@ export class Engine<W = unknown> {
    */
   private surfaceProblem(): string | undefined {
     if (this.adapter.surface().isConnected === false) return 'map canvas is detached from the document; the map was removed or its container was detached';
+    rememberClosedRoots(this.adapter.surface());
     const size = this.surfaceSize();
     if (size.w < 1 || size.h < 1) return `map canvas is ${size.w}x${size.h}; show or size the map container and call map.resize() before acting`;
     return undefined;
@@ -983,7 +984,7 @@ export class Engine<W = unknown> {
       verdict.fired = true;
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
-      const landed = eventTarget(e);
+      const landed = landedOn(e);
       if (landed !== surface && !isMirrorNode(landed)) {
         verdict.reason = `pointer event landed on ${describeEl(landed as Element)}, not the map canvas`;
       } else {
@@ -1006,6 +1007,13 @@ export class Engine<W = unknown> {
       }
     };
     const onRest = (e: Event) => {
+      // The rest of a press whose pointerdown this check never saw: the page stopped it first (a window-capture listener
+      // of its own, registered before this one, that stops the event and prevents its compatibility mousedown). The press
+      // reached the page all the same (MapLibre's click fires): delivered, and not verified. Never sent again.
+      if (!verdict.fired && PRESS_ENDS.has(e.type)) {
+        verdict.fired = true;
+        verdict.unchecked = `the page stopped the ${e.type === 'touchend' ? 'touch' : 'press'} before the check could see it (a pointerdown listener of its own at window capture, which stops the event?)`;
+      }
       // The browser counts a swallowed tap: the retried tap close by arrives as the second of a double tap (click
       // detail 2, then a dblclick — MapLibre zooms). A dblclick is swallowed when this check let through ONE press and
       // the press before it was swallowed: the app never saw a first click to pair it with.
@@ -1041,7 +1049,7 @@ export class Engine<W = unknown> {
       const me = e as MouseEvent;
       const surface = this.adapter.surface();
       verdict.ok = false;
-      const landed = eventTarget(e);
+      const landed = landedOn(e);
       if (landed !== surface && !isMirrorNode(landed)) {
         verdict.reason = `the pointer is over ${describeEl(landed as Element)}, not the map canvas`;
         return;
@@ -1600,7 +1608,9 @@ export class Engine<W = unknown> {
       }
     }
     const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && !PIXEL_ONLY.has(l.type));
-    for (const c of a.caveats?.() ?? []) out.push(`\nnote: ${c}`);
+    // The notes are read when the text is rendered, AFTER the entity sections: evaluating them is what finds some of the
+    // uncertain verdicts the notes report (read here, the first snapshot of a map missed them).
+    out.push(the design notes);
     if (blind.length) {
       // By SOURCE: a basemap style has a hundred layers on one tiled source, and listing them all says nothing.
       const bySource = new Map<string, number>();
@@ -1622,7 +1632,9 @@ export class Engine<W = unknown> {
     if (layers.some(isBasemap)) for (const stage of STAGES.slice(1)) stages.push({ baseCap: 0, stage });
     const render = (cap: number, i: number) => {
       const { baseCap, stage } = stages[i];
-      return [...header(STAGES.indexOf(stage) >= STAGES.indexOf('condensed')), ...sections(cap, baseCap, stage), ...footer].join('\n');
+      const head = header(STAGES.indexOf(stage) >= STAGES.indexOf('condensed'));
+      const body = sections(cap, baseCap, stage);
+      return [...head, ...body, ...footer.flatMap((l) => (l === the design notes ? (a.caveats?.() ?? []).map((c) => `\nnote: ${c}`) : [l]))].join('\n');
     };
     let cap = perLayer;
     let i = 0;
@@ -1939,13 +1951,35 @@ export function topElementAt(x: number, y: number, skip?: (e: Element) => boolea
     const el: Element | undefined = root.elementsFromPoint(x, y).find((e) => !e.closest('[data-geowright-mirror]') && !skip?.(e));
     if (!el || el === top) return top ?? el ?? null;
     top = el;
-    if (!el.shadowRoot) return el;
-    root = el.shadowRoot;
+    const inner: ShadowRoot | undefined = el.shadowRoot ?? closedRoots.get(el);
+    if (!inner) return el;
+    root = inner;
   }
 }
 
 /** Where an event really happened: a listener on `window` sees an event from inside a shadow root retargeted to its host. */
 const eventTarget = (e: Event): EventTarget | null => e.composedPath?.()[0] ?? e.target;
+
+/**
+ * Closed shadow roots that hold a map's surface, by host. From outside, a closed root is invisible: `host.shadowRoot` is
+ * null, `document.elementsFromPoint` stops at the host, and an event's composed path starts at it. From inside it is not:
+ * the surface's `getRootNode()` is the root. So each engine records the closed roots above its surface, and the lookups
+ * below go through them.
+ */
+const closedRoots = new WeakMap<Element, ShadowRoot>();
+function rememberClosedRoots(surface: Element): void {
+  if (typeof ShadowRoot === 'undefined' || typeof surface.getRootNode !== 'function') return; // (a surface without a DOM: unit tests)
+  for (let root = surface.getRootNode(); root instanceof ShadowRoot; root = root.host.getRootNode()) {
+    if (root.mode === 'closed') closedRoots.set(root.host, root);
+  }
+}
+
+/** eventTarget, looking into a closed shadow root that holds a map: the element at the event's point inside it. */
+function landedOn(e: Event): EventTarget | null {
+  const t = eventTarget(e);
+  if (!(t instanceof Element) || !closedRoots.has(t) || !(e instanceof MouseEvent)) return t;
+  return topElementAt(e.clientX, e.clientY) ?? t;
+}
 
 const isMirrorNode = (el: EventTarget | null) => el instanceof Element && !!el.closest('[data-geowright-mirror]');
 
@@ -2048,6 +2082,12 @@ const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : und
 const round = (p: PixelPoint): PixelPoint => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
 const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
 const oneFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
+
+/** Where the snapshot's notes go in its footer: filled in when the text is rendered (see snapshot). */
+const the design notes = '\u0000notes';
+
+/** The events that end a press: seen without its pointerdown, the press reached the page unchecked (armClick). */
+const PRESS_ENDS = new Set(['pointerup', 'mouseup', 'click', 'contextmenu', 'auxclick', 'touchend']);
 
 /** Probes per aim (decision 0022): each is four renders; a user does not hunt through an overlay either. */
 const MAX_PROBES = 3;

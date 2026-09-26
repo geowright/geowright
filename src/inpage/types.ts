@@ -126,7 +126,7 @@ export interface CanvasAdapter<W = unknown> {
   caveats?(): string[];
   /**
    * Optional pixel probe: how much do the surface's pixels around `at` change when `layer` is not
-   * drawn? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
+   * drawn (within `radiusPx` CSS pixels)? 0 = the layer contributes nothing there. Ground truth, but slow and it re-renders.
    * May be async: a library that cannot render synchronously has to wait for real frames.
    */
   pixelContribution?(layer: string, at: PixelPoint, radiusPx?: number): number | undefined | Promise<number | undefined>;
@@ -226,6 +226,11 @@ export interface ClickVerdict {
   reason?: string;
   /** On a miss, when the target could be located at that instant: where it was, relative to the pointer (px). */
   offset?: PixelPoint;
+  /**
+   * The press reached the page but not the check: the page stopped `pointerdown` before it (a listener of its own at window
+   * capture), and a later event of the same press arrived. The input was delivered and was not verified.
+   */
+  unchecked?: string;
 }
 
 export interface ActionPointOptions {

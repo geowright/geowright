@@ -14,7 +14,8 @@ as written (it adds types only).
 - **Assert** with retrying matchers (`.not` supported): `toHaveFeature`, `toHaveFeatureCount`, `toBeVisibleOnMap`,
   `toHaveLayerPixels` (raster, image, canvas, video, heatmap, hillshade), `toHaveGeometry` (the full geometry from the
   source, not the tile-clipped one), `toHavePopup`, `toHaveView`. A verdict of absence (a `.not`, a count, "not
-  visible") is taken only from a map that has settled: idle, or seen to be one that never becomes idle. A matcher that
+  visible") is taken only from a map that has settled: idle, or seen to be one that never becomes idle with nothing
+  else still loading. A matcher that
   cannot reach a verdict fails whichever way it is written, and says why: the map is not registered or was removed, a
   named layer does not exist (to assert that a layer was removed, check `map.layers()`), several features match where
   one is required, the camera is moving (`toHavePopup`), the map was never registered (`toHaveView`). A removed or
@@ -48,7 +49,8 @@ as written (it adds types only).
   (not a look-alike that slid under the pointer, not one made invisible since the aim); a
   late press is swallowed, a tap's touch events included, and retried. A press that reached the app is never
   sent again: not when the app re-creates its map in the click handler, not when the click navigates, not when the
-  input call itself throws (the action ends with that error). Options: `force`,
+  input call itself throws (the action ends with that error), not when the app stops the press before the check can
+  see it (the action ends "sent once, not verified"). Options: `force`,
   `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for a feature that never stops moving, on `click`,
   `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never presses another
   feature, and for `dblclick` that holds for its first press only. It is checked at the press, and MapLibre decides its layer click at `click`: a fast target can move off in
@@ -56,7 +58,7 @@ as written (it adds types only).
   `lngLat` and the location actions (`clickAt`, `tapAt`, …; their options are
   `SteadyActionOptions`) refuse `moving`, in their types and at run time: they have no check when the input arrives.
   Works on rotated, pitched, globe and terrain maps, inside a container scaled with CSS `transform: scale()`, and in
-  an open shadow root (a web component). A location on the far side of the globe or behind a mountain is an error,
+  an open or closed shadow root (a web component). A location on the far side of the globe or behind a mountain is an error,
   never a click on something else; so is a location outside the browser window on a map larger than it (`force`
   included; `autoPan` may bring it in). A location just across the antimeridian is the one in the copy of the world
   drawn in view (seen from lng 179.5, lng -179.8 is 0.7° east), and reported longitudes are in [-180, 180].

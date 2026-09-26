@@ -252,15 +252,50 @@ test.describe('a negative verdict waits for the map to settle', () => {
     '.not.toBeVisibleOnMap': (map: MapHandle, layer: string, timeout: number) => expect(map.feature({ layer })).not.toBeVisibleOnMap({ timeout }),
   };
 
+  // A map that never becomes idle (an animated canvas source; a feed the app re-sets in a loop) is "settled" only when
+  // nothing ELSE is still loading: never-idle is no evidence of absence from a source that has not arrived.
+  const neverIdle = {
+    '': async () => {},
+    ' (an animated canvas source elsewhere)': (page: import('@playwright/test').Page) =>
+      page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        const c = document.createElement('canvas');
+        c.width = c.height = 16;
+        const g = c.getContext('2d')!;
+        let t = 0;
+        const paint = () => {
+          g.fillStyle = `hsl(${t++ % 360},80%,50%)`;
+          g.fillRect(0, 0, 16, 16);
+          requestAnimationFrame(paint);
+        };
+        paint();
+        const b = m.getBounds();
+        const [w, n] = [b.getWest(), b.getNorth()];
+        m.addSource('anim', { type: 'canvas', canvas: c, animate: true, coordinates: [[w, n], [w + 0.01, n], [w + 0.01, n - 0.01], [w, n - 0.01]] });
+        m.addLayer({ id: 'anim', type: 'raster', source: 'anim' });
+      }),
+    ' (a feed re-set every 300 ms elsewhere)': (page: import('@playwright/test').Page) =>
+      page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.addSource('feed', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        m.addLayer({ id: 'feed', type: 'circle', source: 'feed', paint: { 'circle-radius': 4, 'circle-color': '#000' } });
+        let i = 0;
+        setInterval(() => m.getSource('feed').setData({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: { i: i++ }, geometry: { type: 'Point', coordinates: [34.7 + (i % 10) * 0.001, 32.05] } }] }), 300);
+      }),
+  };
+
   for (const [name, assertion] of Object.entries(matchers)) {
-    test(`${name} does not pass while a source is still loading (2.5 s)`, async ({ map, page }) => {
-      await late(page, 'late', 2500);
-      const t0 = Date.now();
-      const e = await rejects(assertion(map, 'late', 4000));
-      const took = Date.now() - t0;
-      await expect(map).toHaveFeature({ layer: 'late' }); // the feature does arrive
-      expect(e, `${name} passed after ${took} ms, while the map was still loading the source`).not.toBeNull();
-    });
+    for (const [also, start] of Object.entries(neverIdle)) {
+      test(`${name} does not pass while a source is still loading (2.5 s)${also}`, async ({ map, page }) => {
+        await start(page);
+        await late(page, 'late', 2500);
+        const t0 = Date.now();
+        const e = await rejects(assertion(map, 'late', 4000));
+        const took = Date.now() - t0;
+        await expect(map).toHaveFeature({ layer: 'late' }); // the feature does arrive
+        expect(e, `${name} passed after ${took} ms, while the map was still loading the source`).not.toBeNull();
+      });
+    }
   }
 
   for (const name of ['.not.toHaveFeature', '.not.toBeVisibleOnMap'] as const) {

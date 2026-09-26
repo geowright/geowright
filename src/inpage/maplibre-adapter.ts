@@ -1,6 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
 import { clientFrame, toSurface } from './engine';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, isPixelOnlyType, layoutVisible, missingIcon, paintColour, paintVisibility, pixelOccluders, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, isPixelOnlyType, layoutVisible, missingIcon, nullUncertainProperties, paintColour, paintVisibility, pixelOccluders, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
 import type { InternalCanvasAdapter, InternalRenderedFeature, PixelOccluder, ProbeResult, StyleCause } from './types-internal';
 
@@ -214,18 +214,29 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       }));
   }
 
+  /** A GeoJSON source with `generateId` (a public option, echoed by the source's serialize()): ids are indexes. */
+  private generatesIds(source: { serialize?: () => unknown }): boolean {
+    try {
+      return !!(source.serialize?.() as { generateId?: unknown } | undefined)?.generateId;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * MapLibre keeps a feature's id only if it is a non-negative integer: GeoJSON ids go through vt-pbf, which parses a
    * string id as an integer and writes any number as an unsigned varint ('north-gate' -> 0, '4f3a' -> 4, -5 ->
    * 18446744073709552000, 1.5 -> 1; Mapbox GL 1 and older MapLibre drop a non-numeric one), and a vector tile holds
-   * nothing else. With `promoteId` the rendered id is the property value itself.
+   * nothing else. With `promoteId` the rendered id is the property value itself; with `generateId` (GeoJSON) it is the
+   * feature's index, whatever id the data gives it.
    */
   idRoundTrips(layerId: string, id: string | number): boolean | undefined {
     const layer = this.map.getLayer(layerId);
-    const source = layer?.source ? (this.map.getSource(layer.source) as { type?: string; promoteId?: unknown } | undefined) : undefined;
+    const source = layer?.source ? (this.map.getSource(layer.source) as { type?: string; promoteId?: unknown; serialize?: () => unknown } | undefined) : undefined;
     if (!layer || !source || (source.type !== 'geojson' && source.type !== 'vector')) return undefined;
     const promoteId = source.promoteId; // public option, echoed on the source: a property name, or one per source-layer
     if (typeof promoteId === 'string' || (promoteId && typeof promoteId === 'object' && layer.sourceLayer && (promoteId as Record<string, unknown>)[layer.sourceLayer])) return true;
+    if (source.type === 'geojson' && this.generatesIds(source)) return false;
     const n = typeof id === 'number' ? id : /^(0|[1-9]\d*)$/.test(id) ? Number(id) : NaN;
     return Number.isSafeInteger(n) && n >= 0;
   }
@@ -358,17 +369,24 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       const spec = sources[id] as { type?: string; animate?: boolean };
       return spec.type === 'video' || (spec.type === 'canvas' && spec.animate !== false);
     });
-    if (animated.length) return { why: `source(s) ${animated.join(', ')}: an animated canvas / video source repaints the map on every frame. ${never}`, never: true };
-    // OBSERVED, not inferred: the data of a source was replaced again and again while we waited. (The first version
-    // inferred it from "a GeoJSON source is pending and frames are rendered" and blamed a setData loop on an app that
-    // merely loaded slowly on an overloaded machine. A wrong diagnosis is worse than none.)
-    if (w.replaced.length) return { why: `the app keeps replacing the data of source(s) ${w.replaced.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`, never: true };
+    // Never idle is a verdict about the WHOLE map: while another source is still loading it is not settled either, and a
+    // negative assertion must not conclude absence from a source that has not arrived. So the sources that never settle
+    // by design are set aside, and only when nothing else is pending is the map "never idle".
+    const replaced = w.replaced.map((r) => r.id);
+    const pending = w.pending.filter((p) => !animated.includes(p.id) && !replaced.includes(p.id));
+    if (!pending.length) {
+      if (animated.length) return { why: `source(s) ${animated.join(', ')}: an animated canvas / video source repaints the map on every frame. ${never}`, never: true };
+      // OBSERVED, not inferred: the data of a source was replaced again and again while we waited. (The first version
+      // inferred it from "a GeoJSON source is pending and frames are rendered" and blamed a setData loop on an app that
+      // merely loaded slowly on an overloaded machine. A wrong diagnosis is worse than none.)
+      if (w.replaced.length) return { why: `the app keeps replacing the data of source(s) ${w.replaced.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`, never: true };
+    }
     // Before "tiles are still loading": inline GeoJSON needs no network, so a dead worker is the stronger explanation.
-    const dead = deadWorkerDiagnosis(w.pending, w.workerSourcesLoaded);
+    const dead = deadWorkerDiagnosis(pending, w.workerSourcesLoaded);
     if (dead) return { why: dead, never: false };
-    const tiled = w.pending.filter((p) => ['vector', 'raster', 'raster-dem'].includes(p.type));
+    const tiled = pending.filter((p) => ['vector', 'raster', 'raster-dem'].includes(p.type));
     if (tiled.length) return { why: `tiles of source(s) ${tiled.map((p) => p.id).join(', ')} are still loading (a slow or unanswered tile request?)`, never: false };
-    if (w.pending.length) return { why: `source(s) ${w.pending.map((p) => p.id).join(', ')} have not finished loading`, never: false };
+    if (pending.length) return { why: `source(s) ${pending.map((p) => p.id).join(', ')} have not finished loading`, never: false };
     // (loaded() stays false for a map with an animated source, so it cannot be a condition here)
     // Few frames prove nothing: a page that is merely SLOW (software GL on a starved CI machine: 3 frames in 2.5s) looks
     // the same as one that animates. Found on Linux in a container, where this line accused five static apps of animating.
@@ -441,6 +459,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         ? `visibility unknown for layer ${p} — unsupported expression (newer than the bundled style-spec evaluator); treated as visible`
         : `visibility unknown for layer ${p} — "${why}" depends on the feature's tile geometry, which the style evaluator does not have; treated as visible`,
     );
+    for (const p of nullUncertainProperties(this.map)) out.push(`visibility uncertain for layer ${p} — it tests ['has', …] on a GeoJSON property that may be there with the value null (MapLibre draws with it; the hit test drops it); treated as visible`);
     for (const p of zoomUncertainProperties(this.map)) out.push(`visibility uncertain for layer ${p} — a zoom-and-data expression is drawn per tile zoom, and tile zooms vary across this view (pitch, terrain or globe); treated as visible where some tile zoom draws it`);
     // What THIS version of the map library cannot do (feature-detected). Said once, in diagnostics and the snapshot.
     if (typeof this.map.redraw !== 'function') out.push('this map library version has no synchronous redraw(): the pixel probe renders through the frame loop instead (three real frames; the frame without the layer may be seen as a one-frame flicker)');
@@ -492,7 +511,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     // not `=== 'none'`: since MapLibre 5.16 visibility may be an expression on global state
     if (!layoutVisible(this.map, layer)) return { unavailable: `layer "${layer}" is hidden` };
     const dpr = canvas.width / canvas.clientWidth;
-    const R = Math.max(1, Math.round(radiusPx)); // (2R+1)² device pixels around the point
+    const R = Math.max(1, Math.round(radiusPx * dpr)); // radiusPx is in CSS pixels, as every other pixel here: (2R+1)² device pixels
     const grab = () => {
       const px = new Uint8Array(4 * (2 * R + 1) ** 2);
       gl.readPixels(Math.round(at.x * dpr) - R, canvas.height - Math.round(at.y * dpr) - R - 1, 2 * R + 1, 2 * R + 1, gl.RGBA, gl.UNSIGNED_BYTE, px);

@@ -260,7 +260,7 @@ Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visib
 | `expect(map).toHaveFeature(query, { visible?, timeout? })` | at least one VISIBLE feature (`visible: 'any'` = merely rendered) |
 | `expect(map.features(q)).toHaveFeatureCount(n)` | exactly n |
 | `expect(map.feature(q)).toBeVisibleOnMap({ pixels? })` | one feature, painted by the style AND contributing pixels |
-| `expect(map).toHaveLayerPixels(layerId, { at, radiusPx? = 24 })` | a layer WITHOUT features (raster, image, canvas, video, heatmap, hillshade) contributes pixels around a location |
+| `expect(map).toHaveLayerPixels(layerId, { at, radiusPx? = 24 })` | `radiusPx` in CSS pixels. A layer WITHOUT features (raster, image, canvas, video, heatmap, hillshade) contributes pixels around a location |
 | `expect(map.feature(q)).toHaveGeometry(expected, { tolerancePx? = 2 })` | GeoJSON geometry · vertex list · `{ circle: { center, edge } }` |
 | `expect(map).toHavePopup({ at?, feature?, text?, tolerancePx? })` | a popup is open and anchored there |
 | `expect(map).toHaveView({ center?, zoom?, bearing?, pitch? }, { zoomTolerance? = 0.01, degreesTolerance? = 0.0005 })` | camera, with the map at rest. `degreesTolerance` is for the centre; bearing and pitch match within 0.1°, a bearing as an angle (270 = -90) |

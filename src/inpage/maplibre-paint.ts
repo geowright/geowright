@@ -126,6 +126,24 @@ function needsGeometry(v: unknown): 'within' | 'distance' | undefined {
   return undefined;
 }
 
+/** The keys an expression tests with `['has', key]` (a literal key, no object argument); per expression object, once. */
+const hasKeysOf = new WeakMap<object, string[]>();
+function hasKeys(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  let keys = hasKeysOf.get(v);
+  if (!keys) {
+    const out = new Set<string>();
+    const walk = (x: unknown) => {
+      if (!Array.isArray(x)) return;
+      if (x[0] === 'has' && x.length === 2 && typeof x[1] === 'string') out.add(x[1]);
+      x.forEach(walk);
+    };
+    walk(v);
+    hasKeysOf.set(v, (keys = [...out]));
+  }
+  return keys;
+}
+
 /** A value between two tile zooms, blended as the renderer's shader does (colours are premultiplied, blended per channel). */
 function blend(lo: any, hi: any, t: number): any {
   if (t <= 0) return lo;
@@ -229,7 +247,38 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
     const expr = expression(group, name);
     return expr && isComposite(group, expr) ? (tiles ??= tileZoom(map, layer.source)).z : undefined;
   };
-  return { type, value, elsewhere, expression, tileZoomOf, globalState, feature };
+  /**
+   * A GeoJSON feature's null-valued property: MapLibre draws from the worker's feature, which keeps it, while the hit test
+   * decodes the tile, which drops it. So for a paint value that tests `['has', key]` on a key the rendered feature lacks,
+   * the value the RENDERER used may be this one, with those keys present and null. Undefined when that cannot differ
+   * (another source type, no such key), or it cannot be evaluated.
+   */
+  const withNulls = (group: 'paint' | 'layout', name: string): { value: any } | undefined => {
+    let source: { type?: string } | undefined;
+    try {
+      source = layer.source ? (map.getSource(layer.source) as { type?: string } | undefined) : undefined;
+    } catch {
+      return undefined;
+    }
+    if (source?.type !== 'geojson') return undefined;
+    let raw: unknown;
+    // (the raw value first: most paint values test no `has`, and then nothing else is needed)
+    try {
+      raw = group === 'paint' ? map.getPaintProperty(f.layer, name as any) : map.getLayoutProperty(f.layer, name as any);
+    } catch {
+      return undefined;
+    }
+    const missing = hasKeys(raw).filter((k) => !(k in (f.properties ?? {})));
+    const expr = missing.length ? expression(group, name) : undefined;
+    if (!expr) return undefined;
+    const alt = { ...feature, properties: { ...f.properties, ...Object.fromEntries(missing.map((k) => [k, null])) } };
+    try {
+      return { value: expr.evaluate((isComposite(group, expr) ? { zoom: (tiles ??= tileZoom(map, layer.source)).z } : globals) as any, alt as any, state) };
+    } catch {
+      return undefined;
+    }
+  };
+  return { type, value, elsewhere, expression, tileZoomOf, withNulls, globalState, feature };
 }
 
 /**
@@ -241,14 +290,24 @@ function evaluatorFor(map: MlMap, f: RenderedFeature) {
  *    be silent: diagnostics print this list once.
  *  - `zoomUncertain`: zoom-and-data paint properties whose verdict was UNCERTAIN because tile zooms vary across the view
  *    (pitch, terrain, globe): hidden at one tile zoom, drawn at another. Treated as visible, and said once.
+ *  - `nullUncertain`: properties that test `['has', key]` on a GeoJSON feature whose rendered copy lacks the key: the
+ *    renderer keeps a null-valued property, the hit test drops it, so it cannot be told which the renderer saw. Treated
+ *    as visible, and said once.
  */
 type Unparseable = { why: 'newer' | 'within' | 'distance'; layer: string; group: 'paint' | 'layout'; name: string; input: string };
-const caveats = new WeakMap<object, { unparseable: Map<string, Unparseable>; zoomUncertain: Map<string, string> }>();
+const caveats = new WeakMap<object, { unparseable: Map<string, Unparseable>; zoomUncertain: Map<string, string>; nullUncertain: Map<string, string> }>();
 const caveatsOf = (map: MlMap) => {
   let c = caveats.get(map);
-  if (!c) caveats.set(map, (c = { unparseable: new Map(), zoomUncertain: new Map() }));
+  if (!c) caveats.set(map, (c = { unparseable: new Map(), zoomUncertain: new Map(), nullUncertain: new Map() }));
   return c;
 };
+
+/** Properties of this map (layer still there) whose verdict was uncertain because of `['has', key]` on GeoJSON nulls. */
+export function nullUncertainProperties(map: MlMap): string[] {
+  const list = caveatsOf(map).nullUncertain;
+  for (const [k, layer] of list) if (!map.getLayer(layer)) list.delete(k);
+  return [...list.keys()];
+}
 
 /** Unparseable properties of this map whose layer still has the value that could not be parsed. */
 export function unparseableReasons(map: MlMap): [property: string, why: 'newer' | 'within' | 'distance'][] {
@@ -290,23 +349,40 @@ function evaluateVisibility(map: MlMap, f: RenderedFeature): { visibility: Visib
   const ev = evaluatorFor(map, f);
   const { type, value } = ev;
 
-  /** A hiding reason only if it hides in EVERY tile of the view (zoom-and-data paint where tile zooms vary). */
+  /**
+   * A hiding reason only if it hides in EVERY tile of the view (zoom-and-data paint where tile zooms vary), and whether or
+   * not the feature has the null-valued properties the hit test drops (`['has', key]` on GeoJSON, see withNulls).
+   */
   const everywhere = (group: 'paint' | 'layout', name: string, hides: (v: any) => boolean): boolean => {
-    if (ev.elsewhere(group, name).every(hides)) return true;
-    caveatsOf(map).zoomUncertain.set(`${f.layer}: ${name}`, f.layer);
-    return false;
+    if (!ev.elsewhere(group, name).every(hides)) {
+      caveatsOf(map).zoomUncertain.set(`${f.layer}: ${name}`, f.layer);
+      return false;
+    }
+    const alt = ev.withNulls(group, name);
+    if (alt && !hides(alt.value)) {
+      caveatsOf(map).nullUncertain.set(`${f.layer}: ${name}`, f.layer);
+      return false;
+    }
+    return true;
   };
   const isZero = (v: any) => typeof v === 'number' && v <= 0;
   const isClear = (v: any) => !!v && typeof v === 'object' && typeof v.a === 'number' && v.a <= 0;
+  /** Drawn by this verdict, but hidden if the feature has the null-valued properties the hit test drops: said, not decided. */
+  const doubt = (group: 'paint' | 'layout', name: string, hides: (v: any) => boolean) => {
+    const alt = ev.withNulls(group, name);
+    if (alt && hides(alt.value)) caveatsOf(map).nullUncertain.set(`${f.layer}: ${name}`, f.layer);
+  };
   const zero = (group: 'paint' | 'layout', name: string): string | undefined => {
     const v = value(group, name);
-    const r = isZero(v) && everywhere(group, name, isZero) ? `${name} evaluates to ${v}` : undefined;
+    if (!isZero(v)) return void doubt(group, name, isZero);
+    const r = everywhere(group, name, isZero) ? `${name} evaluates to ${v}` : undefined;
     if (r) props.set(r, [{ group, name }]);
     return r;
   };
   const transparent = (name: string): string | undefined => {
     const v = value('paint', name);
-    const r = isClear(v) && everywhere('paint', name, isClear) ? `${name} is fully transparent` : undefined;
+    if (!isClear(v)) return void doubt('paint', name, isClear);
+    const r = everywhere('paint', name, isClear) ? `${name} is fully transparent` : undefined;
     if (r) props.set(r, [{ group: 'paint', name }]);
     return r;
   };

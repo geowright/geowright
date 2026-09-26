@@ -715,4 +715,24 @@ test.describe('press-time check', () => {
     expect(await page.evaluate(() => (window as any).__layerClicks), 'no click reached the app').toEqual([]);
     expect(e?.message).toMatch(/painted invisibly|not visible/);
   });
+
+  // An app's own window-capture pointerdown listener that stops the press (and prevents its compatibility mousedown),
+  // registered before the check: the check never sees the press, but the page gets the click. Sent once, not verified,
+  // never sent again (a failure after input).
+  test('an app that stops pointerdown at window capture before the check: the click is sent once, and reported unverified', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__downs = 0;
+      w.__layerClicks = [];
+      w.__geowright_maps.main.on('click', 'alerts', (e: any) => w.__layerClicks.push(e.features[0].id));
+      window.addEventListener('pointerdown', (e) => {
+        w.__downs++;
+        e.stopImmediatePropagation();
+        e.preventDefault();
+      }, true);
+    });
+    const e = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(await page.evaluate(() => ({ downs: (window as any).__downs, clicks: (window as any).__layerClicks }))).toEqual({ downs: 1, clicks: [1] });
+    expect(e?.message).toMatch(/sent once and reached the page, but it was not verified: the page stopped the press/);
+  });
 });

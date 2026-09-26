@@ -220,6 +220,9 @@ const DIAGNOSTIC_GRACE_MS = 2000;
  * left, less room for its answer to come back, so that it answers with what it found instead of being abandoned.
  */
 const lookBudget = (deadline: number) => (deadline === Infinity ? undefined : Math.max(0, Math.round(deadline - Date.now() - Math.min(MIN_ANSWER_MS, (deadline - Date.now()) / 4))));
+/** The injection of the in-page engine under way, per page: concurrent first calls share it. */
+const injections = new WeakMap<Page, Promise<unknown>>();
+
 /** A token per action: the page keeps a pixel-probe verdict for the retries of that one action only (decision 0022). */
 let actionCount = 0;
 const actionToken = () => `${process.pid}.${++actionCount}.${Math.random().toString(36).slice(2, 8)}`;
@@ -234,6 +237,10 @@ class DeadlineError extends Error {}
 class InputThrew {
   constructor(readonly error: unknown) {}
 }
+
+/** A press that reached the page without passing the check: a failure after input, never sent again (as InputThrew). */
+const unverified = (what: string, kind: string, why: string) =>
+  new InputThrew(new GeowrightError(`${what}: the ${kind} was sent once and reached the page, but it was not verified: ${why}. It is not sent again.`));
 
 /**
  * Real input inside a retry loop. A throw from it may come after the input left (the page got the click, the answer did
@@ -474,7 +481,13 @@ export class MapHandle {
       );
     let res = await run();
     if (res.missing) {
-      await this.page.evaluate(await getInpageSource());
+      // One injection per document, however many first calls find it missing at once (the evaluate is ~400 KB).
+      let injecting = injections.get(this.page);
+      if (!injecting) {
+        injecting = getInpageSource().then((src) => this.page.evaluate(src)).finally(() => injections.delete(this.page));
+        injections.set(this.page, injecting);
+      }
+      await injecting;
       res = await run();
     }
     return (res as { value: T }).value;
@@ -992,6 +1005,7 @@ export class FeatureHandle {
         }
         // Retried ONLY when the check positively says the click was swallowed, or that nothing reached the page at all.
         if (!verdict) return; // the page it was armed in is gone: the click navigated — delivered, never sent again
+        if (verdict.unchecked) throw unverified(what, 'click', verdict.unchecked);
         if (!verdict.fired) return { retry: 'the click never reached the page (is something outside the document covering it?)' };
         if (!verdict.ok) return { retry: `click was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
       }, opts.moving === 'allow' ? () => this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)) : undefined),
@@ -1039,6 +1053,7 @@ export class FeatureHandle {
           verdict = await this.map._disarm(token);
         }
         if (!verdict) return; // the page it was armed in is gone: the tap navigated — delivered, never sent again
+        if (verdict.unchecked) throw unverified(what, 'tap', verdict.unchecked);
         if (!verdict.fired) return { retry: 'the tap never reached the page' };
         if (!verdict.ok) return { retry: `tap was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
       }),
