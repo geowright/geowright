@@ -50,7 +50,10 @@ as written (it adds types only).
   late press is swallowed, a tap's touch events included, and retried. A press that reached the app is never
   sent again: not when the app re-creates its map in the click handler, not when the click navigates, not when the
   input call itself throws (the action ends with that error), not when the app stops the press before the check can
-  see it (the action ends "sent once, not verified"). Options: `force`,
+  see it (the action ends "sent once, not verified"), and not when the press was let through but the target was no
+  longer under the pointer at the `click` event that followed, where MapLibre decides what was clicked (the app moved
+  the map on the press, a moving target moved on): the hit test runs again there, and the action ends "sent once …
+  the app's click landed there, not on the target". Options: `force`,
   `ignoreLayers`, `autoPan`, `modifiers`, and `moving: 'allow'` for a feature that never stops moving, on `click`,
   `dblclick`, `rightClick`, `tap` and `hover` (the pointer leads it; it can time out, but it never presses another
   feature, and for `dblclick` that holds for its first press only. It is checked at the press, and MapLibre decides its layer click at `click`: a fast target can move off in

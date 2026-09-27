@@ -231,6 +231,11 @@ export interface ClickVerdict {
    * capture), and a later event of the same press arrived. The input was delivered and was not verified.
    */
   unchecked?: string;
+  /**
+   * The press was verified and let through, but at the `click` event that followed it (where a map library decides what
+   * was clicked) the target was no longer under the pointer: the app's click landed elsewhere. A failure after input.
+   */
+  missed?: string;
 }
 
 export interface ActionPointOptions {
