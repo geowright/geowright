@@ -1610,7 +1610,7 @@ export class Engine<W = unknown> {
     const blind = visible.filter((l) => l.sourceType && l.sourceType !== 'geojson' && !PIXEL_ONLY.has(l.type));
     // The notes are read when the text is rendered, AFTER the entity sections: evaluating them is what finds some of the
     // uncertain verdicts the notes report (read here, the first snapshot of a map missed them).
-    out.push(the design notes);
+    out.push(CAVEAT_SLOT);
     if (blind.length) {
       // By SOURCE: a basemap style has a hundred layers on one tiled source, and listing them all says nothing.
       const bySource = new Map<string, number>();
@@ -1634,7 +1634,7 @@ export class Engine<W = unknown> {
       const { baseCap, stage } = stages[i];
       const head = header(STAGES.indexOf(stage) >= STAGES.indexOf('condensed'));
       const body = sections(cap, baseCap, stage);
-      return [...head, ...body, ...footer.flatMap((l) => (l === the design notes ? (a.caveats?.() ?? []).map((c) => `\nnote: ${c}`) : [l]))].join('\n');
+      return [...head, ...body, ...footer.flatMap((l) => (l === CAVEAT_SLOT ? (a.caveats?.() ?? []).map((c) => `\nnote: ${c}`) : [l]))].join('\n');
     };
     let cap = perLayer;
     let i = 0;
@@ -2084,7 +2084,7 @@ const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => req
 const oneFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
 /** Where the snapshot's notes go in its footer: filled in when the text is rendered (see snapshot). */
-const the design notes = '\u0000notes';
+const CAVEAT_SLOT = '\u0000notes';
 
 /** The events that end a press: seen without its pointerdown, the press reached the page unchecked (armClick). */
 const PRESS_ENDS = new Set(['pointerup', 'mouseup', 'click', 'contextmenu', 'auxclick', 'touchend']);
