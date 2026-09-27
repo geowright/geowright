@@ -617,7 +617,12 @@ attempt that started with a few ms left used to be abandoned for want of them, a
 thread" on an idle page instead of the real reason (the slowest round trip measured: 206 ms, on the dense page at 4x
 CPU throttling). A page that answered the earlier attempts and was only slow to answer the last one is slow, not
 stalled: the failure is what it answered, with the map state, as the matchers already had it. `waitForIdle()` is bounded
-the same way (its in-page wait ends early enough for the answer to come back in time). As in Playwright, `timeout: 0`
+the same way (its in-page wait ends early enough for the answer to come back in time). Every time budget the page is
+given (that wait, an action's look, a pixel probe's) is sized when the call is sent, and again when it is re-sent: the
+first call on a page also injects the engine, and a wait sized before that could not end before the deadline once the
+injection had taken its share (an animated canvas page in a quiet 20x: 1250 ms sent with 1211 ms left, and the error
+blamed a page that had answered twice). When such a first call is abandoned, the error says that the engine was missing,
+what the page answered and when, and how much time the call itself had. As in Playwright, `timeout: 0`
 means no timeout; a pixel probe then gets 5 s a look (a browser fires a timer of Infinity at once).
 
 **The library has no fixed sleep of its own, and neither do its tests.** The one that used to exist — a

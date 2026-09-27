@@ -77,6 +77,9 @@ as written (it adds types only).
   for the page to say where it landed, which a stalled page can hold past the timeout. An action with several points
   (a drag, a shape) has one timeout for all of them. `waitForIdle({ timeout })` is wall-clock too. When a page answered
   the earlier attempts and only the last one ran past the deadline, the failure is what it answered (slow, not stalled).
+  The first call on a page also injects the engine: every time budget the page is given (an idle wait, an action's look,
+  a pixel probe) is sized after that, from the time actually left, and an abandoned first call says that the engine was
+  missing, what the page answered and when, and how long the call itself had.
   `autoPan` pans once per action. As in Playwright, `timeout: 0` means no timeout (a pixel probe then gets 5 s a look).
 - DOM markers and popups as normal Locators (`map.marker()`, `map.popup()`), pinned to their element. They are found
   inside the map's container, also when a web component hosts the map in its shadow root.

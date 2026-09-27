@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { geowright, type MapHandle } from '../src/playwright';
-import { FAIL_FAST_MS } from './slow-machine';
+import { block, FAIL_FAST_MS } from './slow-machine';
 
 /** The default action timeout follows the test's timeout; an action's `timeout` is a wall-clock promise. */
 test.describe('timeouts', () => {
@@ -37,15 +37,6 @@ test.describe('timeouts', () => {
     expect(err?.message).toMatch(/source\(s\) (lots, assets|assets, lots) hold inline GeoJSON/);
     expect(err?.message).toContain('DEAD WORKER');
   });
-
-  /** Synchronous work in the page: every round trip into it waits until it ends. Started, not awaited. */
-  const block = (page: Page, ms: number) =>
-    void page
-      .evaluate((ms) => {
-        const end = Date.now() + ms;
-        while (Date.now() < end);
-      }, ms)
-      .catch(() => {});
 
   const BUSY = 5000;
   const TIMEOUT = 1000;
