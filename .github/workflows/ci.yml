@@ -73,7 +73,7 @@ jobs:
       - name: Machine load after
         if: always()
         run: uptime
-      - name: Pack the failed tests' output (the whole tree is too big to upload: a 20x run left 960,000 files in it)
+      - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
         if: failure()
         run: node scripts/failed-test-results.mjs
       - uses: actions/upload-artifact@v4
@@ -108,7 +108,7 @@ jobs:
           key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:compat
-      - name: Pack the failed tests' output (the whole tree is too big to upload: a 20x run left 960,000 files in it)
+      - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
         if: failure()
         run: node scripts/failed-test-results.mjs
       - uses: actions/upload-artifact@v4
@@ -172,7 +172,7 @@ jobs:
       - name: Machine load after
         if: always()
         run: uptime
-      - name: Pack the failed tests' output (the whole tree is too big to upload: a 20x run left 960,000 files in it)
+      - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
         if: failure()
         run: node scripts/failed-test-results.mjs
       - uses: actions/upload-artifact@v4
