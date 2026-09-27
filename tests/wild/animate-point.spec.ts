@@ -69,7 +69,7 @@ test.describe('wild: animate-a-point', () => {
   // frame boundary, so its lateness jitters by whole frames — more than the ~175ms this 10px dot spends under any
   // pixel. Measured under 5-worker contention: click 30/30, hover 14/30. Hover on a moving feature is covered on the
   // light demo page (tests/moving.spec.ts), where a frame is short compared with the target's dwell time.
-  test("{ moving: 'allow' }: a click on the perpetually moving point lands ON it or not at all — verified when the real event arrives", async ({ wild, page }) => {
+  test("{ moving: 'allow' }: a click sends input once or not at all; MapLibre may miss the fast point after the press", async ({ wild, page }) => {
     test.setTimeout(90_000);
     const map = await wild.open(example('animate-a-point'), { routes: DEMOTILES, waitForIdle: false });
     await expect(map).toHaveFeature({ layer: 'point' }, { timeout: 15_000 });
@@ -81,14 +81,16 @@ test.describe('wild: animate-a-point', () => {
       m.on('click', () => (window as any).__seen.anywhere++);
       m.on('click', 'point', () => (window as any).__seen.onPoint++);
     });
-    // What is asserted is the CONTRACT, which does not depend on how fast this machine is: whatever reaches the app is
-    // ON the point, exactly once — or nothing reaches it at all and the action says why. Whether the click LANDS depends
-    // on frame time vs. the ~175ms this dot spends under a pixel: alone or with this spec on five workers it lands
-    // (30/30); in the middle of the full suite on a loaded machine it timed out once in three runs, every one of its
-    // presses swallowed. A success-only assertion here would be a flake by construction, so it is not made.
+    // A failed action sends no input. A successful action sends one click after checking the point at pointerdown.
+    // MapLibre checks its layer click at the later click event: this fast point can move off in between, so the map
+    // sees one click while the point layer sees none. The 0.1.0 docs
+    // state that limit; the click-event recheck is a later fix. The test must allow either observed layer outcome.
     const outcome = await map.feature({ layer: 'point' }).click({ moving: 'allow', timeout: 30_000 }).then(() => 'clicked', (e: Error) => e.message);
     const seen = await page.evaluate(() => (window as any).__seen);
-    if (outcome === 'clicked') expect(seen).toMatchObject({ onPoint: 1, anywhere: 1 });
+    if (outcome === 'clicked') {
+      expect(seen.anywhere).toBe(1);
+      expect([0, 1]).toContain(seen.onPoint);
+    }
     else {
       expect(seen).toMatchObject({ onPoint: 0, anywhere: 0 });
       expect(outcome).toMatch(/click was intercepted and cancelled: target was no longer under the pointer|the page did not answer "actionPoint"/);
