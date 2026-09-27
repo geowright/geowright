@@ -247,7 +247,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 | FeatureHandle (`map.feature(q)`) | |
 |---|---|
 | `click` `rightClick` `dblclick` `tap` `(opts?)` | full actionability + click-time verification |
-| `hover(opts?)` | full actionability (verified on arrival only with `moving: 'allow'`) |
+| `hover(opts?)` | full actionability, verified as the pointer arrives (a miss is aimed at again) |
 | `dragTo(lngLat, opts?)` · `dragBy({ dLng, dLat }, opts?)` | drag a handle to a place · move a whole shape (no `moving` option) |
 | `info()` · `lngLat(opts?)` · `geometry()` | resolved `FeatureSummary` (`layer id properties geometryType pixel client lngLat visible invisibleBecause state`; its pixel is the best geometric candidate, unverified) · the verified action point as lng/lat (waits and fails like `click()`; no `moving` option) · full geometry from the source |
 
@@ -329,10 +329,11 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
 - **Tiled sources:** the browser cannot know what is off-screen, and the failure messages say so.
 - **On a globe** MapLibre's own viewport-wide query is wrong; the workaround is a grid: an extrusion narrower than 16 px whose
   footprint centre is off-screen can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
-- **`hover` on a moving target** is only dependable when frames are short; `click` holds up. And when the page stalls
-  (a starved renderer draws a perpetually moving feature at the same pixel two frames running), the default refusal of a
-  moving target can let a `hover` through, onto where the feature is drawn at that instant. A `click` is still verified
-  when the press arrives.
+- **`hover` on a moving target** is only dependable when frames are short; `click` holds up.
+- **A feature whose source the app replaces on every frame is never "at rest"**, even one that stands still: "at rest"
+  is the same pixel two frames running *and* no data replacement of its source in between (a starved renderer draws a
+  moving feature at the same pixel too). Such a feature needs `moving: 'allow'`, whose check at the real event tells a
+  hit from a miss.
 - **A press that was verified can still miss at the `click` event** (a `dblclick`: its first click only), where MapLibre decides which layer
   was clicked, after the release: a fast `moving: 'allow'` target moved off in between, or the app moved the map on the press. The hit test
   is run again there, and a miss is a failure after input: the click was sent once, the app's click landed elsewhere, and it is not sent again.

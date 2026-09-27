@@ -9,7 +9,7 @@ import { DEMOTILES, example, expect, test } from './harness';
 // of it, not all: a known limit (docs/DESIGN.md, "still wrong"). Either way the action refuses; it never mis-clicks.
 // An action's timeout is wall-clock: on an overloaded machine the refusal can also be "the page did not
 // answer in the time that was left" — equally true, equally not a click.
-const REFUSED = /unstable: feature position changed between two animation frames|ambiguous: strict mode violation: query resolved to 2 features: point \{\}|the page did not answer "actionPoint" in the time that was left/;
+const REFUSED = /unstable: (feature position changed between two animation frames|the data of source "point" was replaced between two animation frames)|ambiguous: strict mode violation: query resolved to 2 features: point \{\}|the page did not answer "actionPoint" in the time that was left/;
 
 // waitForIdle's timeout in the spec that expects it to fail with a diagnosis. The round trip is abandoned at the deadline
 // and the in-page wait takes half the time left (at most 2 s), so the page's answer must come back within

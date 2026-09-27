@@ -124,6 +124,12 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    */
   pixelOccluders?(layer: string, at: PixelPoint): PixelOccluder[];
   /**
+   * Optional: how many times the data of `source` has been replaced (the application's `setData`, a new URL) since the
+   * adapter started counting — tiles arriving do not count. Two reads with different answers mean the source changed in
+   * between: a feature of it is not at rest, whatever pixel it is drawn at. Cheap: a counter.
+   */
+  dataVersion?(source: string): number;
+  /**
    * Optional, with `pixelOccluders`: does `layer` draw pixels rather than features (a type `pixelOccluders` reports)? Such
    * a layer may still come back from `queryFeatures` (a heatmap does on MapLibre >= 5, over its whole radius, drawn or
    * not): that hit is never an occluder. Whether it hides the target is for the gate and the probe.

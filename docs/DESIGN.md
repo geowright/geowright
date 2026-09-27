@@ -146,7 +146,15 @@ on every retry:
 2. **The map is not moving, and the chosen pixel is stable across two animation frames.** This
    replaces reading private internal state (the MapGrab approach, discussed above) with two public
    checks: sampling the candidate pixel twice, one frame apart, and requiring the map's own
-   `isMoving()` to answer false. An in-flight `flyTo` or animation is a wait, not a race.
+   `isMoving()` to answer false. An in-flight `flyTo` or animation is a wait, not a race. "Stable" also
+   means that the data of the feature's source was not replaced between the two samples (counted
+   `sourcedataloading` events, tiles excluded): a source the application re-sets on every frame draws a
+   moving feature at the same pixel whenever the renderer, or the GeoJSON worker, is starved — seen on
+   MapLibre's "animate a point" in a software-rendered Linux container, where a `hover()` went out onto
+   the pixel the point had been drawn at. A feature of such a source is never at rest, standing still or
+   not (nothing public tells the two apart); it needs `moving: 'allow'`, whose check at the real event
+   does. The counter costs nothing measurable: 20 hovers on the demo took 100 ms at the median before
+   and after (the two frames are the cost).
 3. **The pixel is actually on the feature.** Candidate pixels are generated geometrically and then
    *verified* by the library's own hit test — geometry code stays simple because it never needs to
    be exactly right, only close enough for the hit test to confirm it. For a polygon, candidates come
@@ -281,8 +289,8 @@ snapshot lists whole pixels, and for shapes thinner than a pixel (a country sque
 four whole pixels around a candidate are tried as well. The general lesson: verify the pixel the application will see,
 not the pixel you computed.
 
-**Targets that never stop moving.** The two-frame stability check refuses a perpetually animated feature for ever on a
-page that keeps drawing (a page that stalls is under "What is still wrong") — correct, and stricter than a person, who
+**Targets that never stop moving.** The stability check (item 2: the same pixel two frames running, its source's data
+not replaced in between) refuses a perpetually animated feature for ever — correct, and stricter than a person, who
 can click a slowly moving dot. `{ moving: 'allow' }` drops the two checks a
 moving target cannot pass (map at rest, same pixel two frames running) and keeps every other one; what protects against
 acting on the wrong thing is the click-time verification, which swallows a late press before the application sees it.
@@ -994,13 +1002,9 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
 
 - `hover({ moving: 'allow' })` is only dependable when a frame of the page is short compared with the time the target
   spends under one pixel; `click` holds up under contention, hover does not (a `mousemove` is frame-aligned).
-- On a page that stalls, the default refusal of a moving target is not absolute. When the renderer (and, for a GeoJSON
-  source re-set every frame, its worker) is starved, two consecutive frames can show a perpetually moving feature at the
-  same pixel; the stability check then passes and an action goes out without `moving: 'allow'`. Seen once, on Linux in
-  a software-rendered Linux container under severe CPU contention: `hover()` on MapLibre's "animate a point" was
-  delivered onto the pixel where the point was drawn at that instant. Nothing else was hovered, and `click` stays
-  protected by the click-time check, but a `hover` has no such check. "Same pixel over two frames" is too weak a
-  definition of "at rest" for a source that changes every frame; a stronger one is planned.
+- A feature whose source the application replaces on every frame is refused without `moving: 'allow'` even when it
+  stands still: "at rest" (Actionability, item 2) cannot tell it from a moving one drawn at the same pixel by a starved
+  renderer, so it does not try. `moving: 'allow'` acts on it, with the check at the real event.
 - A target moving faster than roughly its own diameter per input latency cannot be clicked at all; the action times
   out honestly (every late press is swallowed), it does not mis-click.
 - A press the check let through can still miss at the `click` event, where MapLibre attributes the click to a layer

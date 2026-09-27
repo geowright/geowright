@@ -39,7 +39,9 @@ as written (it adds types only).
   `wheelAt`, `keyboard.press`; `pinchAt`, `twoFingerRotateAt`, `touchDragAt`, `doubleTapAt` (Chromium). Draw helpers
   (`polygon`, `line`, `rectangle`, `circle`, `cancel`) take explicit finish gestures and are tested with terra-draw and
   mapbox-gl-draw.
-- **Actionability**: before any input, the target must be the only match, painted, still, under the pointer, the
+- **Actionability**: before any input, the target must be the only match, painted, still (the same pixel two frames
+  running, and its source's data not replaced in between: a source the app re-sets on every frame is never at rest, even
+  standing still — it needs `moving: 'allow'`), under the pointer, the
   topmost visible hit, and not covered by a DOM element. A raster, image, video, canvas, heatmap, hillshade, color-relief,
   background or custom layer (deck.gl's interleaved layers are custom layers; MapLibre 3 and later) drawn above the target at that pixel is checked with a pixel probe of the target's own layer: an opaque one refuses
   the action and is named; a translucent one, or a transparent gap in an opaque one, lets it through (`ignoreLayers`
@@ -47,7 +49,8 @@ as written (it adds types only).
   hit-test over its whole radius, covers only by its pixels, as on every other version. For `click`, `dblclick`,
   `rightClick` and `tap`, the hit test runs again when the press arrives and must find the same feature, still painted
   (not a look-alike that slid under the pointer, not one made invisible since the aim); a
-  late press is swallowed, a tap's touch events included, and retried. A press that reached the app is never
+  late press is swallowed, a tap's touch events included, and retried. A `hover` is verified the same way as the pointer
+  arrives (nothing is swallowed: the app saw the move, as it would a person's, and the action aims again). A press that reached the app is never
   sent again: not when the app re-creates its map in the click handler, not when the click navigates, not when the
   input call itself throws (the action ends with that error), not when the app stops the press before the check can
   see it (the action ends "sent once, not verified"), and not when the press was let through but the target was no
