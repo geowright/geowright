@@ -92,6 +92,10 @@ test.describe('wild: animate-a-point', () => {
     } else if (/when the click event fired/.test(outcome)) {
       expect(seen).toEqual({ onPoint: 0, anywhere: 1 });
       expect(outcome).toMatch(/the click was sent once and the target was under the pointer when the press arrived, but target was no longer under the pointer when the click event fired: the app's click landed there, not on the target\. It is not sent again\./);
+    } else if (/the page did not say where it landed/.test(outcome)) {
+      // sent once, unconfirmed by the deadline (a page silent for seconds under contention): at most one click reached the map
+      expect(seen.anywhere).toBeLessThanOrEqual(1);
+      expect(outcome).toMatch(/the click was sent once, and the page did not say where it landed within the \d+ms timeout .* It is not sent again\./);
     } else {
       expect(seen).toMatchObject({ onPoint: 0, anywhere: 0 });
       expect(outcome).toMatch(/click was intercepted and cancelled: target was no longer under the pointer|the page did not answer "actionPoint"/);

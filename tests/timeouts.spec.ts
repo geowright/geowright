@@ -100,6 +100,26 @@ test.describe('timeouts', () => {
     });
   }
 
+  // After the input: the page said nothing about where the click landed (it stalled right after the press). The click
+  // cannot be recalled, and the action used to wait for the answer for as long as the stall lasted, then report what it
+  // said. Now it fails at its timeout, says the click was sent and unconfirmed, and never sends it again.
+  test('feature().click: a page that stalls after the press fails after input at its timeout, and the click is not sent again', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__alertClicks = 0;
+      w.__geowright_maps.main.on('click', 'alerts', () => w.__alertClicks++);
+    });
+    await stallOnce(page, 'disarmClick', STALL);
+    const started = Date.now();
+    const err = await map.feature({ layer: 'alerts', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const took = Date.now() - started;
+    expect(err?.message).toMatch(/click\(\): the click was sent once, and the page did not say where it landed within the \d+ms timeout \(a busy main thread: heavy rendering, or an overloaded machine\)\. It is not sent again\./);
+    expect(took, `rejected after ${took}ms, with a ${FAIL_FAST_MS}ms timeout and a ${STALL}ms stall`).toBeLessThan(2 * FAIL_FAST_MS);
+    await expect.poll(() => page.evaluate(() => (window as any).__alertClicks), { timeout: 2 * STALL }).toBe(1); // (read once the stall is over)
+    await new Promise((r) => setTimeout(r, 100)); // and stays 1
+    expect(await page.evaluate(() => (window as any).__alertClicks)).toBe(1);
+  });
+
   test.describe('touch', () => {
     test.use({ hasTouch: true });
     test('feature().tap: a page that stalls arming its check fails the action at its timeout', async ({ map, page }) => {

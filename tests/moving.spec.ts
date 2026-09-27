@@ -76,6 +76,8 @@ test.describe("moving: 'allow'", () => {
         expect(count).toBe(1); // sent once, reported as a miss after input
         expect(outcome).toMatch(/the click was sent once and the target was under the pointer when the press arrived, but .* It is not sent again\./);
         await baseExpect(page.getByTestId('clicked')).toHaveText('nothing');
+      } else if (/the page did not say where it landed/.test(outcome)) {
+        expect(count).toBeLessThanOrEqual(1); // sent once, unconfirmed by the deadline: never a second press
       } else {
         expect(count).toBe(0); // gave up honestly: the app never saw a click
         expect(outcome).toMatch(/click was intercepted and cancelled: target was no longer under the pointer|unstable: feature position changed/);

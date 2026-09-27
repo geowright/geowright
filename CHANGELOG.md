@@ -77,7 +77,8 @@ as written (it adds types only).
   An action's timeout is wall-clock until its input is sent (finding its pixel, arming `click()` / `tap()`'s check,
   an `autoPan` pan, `lngLat()`, and its failure report), even on a page too busy to answer. Real input is never
   abandoned half-way: once it is sent, a feature's `click()` and `tap()`, and `hover()` with `moving: 'allow'`, wait
-  for the page to say where it landed, which a stalled page can hold past the timeout. An action with several points
+  for the page to say where it landed — until the action's timeout: a page that has not said by then makes the action
+  fail after input ("sent once, and the page did not say where it landed"), and it is never sent again. An action with several points
   (a drag, a shape) has one timeout for all of them. `waitForIdle({ timeout })` is wall-clock too. When a page answered
   the earlier attempts and only the last one ran past the deadline, the failure is what it answered (slow, not stalled).
   The first call on a page also injects the engine: every time budget the page is given (an idle wait, an action's look,
