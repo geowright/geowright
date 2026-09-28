@@ -213,7 +213,16 @@ on every retry:
    before it on `window` in the capture phase that stops the press hides it from the check: the rest of the press still
    arrives, and the action then fails "sent once, not verified", never sending it again; the target must still be painted:
    the hit test finds a feature at opacity 0, and with nothing visible under it, it would be "topmost"); on a mismatch it
-   swallows the whole click sequence (a tap's touch events included) before it reaches the application,
+   swallows the whole click sequence (a tap's touch events included) before it reaches the application. A press that
+   was let through is checked once more at the `click` event that follows it (`contextmenu` for a right button; for a tap,
+   the click the browser synthesizes after `touchend`), where the map library decides what was clicked, after the release:
+   an app that moves the map on the press, or a `moving: 'allow'` target that moved on, can have carried the target off
+   the pointer by then (seen in a quiet 20x of the suite: `click({ moving: 'allow' })` on MapLibre's "animate a point"
+   resolved, and the map's click handler fired with its layer handler silent). Nothing can be swallowed any more, so the
+   miss is a failure after input: the click was sent once, the app's click landed elsewhere, and it is never sent again
+   (the demo's "jump on press" makes it certain: the app pans 60 px on `mousedown`). The first click of a double-click
+   only: its second press is not verified either, and a check on the second click alone would fail a double-click on a
+   moving target the press check let through,
    and the action retries from the top. The browser still counts a swallowed tap, so the retried tap
    arrives as the second of a double tap (a `dblclick`, and MapLibre zooms): that `dblclick` is
    swallowed as well. A pixel-only layer over the pointer that the aim did not see the target through (a veil shown
@@ -277,7 +286,8 @@ page that keeps drawing (a page that stalls is under "What is still wrong") — 
 can click a slowly moving dot. `{ moving: 'allow' }` drops the two checks a
 moving target cannot pass (map at rest, same pixel two frames running) and keeps every other one; what protects against
 acting on the wrong thing is the click-time verification, which swallows a late press before the application sees it.
-It runs at the press; a target that moves off between the press and the `click` event is under "What is still wrong".
+It runs at the press, and again at the `click` event that follows: a target that moved off in between is reported as a
+miss after input (Actionability, item 7), never as a success.
 Measured before designing: on a light page the freshest pixel is good enough (a 9 px dot at up to 200 px/s: 20 of 20
 first try; at 400 px/s: 0 of 20, every press swallowed, none delivered elsewhere). On MapLibre's own "animate a point"
 example — a full-screen basemap in software GL, ~14 frames a second — it never hit once in 30 s, because input arrives
@@ -287,7 +297,7 @@ computed (every round trip after it is lateness), and how far to lead is learnt 
 where the target was when the event arrived; lead + lateness is that attempt's measured latency, and the median of the
 last few is used (a full-gain correction chased frame-sized jitter and never settled). Result on that example under five
 parallel workers: click 30 of 30 — and one timeout in three full-suite runs under contention, every late press
-swallowed. Landing the click depends on rendering and input latency; not mis-pressing does not, and only that is asserted in the suite (what MapLibre makes of the press at `click`, after the release, can still depend on latency: "What is still wrong"). `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
+swallowed. Landing the click depends on rendering and input latency; not mis-pressing does not, and only that is asserted in the suite. What MapLibre makes of the press at `click`, after the release, can still depend on latency: the hit test is run again at that event, and a press that missed there is a failure after input (below, item 7). `hover` is weaker and is documented as such: a `mousemove` is delivered on a frame
 boundary, so its lateness jitters by whole frames — more than the ~175 ms that dot spends under any pixel (14 of 30
 there); it is dependable when a frame is short compared with the target's dwell time.
 
@@ -993,13 +1003,10 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   definition of "at rest" for a source that changes every frame; a stronger one is planned.
 - A target moving faster than roughly its own diameter per input latency cannot be clicked at all; the action times
   out honestly (every late press is swallowed), it does not mis-click.
-- A `moving: 'allow'` click or tap is verified at `pointerdown` (a `dblclick` at its first press only), but MapLibre
-  attributes a click to a layer on the DOM `click` event (for a tap, the click the browser synthesizes after `touchend`), after the release, by querying what is drawn then. The press and the release are separate round trips to the
-  browser; on a page that re-sets its source every frame, a frame drawn in between can move a small dot off the pointer.
-  The action then reports success and the app's click missed the target: it landed on whatever is drawn under it (on
-  that page, no feature). Seen once in 21 runs of MapLibre's "animate a point" under contention; 20 of 20 when re-run
-  without contention. A further check at `click` could report a miss
-  there as a failure after input: the input was sent and is never sent again.
+- A press the check let through can still miss at the `click` event, where MapLibre attributes the click to a layer
+  (Actionability, item 7): the hit test is run again there, and the miss is reported as a failure after input. The click
+  itself cannot be taken back: the app saw one click, on whatever was under the pointer then. A `dblclick` is checked at
+  its first press and first click only.
 - Paint that tests `['has', key]` on a GeoJSON feature is uncertain when the key's value is null: MapLibre draws from
   the worker's feature, which keeps the key, and the hit test decodes the tile, which drops it. The verdict is then
   "visible" and the notes say it is uncertain; where the renderer drew nothing because the key is there, that

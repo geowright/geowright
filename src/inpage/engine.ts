@@ -1006,6 +1006,7 @@ export class Engine<W = unknown> {
         swallow(e);
       }
     };
+    let clicks = 0;
     const onRest = (e: Event) => {
       // The rest of a press whose pointerdown this check never saw: the page stopped it first (a window-capture listener
       // of its own, registered before this one, that stops the event and prevents its compatibility mousedown). The press
@@ -1013,6 +1014,33 @@ export class Engine<W = unknown> {
       if (!verdict.fired && PRESS_ENDS.has(e.type)) {
         verdict.fired = true;
         verdict.unchecked = `the page stopped the ${e.type === 'touchend' ? 'touch' : 'press'} before the check could see it (a pointerdown listener of its own at window capture, which stops the event?)`;
+      }
+      // The press was verified, but a map library decides WHAT was clicked at the `click` event (`contextmenu` for a
+      // right button), after the release, from what is drawn then. The app may have moved the map on the press, and a
+      // moving target moves on between the two: the hit test is run again there, at the event's own pixel. Nothing can be
+      // swallowed any more — the press reached the app — so a miss is reported as a failure after input. The first click
+      // of a double-click only: its second press is not verified either, and a check on its second click alone would fail a
+      // double-click on a moving target that the press check let through.
+      if (verdict.ok && !blocking && CLICK_EVENTS.has(e.type) && clicks++ === 0) {
+        const me = e as MouseEvent;
+        const surface = this.adapter.surface();
+        const landed = landedOn(e);
+        const when = `when the ${e.type} event fired`;
+        if (landed !== surface && !isMirrorNode(landed)) {
+          verdict.missed = `the ${e.type} event landed on ${describeEl(landed as Element)}, not the map canvas`;
+        } else {
+          const at = toSurface(clientFrame(surface), { x: me.clientX, y: me.clientY });
+          const miss = this.verifyAt(at, q, opts, target);
+          if (!miss) return;
+          if (miss.covered) verdict.missed = `target was covered by ${describe({ ...miss.covered, geometryType: miss.covered.geometry.type })} ${when}`;
+          else if (miss.several) verdict.missed = `the query matched ${miss.several} features ${when} (strict mode)`;
+          else if (miss.pixels) verdict.missed = `${miss.pixels.map((o) => `${o.type} layer "${o.layer}"`).join(', ')} was drawn over the target ${when}`;
+          else if (miss.invisible) verdict.missed = `the target was painted invisibly ${when} (${miss.invisible})`;
+          else {
+            verdict.missed = `target was no longer under the pointer ${when}`;
+            if (opts.moving === 'allow') verdict.offset = this.offsetFrom(at, q, opts);
+          }
+        }
       }
       // The browser counts a swallowed tap: the retried tap close by arrives as the second of a double tap (click
       // detail 2, then a dblclick — MapLibre zooms). A dblclick is swallowed when this check let through ONE press and
@@ -2088,6 +2116,8 @@ const CAVEAT_SLOT = '\u0000notes';
 
 /** The events that end a press: seen without its pointerdown, the press reached the page unchecked (armClick). */
 const PRESS_ENDS = new Set(['pointerup', 'mouseup', 'click', 'contextmenu', 'auxclick', 'touchend']);
+/** Where a map library decides what was clicked: the click event of the button (a right button's is `contextmenu`). */
+const CLICK_EVENTS = new Set(['click', 'contextmenu']);
 
 /** Probes per aim (decision 0022): each is four renders; a user does not hunt through an overlay either. */
 const MAX_PROBES = 3;

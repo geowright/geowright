@@ -23,6 +23,12 @@ test.describe("moving: 'allow'", () => {
     await baseExpect(page.getByTestId('clicked')).toHaveText('P-1');
   });
 
+  test('rightClick lands on the asked-for moving feature (MapLibre reports it at contextmenu)', async ({ page }) => {
+    const map = geowright(page);
+    await map.feature({ layer: 'patrols', id: 2 }).rightClick({ moving: 'allow' });
+    await baseExpect(page.getByTestId('right-clicked')).toHaveText('P-2');
+  });
+
   test('hover reaches the moving feature', async ({ page }) => {
     const map = geowright(page);
     await map.feature({ layer: 'patrols', id: 1 }).hover({ moving: 'allow' });
@@ -55,6 +61,8 @@ test.describe("moving: 'allow'", () => {
   // app sees no click at all), never delivered to whatever is there instead. The same invariant holds WITHOUT the
   // option: there the two-frame check refuses almost every attempt ("unstable") — almost, because a frame in which
   // the renderer has not caught up with setData looks stable; what happens then is decided at click time as well.
+  // A press the check let through can still miss at the `click` event, where MapLibre decides what was clicked: the app
+  // then saw ONE click, on nothing, and the action says so and fails — never "clicked", never a second press.
   for (const moving of ['allow', undefined] as const) {
     test(`never a silent mis-click, however fast the target moves (moving: ${moving})`, async ({ page }) => {
       const map = geowright(page);
@@ -64,12 +72,52 @@ test.describe("moving: 'allow'", () => {
       if (outcome === 'clicked') {
         expect(count).toBe(1);
         await baseExpect(page.getByTestId('clicked')).toHaveText('P-1');
+      } else if (/target was no longer under the pointer when the click event fired/.test(outcome)) {
+        expect(count).toBe(1); // sent once, reported as a miss after input
+        expect(outcome).toMatch(/the click was sent once and the target was under the pointer when the press arrived, but .* It is not sent again\./);
+        await baseExpect(page.getByTestId('clicked')).toHaveText('nothing');
       } else {
         expect(count).toBe(0); // gave up honestly: the app never saw a click
         expect(outcome).toMatch(/click was intercepted and cancelled: target was no longer under the pointer|unstable: feature position changed/);
       }
     });
   }
+
+  // The check at the `click` event, made certain: the app moves the map ON THE PRESS (the demo's "jump on press"), so
+  // the target is 60 px away by the time MapLibre attributes the click to a layer. The press was verified and reached the
+  // app; nothing can be recalled: the action fails, says the app's click landed elsewhere, and never presses again. The
+  // app's own handler is the witness: one click, on nothing. Without the check, click() reported success here.
+  for (const [name, act] of [
+    ['click()', (map: MapHandle) => map.feature({ layer: 'parked', id: 9 }).click({ timeout: FAIL_FAST_MS })],
+    ['rightClick()', (map: MapHandle) => map.feature({ layer: 'parked', id: 9 }).rightClick({ timeout: FAIL_FAST_MS })],
+  ] as const) {
+    test(`${name} on an app that moves the map on the press: a failure after input, sent once, the app's click on nothing`, async ({ page }) => {
+      await page.getByTestId('jump-on-press').check();
+      const err = await act(geowright(page)).then(() => null, (e: Error) => e);
+      expect(err?.message).toMatch(/was sent once and the target was under the pointer when the press arrived, but target was no longer under the pointer when the (click|contextmenu) event fired: the app's click landed there, not on the target\. It is not sent again\./);
+      await baseExpect(page.getByTestId('click-count')).toHaveText(name === 'click()' ? '1' : '0'); // (the app counts left clicks)
+      await baseExpect(page.getByTestId(name === 'click()' ? 'clicked' : 'right-clicked')).toHaveText('nothing');
+      expect(await page.evaluate(() => (window as any).__presses)).toBe(1);
+    });
+  }
+
+  test('tap() on an app that moves the map on the press: the same failure after input', async ({ browser }) => {
+    const context = await browser.newContext({ hasTouch: true });
+    const page = await context.newPage();
+    try {
+      await page.goto('/moving.html');
+      const map = geowright(page);
+      await expect(map).toHaveFeature({ layer: 'parked', id: 9 });
+      await page.getByTestId('jump-on-press').check();
+      const err = await map.feature({ layer: 'parked', id: 9 }).tap({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      expect(err?.message).toMatch(/the tap was sent once and the target was under the pointer when the press arrived, but target was no longer under the pointer when the click event fired/);
+      await baseExpect(page.getByTestId('click-count')).toHaveText('1');
+      await baseExpect(page.getByTestId('clicked')).toHaveText('nothing');
+      expect(await page.evaluate(() => (window as any).__presses)).toBe(1);
+    } finally {
+      await context.close();
+    }
+  });
 
   // The click-time check, made certain (0019): as the pointer arrives, the app jumps the map so that the look-alike (P-2,
   // same layer, same look) is where P-1 was. A camera jump is instant for the hit test, so the check sees P-2 under the

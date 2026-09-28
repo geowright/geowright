@@ -269,6 +269,14 @@ const unverified = (what: string, kind: string, why: string) =>
   new InputThrew(new GeowrightError(`${what}: the ${kind} was sent once and reached the page, but it was not verified: ${why}. It is not sent again.`));
 
 /**
+ * A press the check let through, whose click event then missed the target (the map library decides what was clicked
+ * there, after the release; the app may have moved the map on the press, a moving target moves on): the app's click
+ * landed elsewhere. A failure after input, never sent again.
+ */
+const missedAtClick = (what: string, kind: string, why: string) =>
+  new InputThrew(new GeowrightError(`${what}: the ${kind} was sent once and the target was under the pointer when the press arrived, but ${why}: the app's click landed there, not on the target. It is not sent again.`));
+
+/**
  * Real input inside a retry loop. A throw from it may come after the input left (the page got the click, the answer did
  * not come back), and a retry would then click twice: it ends the action with that error instead.
  */
@@ -1074,6 +1082,7 @@ export class FeatureHandle {
         if (verdict.unchecked) throw unverified(what, 'click', verdict.unchecked);
         if (!verdict.fired) return { retry: 'the click never reached the page (is something outside the document covering it?)' };
         if (!verdict.ok) return { retry: `click was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
+        if (verdict.missed) throw missedAtClick(what, 'click', verdict.missed);
       }, opts.moving === 'allow' ? () => this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)) : undefined),
     );
   }
@@ -1122,6 +1131,7 @@ export class FeatureHandle {
         if (verdict.unchecked) throw unverified(what, 'tap', verdict.unchecked);
         if (!verdict.fired) return { retry: 'the tap never reached the page' };
         if (!verdict.ok) return { retry: `tap was intercepted and cancelled: ${verdict.reason}${aim.learn(verdict)}` };
+        if (verdict.missed) throw missedAtClick(what, 'tap', verdict.missed);
       }),
     );
   }

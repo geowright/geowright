@@ -32,11 +32,22 @@ map.on('click', (e) => {
   const f = map.queryRenderedFeatures(e.point, { layers: ['patrols', 'parked'] })[0];
   el('clicked').textContent = f ? String(f.properties.unit) : 'nothing';
 });
+map.on('contextmenu', (e) => {
+  const f = map.queryRenderedFeatures(e.point, { layers: ['patrols', 'parked'] })[0];
+  el('right-clicked').textContent = f ? String(f.properties.unit) : 'nothing';
+});
 let dblclicks = 0;
 map.on('dblclick', (e) => {
   el('dblclick-count').textContent = String(++dblclicks);
   const f = map.queryRenderedFeatures(e.point, { layers: ['patrols', 'parked'] })[0];
   el('dblclicked').textContent = f ? String(f.properties.unit) : 'nothing';
+});
+// An app that moves the map ON THE PRESS (a "jump on press" checkbox): the release, and the click MapLibre attributes to a
+// layer, then happen 60 px from where the press was. Instant for the hit test (no animation), so what the click lands on
+// is decided, not raced.
+map.on('mousedown', () => {
+  (window as any).__presses = ((window as any).__presses ?? 0) + 1;
+  if ((el('jump-on-press') as HTMLInputElement).checked) map.panBy([60, 0], { animate: false });
 });
 map.on('mousemove', (e) => {
   const f = map.queryRenderedFeatures(e.point, { layers: ['patrols', 'parked'] })[0];
