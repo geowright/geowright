@@ -264,6 +264,13 @@ class InputThrew {
   constructor(readonly error: unknown) {}
 }
 
+/** The page has not said where the input landed by the action's deadline (`_disarm`). */
+const LATE = Symbol('late');
+
+/** The input was sent, and the page did not say where it landed in time: a failure after input, never sent again. */
+const unconfirmed = (what: string, kind: string, timeout: number) =>
+  new InputThrew(new UnresponsiveError(`${what}: the ${kind} was sent once, and the page did not say where it landed within the ${timeout}ms timeout (a busy main thread: heavy rendering, or an overloaded machine). It is not sent again.`)); // Unresponsive: the map state and the screenshot would wait for the page too
+
 /** A press that reached the page without passing the check: a failure after input, never sent again (as InputThrew). */
 const unverified = (what: string, kind: string, why: string) =>
   new InputThrew(new GeowrightError(`${what}: the ${kind} was sent once and reached the page, but it was not verified: ${why}. It is not sent again.`));
@@ -502,13 +509,17 @@ export class MapHandle {
   /**
    * @internal Ends a click-time (hover-time) check and returns what it saw. `undefined`: the check is gone with the page
    * it was armed in — the input navigated, so the round trip failed or reached a fresh page. Real input left, so it is
-   * taken as DELIVERED, as Playwright takes a click that navigates: it must never be sent again.
+   * taken as DELIVERED, as Playwright takes a click that navigates: it must never be sent again. With `deadline` (the
+   * action's): LATE when the page has not said where the input landed by then — a page that stalled after the press
+   * held the action for as long as it stalled. That too is after input: the caller fails and never sends it again (the
+   * abandoned round trip ends the check when the page gets to it).
    */
-  async _disarm(token: string): Promise<ClickVerdict | undefined> {
+  async _disarm(token: string, deadline?: number): Promise<ClickVerdict | undefined | typeof LATE> {
     try {
-      return (await this._call<ClickVerdict | null>('disarmClick', token)) ?? undefined;
-    } catch {
-      return undefined;
+      const call = this._call<ClickVerdict | null>('disarmClick', token);
+      return (await (deadline === undefined ? call : this._answerBy(deadline, 'disarmClick', call))) ?? undefined;
+    } catch (e) {
+      return e instanceof DeadlineError ? LATE : undefined;
     }
   }
 
@@ -1068,15 +1079,16 @@ export class FeatureHandle {
       this._withActionPoint(what, opts, async (p, aim, armed, deadline) => {
         // Arm an in-page check that re-runs the hit test at the instant the REAL event arrives.
         const token = armed ?? (await this.map._armBy(deadline, 'armClick', this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts))));
-        let verdict: ClickVerdict | undefined;
+        let verdict: ClickVerdict | undefined | typeof LATE;
         try {
           await sendInput(async () => {
             if (opts.moving !== 'allow') await this.map.page.mouse.move(p.x, p.y); // (mouse.click moves too; for a moving target the extra round trip is lateness)
             await withModifiers(this.map.page, opts.modifiers, () => this.map.page.mouse.click(p.x, p.y, { button: opts.button, clickCount: opts.clickCount }));
           });
         } finally {
-          verdict = await this.map._disarm(token);
+          verdict = await this.map._disarm(token, deadline);
         }
+        if (verdict === LATE) throw unconfirmed(what, 'click', opts.timeout ?? this.map.timeout);
         // Retried ONLY when the check positively says the click was swallowed, or that nothing reached the page at all.
         if (!verdict) return; // the page it was armed in is gone: the click navigated — delivered, never sent again
         if (verdict.unchecked) throw unverified(what, 'click', verdict.unchecked);
@@ -1119,14 +1131,15 @@ export class FeatureHandle {
     }
     // A moving target: one move (every extra step is latency); the check is armed before the pixel is computed.
     await step(what, () =>
-      this._withActionPoint(what, opts, async (p, aim, armed) => {
+      this._withActionPoint(what, opts, async (p, aim, armed, deadline) => {
         const token = armed!;
-        let verdict: ClickVerdict | undefined;
+        let verdict: ClickVerdict | undefined | typeof LATE;
         try {
           await sendInput(() => this.map.page.mouse.move(p.x, p.y));
         } finally {
-          verdict = await this.map._disarm(token);
+          verdict = await this.map._disarm(token, deadline);
         }
+        if (verdict === LATE) throw unconfirmed(what, 'pointer', opts.timeout ?? this.map.timeout);
         if (!verdict) return; // the page it was armed in is gone: delivered
         if (!verdict.fired) return { retry: 'the pointer never reached the page' };
         if (!verdict.ok) return { retry: `hover missed the moving target: ${verdict.reason}${aim.learn(verdict)}` };
@@ -1140,12 +1153,13 @@ export class FeatureHandle {
     await step(what, () =>
       this._withActionPoint(what, opts, async (p, aim, _armed, deadline) => {
         const token = await this.map._armBy(deadline, 'armClick', this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)));
-        let verdict: ClickVerdict | undefined;
+        let verdict: ClickVerdict | undefined | typeof LATE;
         try {
           await sendInput(() => this.map.page.touchscreen.tap(p.x, p.y));
         } finally {
-          verdict = await this.map._disarm(token);
+          verdict = await this.map._disarm(token, deadline);
         }
+        if (verdict === LATE) throw unconfirmed(what, 'tap', opts.timeout ?? this.map.timeout);
         if (!verdict) return; // the page it was armed in is gone: the tap navigated — delivered, never sent again
         if (verdict.unchecked) throw unverified(what, 'tap', verdict.unchecked);
         if (!verdict.fired) return { retry: 'the tap never reached the page' };

@@ -627,7 +627,10 @@ under contention; the earlier 10 s budget failed exactly where CI is slow. The d
 read when used, so `test.slow()` scales it — a page that is slow enough to need `test.slow()` needed every geowright
 timeout raised by hand before. And an action's `timeout` is wall-clock: a side-effect-free round trip into a busy page
 (finding the pixel) is abandoned at the deadline — an earlier implementation took 33 s for `{ timeout: 2000 }` under
-CPU contention. Real input is never abandoned half-way. What follows a failure is bounded too: on a page that stopped
+CPU contention. Real input is never abandoned half-way; what the page says about where it landed (the click-time check's
+verdict) is waited for until the action's deadline, and a page that has not said by then makes the action fail after
+input, sent once and never again (it used to hold the action for as long as the page stalled, then report the late
+verdict). What follows a failure is bounded too: on a page that stopped
 answering, the map state and the screenshot are skipped (they would wait for it: `click({ timeout: 1000 })` on a page
 blocked for 5 s returned after 5 s, now after 1 s); otherwise they get 2 s. An action with several points (a drag, a
 shape) has one timeout for all of them, not one each. A round trip is never abandoned before it has had 500 ms: a last
