@@ -1,6 +1,7 @@
 node_modules/
 dist/
 test-results/
+test-results-failed.tgz   # scripts/failed-test-results.mjs: the CI failure artifact
 playwright-report/
 .DS_Store
 .playwright-mcp/

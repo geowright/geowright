@@ -73,11 +73,14 @@ jobs:
       - name: Machine load after
         if: always()
         run: uptime
+      - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
+        if: failure()
+        run: node scripts/failed-test-results.mjs
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: suite-test-results
-          path: test-results/
+          path: test-results-failed.tgz
           retention-days: 5
 
   # The version matrix (Mapbox GL JS 1.13, MapLibre 2-6): one small page, ~85 tests, a few minutes.
@@ -105,11 +108,14 @@ jobs:
           key: pw-${{ runner.os }}-${{ steps.pw.outputs.version }}
       - run: npx playwright install --with-deps chromium
       - run: npm run test:compat
+      - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
+        if: failure()
+        run: node scripts/failed-test-results.mjs
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: compat-test-results
-          path: test-results/
+          path: test-results-failed.tgz
           retention-days: 5
 
   # The @playwright/test peer floor: typecheck + the full suite on EXACTLY the version package.json's
@@ -166,9 +172,12 @@ jobs:
       - name: Machine load after
         if: always()
         run: uptime
+      - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
+        if: failure()
+        run: node scripts/failed-test-results.mjs
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
           name: playwright-floor-test-results
-          path: test-results/
+          path: test-results-failed.tgz
           retention-days: 5
