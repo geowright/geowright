@@ -676,10 +676,10 @@ rest in both the affirmative and the negated form of the check); and the animate
 case described under identity. It also catches flaws in the tests themselves: two wild-example specs
 that could fail on a timing or geometry chance (keyboard zooms pressed faster than the map settled; a
 pixel probe covering only a quarter of an animated canvas) were each reproduced in isolation without contention
-machine and fixed before the suite was counted. At 349 tests (plus 13 opt-in tests skipped), the suite
-passed **6,980 of 6,980 at `--repeat-each=20`, zero flakes, zero retries**. The same commit passed
-the full suite and compatibility matrix on Linux in the official Playwright container. As the suite
-grew, earlier complete 20x runs passed 6,240 of 6,240 (312 tests), 6,080 of 6,080 (304 tests),
+machine and fixed before the suite was counted. At 606 tests (plus 20 opt-in tests skipped), the suite
+passed **12,120 of 12,120 at `--repeat-each=20`, zero flakes, zero retries**, twice on the same code. The same
+code passed the full suite and compatibility matrix on Linux in the official Playwright container. As the suite
+grew, earlier complete 20x runs passed 6,980 of 6,980 (349 tests), 6,240 of 6,240 (312 tests), 6,080 of 6,080 (304 tests),
 5,980 of 5,980 (299 tests), and 5,540 of 5,540 (277 tests). The same suite has
 also been run through hosted Linux continuous integration (software rendering, no GPU, few CPU cores),
 which is measurably slower — the base suite alone runs in on the order of 20 minutes there versus about
