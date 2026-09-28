@@ -1117,12 +1117,13 @@ export class FeatureHandle {
       return step(what, () =>
         this._withActionPoint(what, opts, async (p, _aim, _armed, deadline) => {
           const token = await this.map._armBy(deadline, 'armHover', this.map._call<string>('armHover', this.wire(opts), this.pointOpts(opts)));
-          let verdict: ClickVerdict | undefined;
+          let verdict: ClickVerdict | undefined | typeof LATE;
           try {
             await sendInput(() => this.map.page.mouse.move(p.x, p.y, { steps: 4 }));
           } finally {
-            verdict = await this.map._disarm(token);
+            verdict = await this.map._disarm(token, deadline);
           }
+          if (verdict === LATE) throw unconfirmed(what, 'pointer', opts.timeout ?? this.map.timeout);
           if (!verdict) return; // the page it was armed in is gone: delivered
           if (!verdict.fired) return { retry: 'the pointer never reached the page' };
           if (!verdict.ok) return { retry: `hover missed the target: ${verdict.reason}` };
