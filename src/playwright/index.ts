@@ -227,8 +227,27 @@ const lookBudget = (deadline: number) => (deadline === Infinity ? undefined : Ma
  */
 const probeBudget = (deadline: number) => (deadline === Infinity ? 5000 : Math.max(100, deadline - Date.now()));
 
+/**
+ * An in-page wait sized from the time left at `deadline`: half of it, so that the answer (with its diagnosis) comes back
+ * before the round trip is abandoned, at most `cap`. Given to `_call` as a function, so that it is sized when the call is
+ * SENT, and again when it is re-sent after the engine's injection.
+ */
+const idleWait = (deadline: number, cap: number) => () => Math.round(Math.max(50, Math.min(cap, (deadline === Infinity ? 2 * cap : deadline - Date.now()) / 2)));
+
 /** The injection of the in-page engine under way, per page: concurrent first calls share it. */
 const injections = new WeakMap<Page, Promise<unknown>>();
+
+/**
+ * What a round trip into the page went through before it was answered, or abandoned: the engine was missing, and the
+ * page answered that after `probeMs` and its injection after another `injectedMs`. The message of an abandoned call
+ * says so, instead of blaming a busy main thread for time the injection took.
+ */
+interface CallLog {
+  sentAt: number;
+  probeMs?: number;
+  injectedMs?: number;
+}
+const callLogs = new WeakMap<Promise<unknown>, CallLog>();
 
 /** A token per action: the page keeps a pixel-probe verdict for the retries of that one action only (decision 0022). */
 let actionCount = 0;
@@ -449,7 +468,16 @@ export class MapHandle {
   /** @internal `call` (a round trip into the page, `method`), abandoned at `deadline` — but never before MIN_ANSWER_MS. */
   _answerBy<T>(deadline: number, method: string, call: Promise<T>): Promise<T> {
     const budget = deadline === Infinity ? Infinity : Math.max(MIN_ANSWER_MS, Math.round(deadline - Date.now()));
-    return within(call, budget, () => `the page did not answer "${method}" in the time that was left (${budget}ms; a busy main thread: heavy rendering, or an overloaded machine)`);
+    return within(call, budget, () => {
+      const log = callLogs.get(call);
+      const injected =
+        log?.probeMs === undefined
+          ? ''
+          : log.injectedMs === undefined
+            ? `: the engine was not in the page yet — the page answered that after ${log.probeMs}ms, and its injection was still under way at the deadline`
+            : `: the engine was not in the page yet — the page answered that after ${log.probeMs}ms and its injection after another ${log.injectedMs}ms; the call itself then had ${Math.max(0, budget - log.probeMs - log.injectedMs)}ms`;
+      return `the page did not answer "${method}" in the time that was left (${budget}ms${injected}; a busy main thread: heavy rendering, or an overloaded machine)`;
+    });
   }
 
   /**
@@ -476,8 +504,21 @@ export class MapHandle {
     }
   }
 
-  /** @internal RPC into the in-page engine; (re)injects it on demand, e.g. after navigation. */
-  async _call<T>(method: string, ...args: unknown[]): Promise<T> {
+  /**
+   * @internal RPC into the in-page engine; (re)injects it on demand, e.g. after navigation. An argument given as a
+   * function is computed when the call is sent — and again when it is re-sent after the injection: a time budget the
+   * page is given (an in-page wait, a probe's `budgetMs`) is sized from the time actually left THEN. Sized before, the
+   * first `waitForIdle` on a page got a wait that could not end before the deadline once the injection had taken its
+   * share, and the error blamed a busy page that had answered twice.
+   */
+  _call<T>(method: string, ...args: unknown[]): Promise<T> {
+    const log: CallLog = { sentAt: Date.now() };
+    const call = this._send<T>(log, method, args);
+    callLogs.set(call, log);
+    return call;
+  }
+
+  private async _send<T>(log: CallLog, method: string, args: unknown[]): Promise<T> {
     const run = () =>
       this.page.evaluate(
         async ([m, id, a]) => {
@@ -485,10 +526,11 @@ export class MapHandle {
           if (!api) return { missing: true as const };
           return { missing: false as const, value: await api[m as string](id, ...(a as unknown[])) };
         },
-        [method, this.mapId, args] as const,
+        [method, this.mapId, args.map((a) => (typeof a === 'function' ? a() : a))] as const,
       );
     let res = await run();
     if (res.missing) {
+      log.probeMs = Date.now() - log.sentAt;
       // One injection per document, however many first calls find it missing at once (the evaluate is ~400 KB).
       let injecting = injections.get(this.page);
       if (!injecting) {
@@ -496,6 +538,7 @@ export class MapHandle {
         injections.set(this.page, injecting);
       }
       await injecting;
+      log.injectedMs = Date.now() - log.sentAt - log.probeMs;
       res = await run();
     }
     return (res as { value: T }).value;
@@ -549,9 +592,10 @@ export class MapHandle {
         // Abandoned at the deadline like every other wait: the in-page wait bounds itself (<= 2s), but a page whose main
         // thread is busy answers when it can. The in-page wait takes half the time left, so that its answer, with the
         // diagnosis ("the app keeps replacing the data: never idle") that is the point of the error message, comes back
-        // in time on a page that animates itself (a setData loop answered late when the wait took all but 500 ms).
-        const left = deadline === Infinity ? 4000 : deadline - Date.now();
-        const ok = await this._callBy<boolean>(deadline, 'waitForIdle', Math.round(Math.max(50, Math.min(left / 2, 2000))));
+        // in time on a page that animates itself (a setData loop answered late when the wait took all but 500 ms). It is
+        // sized when the call is sent (idleWait): on a fresh page the first call injects the engine first, and a wait
+        // sized before that could not end before the deadline (an animated canvas page: 1250 ms sent with 1211 ms left).
+        const ok = await this._callBy<boolean>(deadline, 'waitForIdle', idleWait(deadline, 2000));
         if (!ok) {
           const why = await this._callBy<string | undefined>(Date.now() + DIAGNOSTIC_GRACE_MS, 'idleDiagnosis').catch(() => undefined);
           return { retry: `map did not become idle (still moving, loading tiles, or repainting)${why ? ` — ${why}` : ''}` };
@@ -737,7 +781,7 @@ export class MapHandle {
       if ('outside' in r && opts.autoPan && !panned) {
         panned = true;
         await this._answerBy(by, 'revealWorld', this._call('revealWorld', at)); // the pan is sent either way; its answer is not waited for past the deadline
-        await this._callBy(by, 'waitForIdle', 2000);
+        await this._callBy(by, 'waitForIdle', idleWait(by, 2000));
         return { retry: 'panned to location' };
       }
       return 'retry' in r ? { retry: r.retry } : r;
@@ -970,7 +1014,7 @@ export class FeatureHandle {
         const token = arming && (await this.map._armBy(deadline, 'arm', arming));
         // Looking for the pixel may be abandoned at the deadline (a pixel probe it ran puts the style back by itself); real
         // input (below) never is.
-        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), { ...this.pointOpts(opts, aim.leadMs), budgetMs: lookBudget(deadline), action }).catch((e) => {
+        const r = await this.map._callBy<ActionPointResult>(deadline, 'actionPoint', this.wire(opts), () => ({ ...this.pointOpts(opts, aim.leadMs), budgetMs: lookBudget(deadline), action })).catch((e) => {
           release(token);
           throw e;
         });
@@ -985,7 +1029,7 @@ export class FeatureHandle {
                 : await this.map._answerBy(deadline, 'reveal', this.map._call<boolean>('reveal', toWire(this.query)));
             if (revealed) {
               panned = true;
-              await this.map._callBy(deadline, 'waitForIdle', 2000);
+              await this.map._callBy(deadline, 'waitForIdle', idleWait(deadline, 2000));
               return { retry: 'auto-panned to feature' };
             }
           }
@@ -1246,7 +1290,7 @@ class Settle {
   async wait(map: MapHandle, i: number, deadline: number, grow: boolean): Promise<{ settled: boolean; why?: string }> {
     const cap = this.never || !grow ? 500 : [500, 1000, 2000][Math.min(i, 2)];
     // The in-page wait is bounded by itself; the round trip to it is abandoned at the deadline (a page that cannot answer).
-    const r = await map._callBy<{ idle: boolean; never: boolean; why?: string }>(deadline, 'settle', Math.max(50, Math.min(cap, deadline - Date.now())));
+    const r = await map._callBy<{ idle: boolean; never: boolean; why?: string }>(deadline, 'settle', () => Math.max(50, Math.min(cap, deadline - Date.now())));
     if (r.never) this.never = true;
     return { settled: r.idle || r.never, why: r.why };
   }
@@ -1358,7 +1402,7 @@ const matchers = {
         // Absence needs a settled map: a raster whose tiles are still loading contributes nothing YET. A positive
         // assertion waits for pixels to appear and needs no settling — nor the cost of it on an animated source.
         const s: { settled: boolean; why?: string } = this.isNot ? await settle.wait(received, i, deadline, true) : { settled: true };
-        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number }; hidden?: boolean } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24, probeBudget(deadline));
+        const r = await received._call<{ ok: true; diff: number; surface: { x: number; y: number }; hidden?: boolean } | { ok: false; message: string }>('layerPixels', layer, options.at, options.radiusPx ?? 24, () => probeBudget(deadline));
         if (!r.ok) return { verdict: undefined, why: (why = r.message) };
         why = r.hidden ? `layer "${layer}" is hidden (its visibility is "none")` : r.diff > 0 ? `pixels differ by ${r.diff} with and without the layer` : `hiding the layer changes nothing within ${options.radiusPx ?? 24}px of (${Math.round(r.surface.x)},${Math.round(r.surface.y)})`;
         if (r.diff > 0) return { verdict: true };
@@ -1425,7 +1469,7 @@ const matchers = {
           const reuse = last && last.key === key && Date.now() - last.at < last.every;
           const probe = reuse
             ? last!.probe
-            : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), { ignoreLayers: map.ignoreLayers, budgetMs: probeBudget(deadline) });
+            : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), () => ({ ignoreLayers: map.ignoreLayers, budgetMs: probeBudget(deadline) }));
           if (!probe.ok) return invisible(`pixels: no clean point to probe — ${probe.message}`);
           if (!reuse) last = probe.inconclusive === undefined ? { key, at: Date.now(), every: last?.key === key ? Math.min(last.every * 2, 8000) : 1000, probe } : undefined;
           // No verdict YET — the pixels changed by themselves, or no frame came in time: never "passed on paint alone".
@@ -1471,7 +1515,7 @@ ${indent(explain)}`,
     const map = received.map;
     let verdict: GeometryVerdict = { ok: false, reason: 'never checked' };
     const { pass, inconclusive, unanswered } = await pollVerdict(timeout, this.isNot, async (_i, deadline) => {
-      await map._callBy(deadline, 'waitForIdle', Math.max(50, Math.min(500, deadline - Date.now())));
+      await map._callBy(deadline, 'waitForIdle', () => Math.max(50, Math.min(500, deadline - Date.now())));
       let exp = expected as GeometryExpectation;
       if (Array.isArray(expected)) {
         // Found on a wild app: [[lng, lat], …] here ended as "Invalid LngLat object: (NaN, NaN)" from inside the page.

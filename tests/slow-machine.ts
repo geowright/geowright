@@ -1,6 +1,18 @@
 import type { Page } from '@playwright/test';
 
 /**
+ * Holds the page's main thread busy for `ms` (synchronous work): every round trip into it waits until that ends.
+ * Started, not awaited; wall-clock, so it does not scale with GEOWRIGHT_CPU_THROTTLE.
+ */
+export const block = (page: Page, ms: number) =>
+  void page
+    .evaluate((ms) => {
+      const end = Date.now() + ms;
+      while (Date.now() < end);
+    }, ms)
+    .catch(() => {});
+
+/**
  * GEOWRIGHT_CPU_THROTTLE=N makes every page's JavaScript run N times slower (Chrome DevTools' CPU throttling): a slow
  * machine on demand, to MEASURE what the library does there without loading the real machine (this one is shared).
  * It slows the page's main thread, not the GPU process — software GL frames stay as fast as the machine makes them.
