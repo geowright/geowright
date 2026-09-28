@@ -78,7 +78,7 @@ test.describe("moving: 'allow'", () => {
         await baseExpect(page.getByTestId('clicked')).toHaveText('nothing');
       } else {
         expect(count).toBe(0); // gave up honestly: the app never saw a click
-        expect(outcome).toMatch(/click was intercepted and cancelled: target was no longer under the pointer|unstable: feature position changed/);
+        expect(outcome).toMatch(/click was intercepted and cancelled: target was no longer under the pointer|unstable: (feature position changed|the data of source "patrols" was replaced)/);
       }
     });
   }
@@ -117,6 +117,42 @@ test.describe("moving: 'allow'", () => {
     } finally {
       await context.close();
     }
+  });
+
+  // "At rest" is "same pixel two frames running AND its source's data not replaced in between". At speed 0 the patrols
+  // stand still, but the app still re-sets their source on every frame: a starved renderer or worker would show a moving
+  // one at the same pixel just the same, so the two-frame check alone cannot tell them apart (it let a hover through on
+  // MapLibre's "animate a point" under contention, onto where the point had been drawn). Such a feature needs
+  // `moving: 'allow'`, whose check at the real event is what tells a hit from a miss.
+  test('a feature whose source is re-set every frame is not at rest, even standing still: refused without { moving: \'allow\' }, clicked with it', async ({ page }) => {
+    const map = geowright(page);
+    await page.getByTestId('speed').fill('0');
+    const err = await map.feature({ layer: 'patrols', id: 1 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(err?.message).toMatch(/unstable: the data of source "patrols" was replaced between two animation frames \(setData in a requestAnimationFrame loop or a timer\?\): the feature is not at rest, even where it is drawn at the same pixel/);
+    await baseExpect(page.getByTestId('click-count')).toHaveText('0');
+    await map.feature({ layer: 'patrols', id: 1 }).click({ moving: 'allow' });
+    await baseExpect(page.getByTestId('clicked')).toHaveText('P-1');
+    await map.feature({ layer: 'parked', id: 9 }).click(); // a source that is not re-set: at rest as before
+    await baseExpect(page.getByTestId('clicked')).toHaveText('P-9');
+  });
+
+  // The hover-time check, made certain (as the click-time one above): as the pointer arrives, the app jumps the map, so
+  // the pointer is over nothing. A hover cannot be taken back (the app saw a mousemove there, as it would a person's),
+  // but it is not reported as a hover of the target: the action aims again, and the app's readout ends on the target.
+  // Without the check, hover() resolved after the first move, with the readout empty.
+  test('hover(): a map that jumps as the pointer arrives is aimed at again; the hover reported is one the app saw', async ({ page }) => {
+    const map = geowright(page);
+    await page.evaluate(() => {
+      const w = window as any;
+      w.__sabotaged = 0;
+      window.addEventListener('mousemove', () => {
+        w.__sabotaged++;
+        w.__geowright_maps.main.panBy([60, 0], { animate: false });
+      }, { capture: true, once: true });
+    });
+    await map.feature({ layer: 'parked', id: 9 }).hover();
+    expect(await page.evaluate(() => (window as any).__sabotaged), 'the premise: the map jumped as the pointer arrived').toBe(1);
+    await baseExpect(page.getByTestId('hovered')).toHaveText('P-9');
   });
 
   // The click-time check, made certain (0019): as the pointer arrives, the app jumps the map so that the look-alike (P-2,

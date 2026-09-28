@@ -539,12 +539,23 @@ export class Engine<W = unknown> {
     };
     const first = await once();
     if (!first.ok) return first;
+    // A source whose data the app replaces every frame (setData in a requestAnimationFrame loop) is not at rest, whatever
+    // pixel its feature is drawn at: when the renderer, or the GeoJSON worker, is starved, two frames show the feature at
+    // the same pixel although the app has moved it on. So "same pixel two frames running" is checked together with "its
+    // data was not replaced in between" — cheap (a counter), and it makes the refusal of a perpetually re-set feature
+    // absolute instead of "almost always". A feature at rest in such a source needs `moving: 'allow'` (a check when the
+    // real event arrives), since nothing else can tell it from one that is moving.
+    const source = this.adapter.listLayers().find((l) => l.id === first.feature.layer)?.source;
+    const version = source !== undefined ? this.adapter.dataVersion?.(source) : undefined;
     await twoFrames();
     if (this.adapter.isMoving()) return fail('moving', 'map started moving');
     const second = await once();
     if (!second.ok) return second;
     if (Math.hypot(first.surface.x - second.surface.x, first.surface.y - second.surface.y) > 1) {
       return fail('unstable', 'feature position changed between two animation frames');
+    }
+    if (version !== undefined && this.adapter.dataVersion!(source!) !== version) {
+      return fail('unstable', `the data of source "${source}" was replaced between two animation frames (setData in a requestAnimationFrame loop or a timer?): the feature is not at rest, even where it is drawn at the same pixel`);
     }
     return second;
   }

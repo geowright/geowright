@@ -1097,8 +1097,27 @@ export class FeatureHandle {
 
   async hover(opts: ActionOptions = {}): Promise<void> {
     const what = `${this}.hover()`;
-    if (opts.moving !== 'allow') return step(what, () => this._withActionPoint(what, opts, async (p) => void (await sendInput(() => this.map.page.mouse.move(p.x, p.y, { steps: 4 })))));
-    // A moving target: one move (every extra step is latency), verified at the instant the pointer arrives.
+    // Verified at the instant the pointer arrives, as a click is at its press: between the aim and the move the app may
+    // have drawn something over the target or moved the map (a hover used to have no such check and resolved either way).
+    // Nothing is swallowed — a pointer that arrives elsewhere has merely hovered what is there, as a person's would — but
+    // the action does not report a hover it cannot see: it aims again.
+    if (opts.moving !== 'allow') {
+      return step(what, () =>
+        this._withActionPoint(what, opts, async (p, _aim, _armed, deadline) => {
+          const token = await this.map._armBy(deadline, 'armHover', this.map._call<string>('armHover', this.wire(opts), this.pointOpts(opts)));
+          let verdict: ClickVerdict | undefined;
+          try {
+            await sendInput(() => this.map.page.mouse.move(p.x, p.y, { steps: 4 }));
+          } finally {
+            verdict = await this.map._disarm(token);
+          }
+          if (!verdict) return; // the page it was armed in is gone: delivered
+          if (!verdict.fired) return { retry: 'the pointer never reached the page' };
+          if (!verdict.ok) return { retry: `hover missed the target: ${verdict.reason}` };
+        }),
+      );
+    }
+    // A moving target: one move (every extra step is latency); the check is armed before the pixel is computed.
     await step(what, () =>
       this._withActionPoint(what, opts, async (p, aim, armed) => {
         const token = armed!;

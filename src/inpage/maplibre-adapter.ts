@@ -612,6 +612,17 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   /** `sourcedata` events per source, counted from the first gate on: what an overlay draws may have changed since. */
   private dataEvents?: Map<string, number>;
 
+  /** Data replacements per source (`sourcedataloading` without a tile: setData, a new URL), counted from the first ask on. */
+  private dataVersions?: Map<string, number>;
+
+  dataVersion(source: string): number {
+    if (!this.dataVersions) {
+      const versions = (this.dataVersions = new Map());
+      this.map.on('sourcedataloading', (e: { sourceId?: string; tile?: unknown }) => void (e.sourceId && !e.tile && versions.set(e.sourceId, (versions.get(e.sourceId) ?? 0) + 1)));
+    }
+    return this.dataVersions.get(source) ?? 0;
+  }
+
   pixelOnly(layer: string): boolean {
     return isPixelOnlyType(this.map.getLayer(layer)?.type);
   }
