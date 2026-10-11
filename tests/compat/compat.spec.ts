@@ -335,6 +335,112 @@ for (const lib of LIBS) {
       if (e) expect(e.message).toMatch(/the app keeps replacing the data of source\(s\) loop \(\d+ times in \d+ms\)/);
     });
 
+    for (const how of ['clear, then load', 'a URL, then another'] as const) {
+      test(`a .not waits for data that is replaced while it loads ("${how}" is not a setData loop)`, async ({ map, page }) => {
+        // Every version starts a load for both calls, inside one settle wait. Read as a setData loop, the map was
+        // "never idle" and the .not passed half a second into the load. "A URL, then another": MapLibre 5 and 6 start
+        // the second URL only once the first has loaded, with the first one's data put into the source meanwhile, which
+        // read as inline data, re-set twice. Mapbox GL JS 1.13 fails this for another reason: its GeoJSONSource reports
+        // itself loaded as soon as the FIRST of the two loads has finished, and the map fires 'idle' (measured: 19 ms
+        // after the two calls, isSourceLoaded true; 16 ms for two URLs) while the URL is still being fetched, so the
+        // .not has an idle map to conclude from (with two URLs, both starts read as URLs: no loop, only the early
+        // 'idle'). MapLibre 2-6 report the source as loading until the URL has arrived (measured on 2 the same way). A
+        // known limit, in the README (Limits and the support table) and in docs/DESIGN.md (Costs and known
+        // limitations).
+        test.fixme(lib.alias === 'mapbox-gl-1', "Mapbox GL JS 1.13 fires 'idle' while a second GeoJSON load is still fetching its URL");
+        const fc = (name: string) => JSON.stringify({ type: 'FeatureCollection', features: [{ type: 'Feature', properties: { name }, geometry: { type: 'Point', coordinates: [34.8, 32.08] } }] });
+        await page.route('**/first-load.geojson', (r) => r.fulfill({ contentType: 'application/json', body: fc('first') })); // a fast server
+        await page.route('**/clear-then-load.geojson', async (r) => {
+          await new Promise((res) => setTimeout(res, 3000)); // the server is slow; the test does not sleep
+          await r.fulfill({ contentType: 'application/json', body: fc('X') });
+        });
+        await page.evaluate(() => {
+          const m = (window as any).__geowright_maps.main;
+          m.addSource('results', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+          m.addLayer({ id: 'results', type: 'circle', source: 'results', paint: { 'circle-radius': 8 } });
+        });
+        await map.waitForIdle();
+        await page.evaluate((how) => {
+          const m = (window as any).__geowright_maps.main;
+          // the app clears its results (or asks for some) and asks for new ones, on the next frame: the one the
+          // assertion's wait asks for
+          m.once('render', () => {
+            m.getSource('results').setData(how === 'clear, then load' ? { type: 'FeatureCollection', features: [] } : `${location.origin}/first-load.geojson`);
+            m.getSource('results').setData(`${location.origin}/clear-then-load.geojson`);
+          });
+        }, how);
+        const X = { layer: 'results', where: { name: 'X' } };
+        const e = await expect(map).not.toHaveFeature(X, { timeout: 6000 }).then(() => null, (e: Error) => e);
+        await expect(map, 'the premise: X does arrive').toHaveFeature(X);
+        expect(e, '.not.toHaveFeature passed while the data with X was still loading').not.toBeNull();
+      });
+    }
+
+    test('.not.toHaveGeometry waits while a GeoJSON URL source loads its new data', async ({ map, page }) => {
+      // Before MapLibre 4 there is no getData(): a URL source's geometry is read from what is DRAWN, which is still the
+      // old point while the new data is on its way. The .not compared against it and passed half a second in. MapLibre
+      // 4-6 read the data, and getData() waits for it.
+      const P0 = [34.79, 32.07];
+      const P1 = [34.805, 32.075];
+      const at = (coordinates: number[]) => JSON.stringify({ type: 'FeatureCollection', features: [{ type: 'Feature', id: 1, properties: { name: 'S' }, geometry: { type: 'Point', coordinates } }] });
+      let release!: () => void;
+      const answer = new Promise<void>((r) => (release = r));
+      await page.route('**/moving-1.geojson', (r) => r.fulfill({ contentType: 'application/json', body: at(P0) }));
+      await page.route('**/moving-2.geojson', async (r) => {
+        await answer; // the server answers once the assertion is over; the test does not sleep
+        await r.fulfill({ contentType: 'application/json', body: at(P1) });
+      });
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.addSource('moving', { type: 'geojson', data: `${location.origin}/moving-1.geojson` });
+        m.addLayer({ id: 'moving', type: 'circle', source: 'moving', paint: { 'circle-radius': 8, 'circle-color': '#f0f' } });
+      });
+      const shape = map.feature({ layer: 'moving' });
+      await expect(shape, 'the premise: the point is drawn at P0').toHaveGeometry({ type: 'Point', coordinates: P0 });
+      await page.evaluate(() => {
+        (window as any).__geowright_maps.main.getSource('moving').setData(`${location.origin}/moving-2.geojson`); // (MapLibre 6 returns a promise of the load)
+      });
+      const e = await expect(shape).not.toHaveGeometry({ type: 'Point', coordinates: P1 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      release();
+      await expect(shape, 'the premise: the point moves to P1 once the data is in').toHaveGeometry({ type: 'Point', coordinates: P1 });
+      expect(e, '.not.toHaveGeometry(P1) passed while the data with P1 was still loading').not.toBeNull();
+    });
+
+    test('a .not that names no layer waits while a replaced style loads (the default fadeDuration)', async ({ map: _main, page }) => {
+      // setStyle(url, { diff: false }) throws the old style away at once; until the new one is in, getStyle() has no
+      // sources to call pending. MapLibre 3-6 render the new placement's symbol fade meanwhile (300 ms by default),
+      // which read as continuous repainting: "never idle", and the .not passed half a second in. This page's own map
+      // has fadeDuration 0, which hides that, so the app here is a second map with the library's defaults. On MapLibre
+      // 2 and Mapbox GL 1.13, getStyle() throws in that window and the settle wait does not answer at all, so no pass
+      // either.
+      const style = (name: string, color: string) => ({
+        version: 8,
+        sources: { s: { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 1, properties: { name }, geometry: { type: 'Point', coordinates: [34.8, 32.08] } }] } } },
+        layers: [{ id: `bg-${name}`, type: 'background', paint: { 'background-color': '#eceff1' } }, { id: name, type: 'circle', source: 's', paint: { 'circle-radius': 10, 'circle-color': color } }],
+      });
+      let release!: () => void;
+      const answer = new Promise<void>((r) => (release = r));
+      await page.route('**/next-style.json', async (r) => {
+        await answer; // the server answers once the assertion is over; the test does not sleep
+        await r.fulfill({ contentType: 'application/json', body: JSON.stringify(style('dot', '#e91e63')) });
+      });
+      await page.evaluate((first) => {
+        const w = window as any;
+        const div = document.createElement('div');
+        div.style.cssText = 'position:absolute;left:300px;top:20px;width:640px;height:420px;z-index:10';
+        document.body.appendChild(div);
+        w.__geowright_maps.second = new w.__geowright_maps.main.constructor({ container: div, center: [34.8, 32.08], zoom: 11, attributionControl: false, style: first });
+      }, style('first', '#1976d2'));
+      const second = geowright(page, { mapId: 'second' });
+      await expect(second, 'the premise: the second map draws its first style').toHaveFeature({ where: { name: 'first' } });
+      await second.waitForIdle(); // (MapLibre fades symbols in only once a map has been idle)
+      await page.evaluate(() => (window as any).__geowright_maps.second.setStyle(`${location.origin}/next-style.json`, { diff: false }));
+      const e = await expect(second).not.toHaveFeature({ where: { name: 'dot' } }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      release();
+      await expect(second, 'the premise: the new style, with the dot, does load').toHaveFeature({ where: { name: 'dot' } });
+      expect(e, '.not.toHaveFeature passed while the new style, with the dot, was still loading').not.toBeNull();
+    });
+
     test('snapshot: layers, entities, colours, clickable pixels', async ({ map }) => {
       const text = await map.snapshot();
       expect(text).toContain('[places] 5 circle entities');
@@ -396,6 +502,27 @@ for (const lib of LIBS) {
       await expect(map.features({ layer: 'parcels' })).toHaveFeatureCount(3);
       await map.feature({ layer: 'parcels', where: { owner: 'city' } }).click();
       await baseExpect(page.getByTestId('clicked')).toHaveText('parcels:P1');
+    });
+
+    // A tiled source cannot give a feature's data back, so its geometry is read from what is DRAWN: one piece per tile,
+    // clipped at the tile's border. P2 crosses the z12 tile border at lng 34.8046875 and is drawn as two pieces;
+    // `.not.toHaveGeometry(P2's own shape)` compared one of them and passed, silently. A mismatch against a drawn piece
+    // is no verdict.
+    test('toHaveGeometry on a tiled source: a mismatch against a drawn piece is no verdict, never "not that shape"', async ({ map, page }) => {
+      await page.evaluate(() => (window as any).__geowright_maps.main.jumpTo({ center: [34.8, 32.13], zoom: 12 }));
+      await map.waitForIdle();
+      const p2 = map.feature({ layer: 'parcels', where: { parcel: 'P2' } });
+      const shape = PARCELS.features[2].geometry;
+      await expect(map.features({ layer: 'parcels', where: { parcel: 'P2' } }), 'the premise: P2 is one feature').toHaveFeatureCount(1);
+      const pieces = await page.evaluate(() => (window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['parcels'] }).filter((f: any) => f.properties.parcel === 'P2').length);
+      baseExpect(pieces, 'the premise: P2 is drawn as more than one piece (it crosses the z12 tile border)').toBeGreaterThan(1);
+      const not = await expect(p2).not.toHaveGeometry(shape, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      expect(not, '.not.toHaveGeometry(the shape it has) passed against one tile-clipped piece').not.toBeNull();
+      expect(not?.message).toContain('no verdict: only one drawn piece could be compared');
+      const has = await expect(p2).toHaveGeometry(shape, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      expect(has?.message, 'the positive cannot see the whole shape either, and says so').toContain('no verdict: only one drawn piece could be compared');
+      // P1 lies inside one tile: drawn whole, and a drawn piece that matches is still a match
+      await expect(map.feature({ layer: 'parcels', where: { parcel: 'P1' } })).toHaveGeometry(PARCELS.features[1].geometry);
     });
 
     test('camera and locations: toHaveView, clickAt, drag pans, geometry from the source', async ({ map, page }) => {

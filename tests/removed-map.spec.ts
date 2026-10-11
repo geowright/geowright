@@ -27,3 +27,25 @@ test('a removed map is not an empty map: negative feature assertions fail on it'
   const count = await rejects(map.features({ layer: 'alerts' }).count());
   expect(count?.message, 'count() of a removed map is an error, not 0').toContain('map canvas is detached from the document');
 });
+
+// toHavePopup and toHaveView too. A removed map still answers with its last camera, and the hit test that decides a
+// popup's `feature` answers nothing on it: each of these passed.
+test('a removed map is no verdict for toHavePopup and toHaveView either, in both polarities', async ({ map, page }) => {
+  await map.feature({ layer: 'alerts', id: 1 }).click();
+  await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 1 } });
+  const { zoom } = await map.viewState();
+  await page.evaluate(() => (window as any).__geowright_maps.main.remove());
+  const verdict = (p: Promise<unknown>) => p.then(() => 'passed', (e: Error) => (e.message.includes('map canvas is detached from the document') ? 'no verdict: detached' : e.message));
+  const t = { timeout: FAIL_FAST_MS };
+  expect({
+    'not.toHavePopup({ feature })': await verdict(expect(map).not.toHavePopup({ feature: { layer: 'alerts', id: 1 } }, t)),
+    'not.toHavePopup()': await verdict(expect(map).not.toHavePopup({}, t)),
+    'not.toHaveView({ zoom: 3 })': await verdict(expect(map).not.toHaveView({ zoom: 3 }, t)),
+    'toHaveView({ zoom: its last zoom })': await verdict(expect(map).toHaveView({ zoom }, t)),
+  }).toEqual({
+    'not.toHavePopup({ feature })': 'no verdict: detached',
+    'not.toHavePopup()': 'no verdict: detached',
+    'not.toHaveView({ zoom: 3 })': 'no verdict: detached',
+    'toHaveView({ zoom: its last zoom })': 'no verdict: detached',
+  });
+});

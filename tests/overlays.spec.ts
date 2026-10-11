@@ -43,6 +43,110 @@ test.describe('DOM markers and popups', () => {
     expect(e?.message).toContain('the map was moving');
   });
 
+  // `feature` is decided by a hit test at the popup's tip, so "no popup on that feature" is a verdict about the map's
+  // features as well: a misspelt layer is no verdict, and that absence is taken only from a settled map, as for
+  // toHaveFeature. Both `.not` assertions below used to pass.
+  test('toHavePopup({ feature }) on a layer that does not exist is no verdict, in both polarities', async ({ map }) => {
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 1 } });
+    const typo = { layer: 'alert', id: 1 }; // 'alert' for 'alerts'
+    const not = await expect(map).not.toHavePopup({ feature: typo }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(not?.message ?? '.not.toHavePopup passed').toContain('layer "alert" does not exist');
+    const is = await expect(map).toHavePopup({ feature: typo }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(is?.message ?? 'toHavePopup passed').toContain('layer "alert" does not exist');
+  });
+
+  test('.not.toHavePopup({ feature }) does not pass while that feature is still loading', async ({ map, page }) => {
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 1 } });
+    const at = await map.feature({ layer: 'alerts', id: 1 }).lngLat(); // the popup's tip is there
+    let release!: () => void;
+    const answer = new Promise<void>((r) => (release = r));
+    await page.route('**/late.geojson', async (r) => {
+      await answer; // the server answers once the assertion is over; the test does not sleep
+      await r.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'FeatureCollection', features: [{ type: 'Feature', id: 7, properties: { name: 'late' }, geometry: { type: 'Point', coordinates: [at.lng, at.lat] } }] }) });
+    });
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('late', { type: 'geojson', data: `${location.origin}/late.geojson` });
+      m.addLayer({ id: 'late', type: 'circle', source: 'late', paint: { 'circle-radius': 40, 'circle-color': '#f0f', 'circle-opacity': 0.5 } });
+    });
+    const late = { layer: 'late', id: 7 };
+    const t0 = Date.now();
+    const e = await expect(map).not.toHavePopup({ feature: late }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const took = Date.now() - t0;
+    release();
+    await expect(map, 'the premise: the popup is on that feature once it has loaded').toHavePopup({ feature: late });
+    expect(e?.message ?? `.not.toHavePopup({ feature }) passed after ${took} ms, while the feature's source was loading`).toContain('the map had not settled');
+  });
+
+  // With no popup open at all, there is no popup on that feature, whatever is still loading: a feature that arrives
+  // later cannot put a popup on itself. So the settled map the verdict above waits for is not needed, and on a map that
+  // does not settle in time (a slow page, a tile that never comes) waiting for it failed an absence that was certain.
+  test('.not.toHavePopup({ feature }) passes on a map that is still loading when no popup is open at all', async ({ map, page }) => {
+    let release!: () => void;
+    const answer = new Promise<void>((r) => (release = r));
+    await page.route('**/late.geojson', async (r) => {
+      await answer; // the server answers once the assertion is over; the test does not sleep
+      await r.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'FeatureCollection', features: [] }) });
+    });
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('late', { type: 'geojson', data: `${location.origin}/late.geojson` });
+      m.addLayer({ id: 'late', type: 'circle', source: 'late', paint: { 'circle-radius': 40, 'circle-color': '#f0f' } });
+    });
+    const t0 = Date.now();
+    const e = await expect(map).not.toHavePopup({ feature: { layer: 'alerts', id: 1 } }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const took = Date.now() - t0;
+    const loading = await page.evaluate(() => !(window as any).__geowright_maps.main.isSourceLoaded('late'));
+    release();
+    await expect(page.locator('.maplibregl-popup'), 'the premise: no popup is open').toHaveCount(0);
+    expect(loading, 'the premise: the map was still loading when the assertion ended').toBe(true);
+    expect(e?.message ?? null, `.not.toHavePopup({ feature }) failed after ${took} ms with no popup open`).toBeNull();
+  });
+
+  // A RegExp `text` is tested in Node. The caller's own /g or /y RegExp kept its lastIndex from one poll to the next,
+  // so the open popup matched on one poll and not on the next, and `.not` passed while it was open. Its g and y flags
+  // are ignored, as in a query's `where`.
+  for (const flags of ['', 'g', 'y']) {
+    test(`.not.toHavePopup({ text: /Gas leak/${flags} }) fails while that popup is open`, async ({ map, page }) => {
+      await map.feature({ layer: 'alerts', id: 1 }).click();
+      await expect(map, 'the premise: the popup is open, with that text').toHavePopup({ feature: { layer: 'alerts', id: 1 }, text: 'Gas leak' });
+      const text = new RegExp('Gas leak', flags);
+      const e = await expect(map).not.toHavePopup({ text }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      await expect(page.getByTestId('popup'), 'it really is still open').toBeVisible();
+      expect(e, `.not.toHavePopup({ text: ${text} }) passed while the popup "Gas leak…" was open`).not.toBeNull();
+      expect(e?.message).toContain('Received: 1 matching');
+    });
+  }
+
+  test('a /g RegExp `text` reused after a positive toHavePopup still finds the open popup, and is left as it was', async ({ map, page }) => {
+    await map.feature({ layer: 'alerts', id: 1 }).click();
+    const text = /Gas leak/g;
+    await expect(map).toHavePopup({ text });
+    const left = text.lastIndex;
+    const e = await expect(map).not.toHavePopup({ text }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    await expect(page.getByTestId('popup'), 'it really is still open').toBeVisible();
+    expect(e, `.not.toHavePopup({ text: ${text} }) passed after a positive toHavePopup with the same RegExp`).not.toBeNull();
+    expect(left, "the positive toHavePopup left the caller's RegExp as it was").toBe(0);
+  });
+
+  // `text` is a filter: every other spec passes the open popup's own text, so a matcher that ignored `text` passed them
+  // all. Here the popup on alert 1 says "Gas leak", and "Road closure" is alert 2's text: a popup with the wrong text
+  // is not the popup asked for, in either polarity.
+  test('toHavePopup({ text }) fails, and .not passes, when the open popup says something else', async ({ map, page }) => {
+    const alert1 = { layer: 'alerts', id: 1 };
+    await map.feature(alert1).click();
+    await expect(map, 'the premise: the popup is open on alert 1, with its own text').toHavePopup({ feature: alert1, text: 'Gas leak' });
+    const e = await expect(map).toHavePopup({ feature: alert1, text: 'Road closure' }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    await expect(page.getByTestId('popup'), 'it really is still open').toBeVisible();
+    expect(e, 'toHavePopup passed with a text the open popup does not have').not.toBeNull();
+    // the reason is the text, not a moving camera: a verdict, with the popup that is there named
+    expect(e?.message).toContain('Received: 0 matching; popups on the map: "Gas leakSeverity: high"');
+    await expect(map).not.toHavePopup({ text: /Road closure/ });
+    await expect(map).not.toHavePopup({ feature: alert1, text: 'Road closure' });
+  });
+
   test('marker by location is a normal Locator: click it, read it, open its popup', async ({ map, page }) => {
     await page.getByTestId('toggle-markers').check();
     const hq = await map.marker({ at: { lng: 34.84, lat: 32.12 } });

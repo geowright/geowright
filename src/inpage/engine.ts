@@ -352,12 +352,21 @@ export class Engine<W = unknown> {
    * a removed map with NOTHING (remove() deletes the style) rather than an error, so without this a removed map read
    * as an empty one and every negative assertion passed on it. A 0×0 surface answers from its last frame.
    */
-  private surfaceProblem(): string | undefined {
-    if (this.adapter.surface().isConnected === false) return 'map canvas is detached from the document; the map was removed or its container was detached';
+  surfaceProblem(): string | undefined {
+    const detached = this.detached();
+    if (detached) return detached;
     rememberClosedRoots(this.adapter.surface());
     const size = this.surfaceSize();
     if (size.w < 1 || size.h < 1) return `map canvas is ${size.w}x${size.h}; show or size the map container and call map.resize() before acting`;
     return undefined;
+  }
+
+  /**
+   * The part of surfaceProblem() that holds for the camera too: the surface left the document (the map was removed, or
+   * its container was detached). A removed map's camera still answers, with its last values; a 0×0 map's camera is real.
+   */
+  detached(): string | undefined {
+    return this.adapter.surface().isConnected === false ? 'map canvas is detached from the document; the map was removed or its container was detached' : undefined;
   }
 
   /**

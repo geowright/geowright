@@ -180,7 +180,7 @@ test.describe('timeouts', () => {
   });
 
   test('toHaveView whose page stops answering after its first look reports the camera it last saw', async ({ map, page }) => {
-    await stopsAfterFirstLook(page, 'viewState');
+    await stopsAfterFirstLook(page, 'viewChecked');
     const err = await expect(map).toHaveView({ zoom: 3 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(err?.message).not.toContain('did not answer');
     expect(err?.message).toMatch(/"zoom":12/);

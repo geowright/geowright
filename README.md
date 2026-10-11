@@ -197,10 +197,12 @@ covered pixels are skipped, and a fully covered feature fails with `dom-covered`
 ### Geometry and drawing
 
 `toHaveGeometry` compares the feature's **full** geometry as the map's source holds it (rendered geometry is tile-clipped)
-against a GeoJSON geometry, a vertex list, or `{ circle: { center, edge } }` — in pixels. Draw helpers are input
-choreography, not a binding to one tool: `finish` and `gesture` are explicit because draw tools disagree. Tested against
-terra-draw and mapbox-gl-draw. Tools with a drag threshold (terra-draw: 8 px) offset drag-drawn shapes and whole-shape
-moves by that much — for real users too.
+against a GeoJSON geometry, a vertex list, or `{ circle: { center, edge } }` — in pixels. Where the source cannot give
+its data back (a tiled source; a GeoJSON URL source on MapLibre 2–3 and Mapbox GL 1.13), only one drawn piece can be
+compared, which a tile border may clip: a match passes, a mismatch is no verdict, so `.not.toHaveGeometry` does not pass
+there. Draw helpers are input choreography, not a binding to one tool: `finish` and `gesture` are explicit because
+draw tools disagree. Tested against terra-draw and mapbox-gl-draw. Tools with a drag threshold (terra-draw: 8 px)
+offset drag-drawn shapes and whole-shape moves by that much — for real users too.
 
 ```ts
 const [a, b, c, d] = [{ lng: 34.825, lat: 32.04 }, { lng: 34.85, lat: 32.04 }, { lng: 34.85, lat: 32.055 }, { lng: 34.825, lat: 32.055 }];
@@ -249,7 +251,7 @@ Types, from `'geowright'`: every type a signature names — `MapHandle` `Feature
 | `click` `rightClick` `dblclick` `tap` `(opts?)` | full actionability + click-time verification |
 | `hover(opts?)` | full actionability, verified as the pointer arrives (a miss is aimed at again) |
 | `dragTo(lngLat, opts?)` · `dragBy({ dLng, dLat }, opts?)` | drag a handle to a place · move a whole shape (no `moving` option) |
-| `info()` · `lngLat(opts?)` · `geometry()` | resolved `FeatureSummary` (`layer id properties geometryType pixel client lngLat visible invisibleBecause state`; its pixel is the best geometric candidate, unverified) · the verified action point as lng/lat (waits and fails like `click()`; no `moving` option) · full geometry from the source |
+| `info()` · `lngLat(opts?)` · `geometry()` | resolved `FeatureSummary` (`layer id properties geometryType pixel client lngLat visible invisibleBecause state`; its pixel is the best geometric candidate, unverified) · the verified action point as lng/lat (waits and fails like `click()`; no `moving` option) · full geometry from the source (a tiled source: one drawn piece) |
 
 `FeatureSetHandle` (`map.features(q)`): `all()`, `count()` — snapshots, no waiting (a removed or 0×0 map is an error, not 0).
 
@@ -327,6 +329,10 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   Touch gestures beyond `tap` go through CDP — Chromium only.
 - **One line in the app is required.** Auto-discovery is not possible for bundled ESM apps (`tests/discovery.spec.ts` proves it).
 - **`waitForIdle()` cannot see app-level async** (a fetch that adds a layer later) — use the retrying assertions for that.
+- **Mapbox GL JS 1.13: GeoJSON set again while its last data is still loading** ("clear, then load": `setData(empty)`,
+  then `setData(url)`) is not waited for. 1.13 calls the source loaded, and the map idle, as soon as the first load ends,
+  while the URL is still being fetched, so a `.not` or a count can pass before the new data arrives. MapLibre 2–6 are
+  not affected. On 1.13, wait for something the app shows once its data is in before such an assertion.
 - **Tiled sources:** the browser cannot know what is off-screen, and the failure messages say so.
 - **On a globe** MapLibre's own viewport-wide query is wrong; the workaround is a grid: an extrusion narrower than 16 px whose
   footprint centre is off-screen can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
@@ -352,14 +358,15 @@ The full list, with costs measured on a dense map: [DESIGN — Costs and known l
 Developed against MapLibre GL JS 6. The same small page and the same core specs run against every major below
 (`npm run test:compat`, `tests/compat/`, its own CI job; 96 tests). "✓" means asserted by that matrix, not assumed.
 Newer public methods are feature-detected, never version-sniffed; what an old version cannot do is said in failure
-diagnostics and in the snapshot (`note: …`) instead of being answered wrongly.
+diagnostics and in the snapshot (`note: …`) instead of being answered wrongly, with one known exception on Mapbox GL
+JS 1.13 ([Limits](#limits)): a GeoJSON source set again while it loads.
 
 **Playwright:** `@playwright/test` 1.49 or later: CI runs the full suite on 1.49.0 (the floor) and on the current
 version ([0017](docs/decisions/0017-the-playwright-floor-is-the-one-ci-runs.md)).
 
 | | Mapbox GL JS 1.13 (BSD) | MapLibre 2 | MapLibre 3 | MapLibre 4 | MapLibre 5 | MapLibre 6 |
 |---|---|---|---|---|---|---|
-| assert: `toHaveFeature`, counts, `where`, `.not` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+| assert: `toHaveFeature`, counts, `where`, `.not` | ✓ (one exception: [Limits](#limits)) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | act: click / hover / drag on features and locations, click-time verification | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | occlusion by other features and by DOM, `force`, `ignoreLayers` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | visibility from paint evaluation (opacity 0, transparent colour, zero size) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |

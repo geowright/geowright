@@ -13,7 +13,8 @@ nothing, and nothing ships with it. In TypeScript, `/// <reference types="geowri
 as written (it adds types only).
 - **Assert** with retrying matchers (`.not` supported): `toHaveFeature`, `toHaveFeatureCount`, `toBeVisibleOnMap`,
   `toHaveLayerPixels` (raster, image, canvas, video, heatmap, hillshade), `toHaveGeometry` (the full geometry from the
-  source, not the tile-clipped one), `toHavePopup`, `toHaveView`. A verdict of absence (a `.not`, a count, "not
+  source, not the tile-clipped one; where the source cannot give it back, a tiled one, a mismatch against the one drawn
+  piece is no verdict), `toHavePopup`, `toHaveView`. A verdict of absence (a `.not`, a count, "not
   visible") is taken only from a map that has settled: idle, or seen to be one that never becomes idle with nothing
   else still loading. A matcher that
   cannot reach a verdict fails whichever way it is written, and says why: the map is not registered or was removed, a

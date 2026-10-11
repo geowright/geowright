@@ -1,6 +1,7 @@
 import { test as base, type BrowserContext, type Page } from '@playwright/test';
 import { makeTilePng } from './tile-png';
 import { BUILDINGS } from './buildings';
+import { basemapStyle } from './basemaps';
 import { routeVectorTiles } from '../src/playwright/tiles';
 import { throttleFromEnv } from './slow-machine';
 import { geowright, type MapHandle } from '../src/playwright';
@@ -58,9 +59,13 @@ export const test = base.extend<{ map: MapHandle }>({
     await use(page);
     guard.check(); // fails the test, naming each URL
   },
-  map: async ({ page }, use) => {
+  map: async ({ page, baseURL }, use) => {
     await page.route('**/tiles/**', (route) => route.fulfill({ status: 200, contentType: 'image/png', body: TILE }));
     await routeVectorTiles(page, '**/vt/buildings/**', { buildings: BUILDINGS });
+    await page.route('**/basemaps/*.json', (route) => {
+      const style = basemapStyle(new URL(route.request().url()).pathname.replace(/^.*\/basemaps\/|\.json$/g, ''), baseURL!);
+      return route.fulfill(style ? { contentType: 'application/json', body: JSON.stringify(style) } : { status: 404 });
+    });
     await page.goto('/');
     const map = geowright(page);
     await map.waitForIdle();

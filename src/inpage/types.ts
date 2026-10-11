@@ -312,7 +312,7 @@ export interface GeometryVerdict {
   /** Why not, in pixels and vertex indices. */
   reason?: string;
   actual?: Geometry;
-  /** 'data': the full shape from the source. 'rendered': merged render pieces — may be tile-clipped. */
+  /** 'data': the full shape from the source. 'rendered': ONE drawn piece (the source cannot give back its data) — may be clipped at a tile border. */
   from?: 'data' | 'rendered';
 }
 

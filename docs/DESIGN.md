@@ -594,16 +594,28 @@ every poll — idle is the secondary, supporting mechanism, not the primary one 
 diagnosed as one that never becomes idle (below). Presence needs no such care: a feature that is found is
 there. The first version waited for that idle and ignored its answer: with a GeoJSON source whose data
 arrived after 2.5 s, `.not.toHaveFeature` passed after half a second, on the half-loaded map, and the
-feature appeared a moment later. The bounded wait grows (0.5, 1, 2 s) only while an absence verdict is what
-the assertion is waiting for, so that a slow page gets enough frames to be recognised as never idle; on an
-idle map it costs nothing, and a positive assertion waits no longer than before.
+feature appeared a moment later. `toHaveGeometry` kept that first version longest. Where its geometry is read from what
+is drawn (a tiled source; a GeoJSON URL source before MapLibre 4, which has no `getData()`), the old drawing stays on
+the map while new data loads, and `.not.toHaveGeometry(the new shape)` passed on it half a second in. The bounded wait
+grows (0.5, 1, 2 s) only while an absence verdict is what the assertion is waiting for, so that a slow page gets
+enough frames to be recognised as never idle; on an idle map it costs nothing, and a positive assertion waits no
+longer than before.
 
 A poll that cannot be decided is neither true nor false. The map is not registered or was removed (MapLibre
 answers a feature query on a removed map with nothing at all), a named layer does not exist (a typo), the
 query matches several features where exactly one is required, the map has not settled, the camera is moving
-(`toHavePopup`): such a poll never ends the retry loop, and if the last poll at the deadline was one of them the
+(`toHavePopup`), a geometry that did not match one drawn piece (`toHaveGeometry` where the source cannot give its
+data back: a tiled source cuts a feature at every tile border, and `.not.toHaveGeometry(its own shape)` passed on
+one piece): such a poll never ends the retry loop, and if the last poll at the deadline was one of them the
 assertion fails in **both** polarities and says why — the rule `toHaveView` already had for a map that never
 came to rest. Before, "could not look" read as "absent", and each of these `.not` assertions passed.
+`toHavePopup` and `toHaveView` keep the same rules. A popup's `feature` is a hit test at its tip, so "no popup on
+that feature" is also a verdict about the map's features: a misspelt layer is no verdict, and the absence is taken
+only from a settled map. Under a source that was still loading, `.not.toHavePopup({ feature })` passed within
+milliseconds, and the popup was on that feature a moment later. With no popup open at all, nothing that loads can put
+one on the feature, so that absence needs no settled map; waiting for one failed it as "no verdict" on a map that did
+not settle in time. A removed map is no verdict for both matchers.
+Its camera still answers with its last values, and MapLibre removes its popups along with it.
 
 Some real applications intentionally never idle at all — a `requestAnimationFrame` loop that replaces
 `setData` every frame, a streaming line, an always-animating canvas source. An explicit
@@ -618,7 +630,31 @@ Assertions are unaffected, since their own idle wait is bounded rather than bloc
 lets a negative verdict be taken on such a map without idle; only an explicit, unconditional wait for idle needs
 to be opted out for a map like this. "Never idle" is said only when nothing ELSE is loading: the first version said it
 for an animated canvas while another source was still on its way, and a `.not` or a count of 0 passed on the source
-that had not arrived yet (the same half-loaded map as above, through another door).
+that had not arrived yet (the same half-loaded map as above, through another door). Nor is a source "re-set in a
+loop" while MapLibre is still fetching its data: a paged loader (`setData` with the next part's URL as soon as a part
+has loaded) and "clear, then load" (`setData(empty)`, then `setData(url)`) replace a GeoJSON source two or more times in
+one wait too, and such a map becomes idle once the data is in. Only a source re-set with inline data, data the
+application has in hand, counts as a loop; data from a server (GeoJSON from a URL, tiles, an image) counts as still
+loading however often it is replaced, and a source loaded that way is never called a loop. Before, a `.not` or a count
+passed half a second into such a load. The first form of this rule exempted GeoJSON from a URL only: two effects of one
+click that each point a vector source at new tiles (`setTiles`), or an image source at a new image (`updateImage`),
+still read as a loop, and a `.not` passed while the newest tiles were on their way. The second form read the data when
+the wait ended, and on MapLibre 5 and 6 that is too late: they put the data a URL gave into the source once it has
+loaded, and start a URL asked for meanwhile only then, so the source held an object, as if the application had set it
+inline. Two URLs one after the other (the second asked for while the first loads), or a page whose source loaded from a
+URL in two parts, read as a loop again, and a `.not` or a count passed while the second URL was loading. So the data is
+read as each load starts (the event's own `source`), and a source is a loop only when every load it started in the wait
+was given inline data. What remains: inline data replaced step after step for longer than a wait (each step awaited,
+none of them a fetch) still reads as a loop; and so, on MapLibre 5 and 6, do URLs asked for faster than they load, when
+a wait sees two of them start and no other load: each starts with the data of the one before in the source.
+
+Nor is a map "never idle" while its style itself is loading. A basemap switch (`setStyle(url, { diff: false })`)
+throws the old style away at once, and until the new one is in, `getStyle()` has no sources to call pending. MapLibre
+3-6 meanwhile render the new placement's symbol fade (300 ms by default) frame after frame, and that read as continuous
+repainting. A `.not` or a count that names no layer then passed half a second in, on a map with no style. A map
+without a style now counts as loading, whatever it renders. The compat page sets `fadeDuration: 0`, which hides this,
+so the matrix runs the case on a second map with the library's defaults. The demo's basemap switcher (light / dark,
+`transformStyle` keeping the app's layers) is the real-app form of it.
 
 **Timeouts mean what they say.** `waitForIdle()` defaults to two thirds of the test's timeout: the first idle after a
 navigation is a load — style, sources, tiles, first render — and Playwright bounds loads by the test timeout only.
@@ -964,10 +1000,11 @@ matrix as 96 tests. What the four initial failures taught:
   A capability that silently degrades is the failure mode to fear in a version matrix; this was one.
 
 What an old version cannot do is reported by the adapter's `caveats()` — printed once in failure
-diagnostics and in the snapshot — never answered with a guess. The bundled style-spec evaluator being
-NEWER than an old style is harmless (old expressions are a subset); the reverse case is the
-unsupported-expression caveat described under visibility. Globe, terrain, touch, drawing tools and the
-fill-extrusion lift and third-party applications are exercised on MapLibre 6 only; the support table in the README says
+diagnostics and in the snapshot — never answered with a guess. One known exception, which public API cannot see:
+Mapbox GL 1.13 reports a GeoJSON source that is given new data while it loads as loaded too early (Costs and known
+limitations). The bundled style-spec evaluator being NEWER than an old style is harmless (old expressions are a
+subset); the reverse case is the unsupported-expression caveat described under visibility. Globe, terrain, touch,
+drawing tools and the fill-extrusion lift and third-party applications are exercised on MapLibre 6 only; the support table in the README says
 "not in the matrix" for them rather than "✓".
 
 ## Costs and known limitations
@@ -1018,6 +1055,14 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   the worker's feature, which keeps the key, and the hit test decodes the tile, which drops it. The verdict is then
   "visible" and the notes say it is uncertain; where the renderer drew nothing because the key is there, that
   "visible" is wrong (the data is not read for a paint verdict).
+- On Mapbox GL JS 1.13 a GeoJSON source given new data while its last data is still loading ("clear, then load":
+  `setData(empty)`, then `setData(url)`) is called loaded as soon as the FIRST load ends: its `loaded()` is one flag,
+  set by whichever load finishes, and its worker holds the second load until the first has been acknowledged. The map
+  fires `idle` then (measured: 19 ms after the two calls, `isSourceLoaded` true) while the URL is still being fetched,
+  and a `.not` or a count has an idle map to conclude from, before the new data has arrived. MapLibre 2–6 report the
+  source as loading until the URL has arrived. Public API offers no way to see the second load on 1.13 (no `getData()`;
+  an abandoned load fires no event, so counting load events would not balance). The compat case is kept as a `test.fixme`
+  for 1.13 in `tests/compat/compat.spec.ts`; the README's support table and Limits say so.
 - Identity disambiguation by asking the source only works for GeoJSON sources; a vector-tile source cannot be asked.
   (For MapLibre's animated point, the adapter now reads its bare GeoJSON geometry as a source feature,
   fixing one cause of "ambiguous instead of unstable". The rare diagnostic mismatch under contention

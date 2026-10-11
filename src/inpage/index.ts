@@ -1,7 +1,7 @@
 import { Engine, clientFrame, toClient, toSurface, topElementAt, type ArmedCheck } from './engine';
 import { MapLibreAdapter } from './maplibre-adapter';
 import { startMirror } from './mirror';
-import type { CanvasAdapter, ClickVerdict, FeatureSummary } from './types';
+import type { CanvasAdapter, ClickVerdict, FeatureSummary, Overlay } from './types';
 
 /**
  * In-page entry. Injected by the Playwright side (never shipped in the app bundle).
@@ -53,25 +53,31 @@ function arm(check: ArmedCheck): string {
   return token;
 }
 
+/**
+ * Whether a feature query names a layer the style does not have, and which. A feature query on a missing layer answers
+ * "nothing" — a typo (`alert` for `alerts`) would make every negative assertion pass.
+ */
+function missingLayer(e: Engine<any>, q: any): string | undefined {
+  const named: string[] = q.layer === undefined ? [] : Array.isArray(q.layer) ? q.layer : [q.layer];
+  if (!named.length) return undefined;
+  const ids = e.adapter.listLayers().map((l) => l.id);
+  const missing = named.filter((id) => !ids.includes(id));
+  if (!missing.length) return undefined;
+  const list = ids.length > 40 ? `${ids.slice(0, 40).join(', ')}, … (${ids.length - 40} more)` : ids.join(', ') || '(none: is the style loaded?)';
+  return `${missing.length > 1 ? 'layers' : 'layer'} ${missing.map((id) => `"${id}"`).join(', ')} ${missing.length > 1 ? 'do' : 'does'} not exist. Layers: ${list}`;
+}
+
 const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
   idleDiagnosis: (mapId: string) => engine(mapId).adapter.idleDiagnosis?.(),
   find: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).find(q)),
-  /**
-   * For the retrying matchers: `find`, plus whether the query names a layer the style does not have. A feature query on
-   * a missing layer answers "nothing" — a typo (`alert` for `alerts`) would make every negative assertion pass.
-   */
+  /** For the retrying matchers: `find`, plus whether the query names a layer the style does not have. */
   findChecked: async (mapId: string, q: any): Promise<{ found: FeatureSummary[]; missingLayer?: string }> => {
     const e = engine(mapId);
     await e.learnIdentity(q);
     const found = e.find(q);
-    const named: string[] = q.layer === undefined ? [] : Array.isArray(q.layer) ? q.layer : [q.layer];
-    if (!named.length) return { found };
-    const ids = e.adapter.listLayers().map((l) => l.id);
-    const missing = named.filter((id) => !ids.includes(id));
-    if (!missing.length) return { found };
-    const list = ids.length > 40 ? `${ids.slice(0, 40).join(', ')}, … (${ids.length - 40} more)` : ids.join(', ') || '(none: is the style loaded?)';
-    return { found, missingLayer: `${missing.length > 1 ? 'layers' : 'layer'} ${missing.map((id) => `"${id}"`).join(', ')} ${missing.length > 1 ? 'do' : 'does'} not exist. Layers: ${list}` };
+    const missing = missingLayer(e, q);
+    return missing ? { found, missingLayer: missing } : { found };
   },
   /**
    * A bounded wait for idle that says whether a verdict may be taken now: `idle`, or `never` — the map was diagnosed as
@@ -87,6 +93,21 @@ const api = {
   debugMarks: (mapId: string, q: any, opts: any) => engine(mapId).debugMarks(q, opts),
   // a `feature` query is resolved like any other: learnIdentity first (an id the renderer does not keep is looked up in the data)
   overlaysAt: async (mapId: string, kind: any, o: any) => (o?.feature && (await engine(mapId).learnIdentity(o.feature)), engine(mapId).overlaysAt(kind, o)),
+  /**
+   * For toHavePopup: the overlays of a kind (`all`) and those at / on `o` (`list`), whether the camera is moving, and
+   * whether `o.feature` names a layer the style does not have. Throws when the surface cannot be looked at (removed,
+   * 0×0): the hit test that decides `feature` answers nothing there, and a removed map's popups went with it — "could not
+   * look", never "none there".
+   */
+  overlaysChecked: async (mapId: string, kind: any, o: any): Promise<{ moving: boolean; all: Overlay[]; list: (Overlay & { distance?: number })[]; missingLayer?: string }> => {
+    const e = engine(mapId);
+    const problem = e.surfaceProblem();
+    if (problem) throw new Error(`geowright: ${problem}`);
+    if (o?.feature) await e.learnIdentity(o.feature);
+    const missing = o?.feature ? missingLayer(e, o.feature) : undefined;
+    const r = { moving: e.adapter.isMoving(), all: e.overlaysAt(kind), list: e.overlaysAt(kind, o) };
+    return missing ? { ...r, missingLayer: missing } : r;
+  },
   /**
    * map.marker() / map.popup(): match AND pin in one call, so the pinned element is the one that matched (in
    * two round trips an overlay inserted in between re-pointed a document index). With exactly one match its element is
@@ -163,6 +184,12 @@ const api = {
   explain: (mapId: string, q: any) => engine(mapId).explain(q),
   reveal: (mapId: string, q: any) => engine(mapId).reveal(q),
   viewState: (mapId: string) => engine(mapId).adapter.getViewState(),
+  /** For toHaveView: the camera and whether it is moving — or why no verdict can be taken: a removed map still answers with its last camera. */
+  viewChecked: (mapId: string) => {
+    const e = engine(mapId);
+    const detached = e.detached();
+    return detached ? { detached } : { moving: e.adapter.isMoving(), view: e.adapter.getViewState() };
+  },
   layers: (mapId: string) => engine(mapId).adapter.listLayers(),
   isMoving: (mapId: string) => engine(mapId).adapter.isMoving(),
   /**

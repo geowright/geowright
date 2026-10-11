@@ -15,6 +15,18 @@ export interface PendingSource {
 
 export const DEAD_WORKER_AFTER_MS = 5000;
 
+/** The loads a source started during one settle wait, and whether every one of them was given inline GeoJSON. */
+interface Starts {
+  n: number;
+  inline: boolean;
+}
+
+/** Whether a source's data is inline GeoJSON (in its serialised style spec): nothing to download, data the app has in hand. */
+function inlineGeoJSON(spec: unknown): boolean {
+  const s = spec as { type?: string; data?: unknown } | undefined;
+  return s?.type === 'geojson' && typeof s.data === 'object' && s.data !== null;
+}
+
 /**
  * Inline GeoJSON needs no network: MapLibre parses it in a web worker. When it has not loaded for seconds AND no
  * worker-backed source (GeoJSON, vector) on the map has loaded at all, the worker is almost always dead — its script
@@ -278,10 +290,16 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       const onRender = () => frames++;
       // How often did a source START loading new data while we waited? (public 'sourcedataloading'; tile events are
       // not counted.) Once is a load. Again and again is the app calling setData in a loop — most of those updates are
-      // abandoned before they finish, which is why counting finished 'sourcedata' events saw nothing.
-      const replaced = new Map<string, number>();
-      const onSourceData = (e: { sourceId?: string; tile?: unknown }) => {
-        if (e.sourceId && !e.tile) replaced.set(e.sourceId, (replaced.get(e.sourceId) ?? 0) + 1);
+      // abandoned before they finish, which is why counting finished 'sourcedata' events saw nothing — or a load in
+      // steps, told apart by the data each start was given (loops()). That is read from the event as it happens (its
+      // public `source`, the source's style spec at that moment, in Mapbox GL 1.13 and MapLibre 2-6), not when the wait
+      // ends: MapLibre 5 and 6 put the data a URL gave into the source once it has loaded, and from then on the source
+      // reads as inline GeoJSON.
+      const replaced = new Map<string, Starts>();
+      const onSourceData = (e: { sourceId?: string; tile?: unknown; source?: unknown }) => {
+        if (!e.sourceId || e.tile) return;
+        const seen = replaced.get(e.sourceId) ?? { n: 0, inline: true };
+        replaced.set(e.sourceId, { n: seen.n + 1, inline: seen.inline && inlineGeoJSON(e.source) });
       };
       const finish = (v: boolean) => {
         if (done) return;
@@ -290,7 +308,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         this.map.off('idle', onIdle);
         this.map.off('render', onRender);
         this.map.off('sourcedataloading', onSourceData as any);
-        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), pending: this.pendingSources(), workerSourcesLoaded: this.workerSourcesLoaded(), replaced: [...replaced].filter(([, n]) => n >= 2).map(([id, n]) => ({ id, n })) };
+        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), styled: this.hasStyle(), pending: this.pendingSources(), workerSourcesLoaded: this.workerSourcesLoaded(), loops: this.loops(replaced) };
         resolve(v);
       };
       this.pendingSources(); // starts the "pending since" clock of every source that is not loaded yet
@@ -308,9 +326,22 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     });
   }
 
-  private lastWait?: { frames: number; ms: number; moving: boolean; loaded: boolean; pending: PendingSource[]; workerSourcesLoaded: number; replaced: { id: string; n: number }[] };
+  private lastWait?: { frames: number; ms: number; moving: boolean; loaded: boolean; styled: boolean; pending: PendingSource[]; workerSourcesLoaded: number; loops: { id: string; n: number }[] };
   /** When each source was first seen not loaded; forgotten when it loads. */
   private readonly pendingSince = new Map<string, number>();
+
+  /**
+   * Whether the map has a style it can describe (public getStyle()). It has none while a style it was given is still
+   * loading: the first one, or a new one from setStyle(url, { diff: false }), which throws the old one away at once.
+   * MapLibre 3-6 return undefined then; MapLibre 2 and Mapbox GL 1.13 throw.
+   */
+  private hasStyle(): boolean {
+    try {
+      return Boolean(this.map.getStyle());
+    } catch {
+      return false;
+    }
+  }
 
   private sourceLoaded(id: string): boolean | undefined {
     try {
@@ -318,6 +349,20 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     } catch {
       return undefined; // (a source removed in between)
     }
+  }
+
+  /**
+   * The sources whose data the app re-set two or more times while we waited, each time with inline GeoJSON: data the app
+   * has in hand and re-sets (a feed, an animation) — a loop. Data from a server (GeoJSON from a URL, tiles, an image) is
+   * a LOAD however often it is replaced, and the load ends: a paged loader (setData(the next part's URL) once a part has
+   * loaded), "clear, then load" (setData(empty); setData(url)), two URLs one after the other, or two effects of one
+   * click that each point a source at new tiles (setTiles) or a new image (updateImage). Such a map becomes idle once
+   * the data is in; taken for a loop, it was "never idle", and a .not or a count passed while the data was still on its
+   * way. One start from a server in the wait is enough: on MapLibre 5 and 6 a URL asked for while another one loads
+   * starts only once that one has loaded, with ITS data in the source, which reads as inline.
+   */
+  private loops(starts: Map<string, Starts>): { id: string; n: number }[] {
+    return [...starts].filter(([, s]) => s.n >= 2 && s.inline).map(([id, s]) => ({ id, n: s.n }));
   }
 
   /** Sources that are not loaded right now (public isSourceLoaded), with their type and how long they have waited. */
@@ -332,8 +377,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         continue;
       }
       if (!this.pendingSince.has(id)) this.pendingSince.set(id, now);
-      const spec = sources[id] as { type?: string; data?: unknown };
-      out.push({ id, type: String(spec.type), inline: spec.type === 'geojson' && typeof spec.data === 'object' && spec.data !== null, forMs: now - this.pendingSince.get(id)! });
+      out.push({ id, type: String((sources[id] as { type?: string }).type), inline: inlineGeoJSON(sources[id]), forMs: now - this.pendingSince.get(id)! });
     }
     return out;
   }
@@ -362,6 +406,11 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     const w = this.lastWait;
     if (!w) return undefined;
     if (w.moving) return { why: 'the camera is moving (an animation or a gesture in progress)', never: false };
+    // A map without a style has no sources to call pending, and it may still render frame after frame: after a style
+    // switch, MapLibre 3-6 fade the new placement's symbols in for 300 ms (the default fadeDuration). Those frames read
+    // as continuous repainting, the map was "never idle", and a .not that names no layer passed on a map with no style.
+    // Until its style is in, a map is loading, whatever it renders.
+    if (!w.styled) return { why: 'the style has not finished loading (the first one, or a new one from setStyle)', never: false };
     const never = 'Such a map NEVER becomes idle: do not wait for idle here; retrying assertions and actions work without it';
     // Deterministic, whatever the frame rate: an animated canvas source or a video source repaints the map for ever.
     const sources = this.map.getStyle()?.sources ?? {};
@@ -372,14 +421,16 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     // Never idle is a verdict about the WHOLE map: while another source is still loading it is not settled either, and a
     // negative assertion must not conclude absence from a source that has not arrived. So the sources that never settle
     // by design are set aside, and only when nothing else is pending is the map "never idle".
-    const replaced = w.replaced.map((r) => r.id);
-    const pending = w.pending.filter((p) => !animated.includes(p.id) && !replaced.includes(p.id));
+    // A source re-set in a loop is one re-set with inline data (loops()): data from a server is loading, however often
+    // the app replaced it, and stays pending.
+    const looping = w.loops.map((r) => r.id);
+    const pending = w.pending.filter((p) => !animated.includes(p.id) && !looping.includes(p.id));
     if (!pending.length) {
       if (animated.length) return { why: `source(s) ${animated.join(', ')}: an animated canvas / video source repaints the map on every frame. ${never}`, never: true };
       // OBSERVED, not inferred: the data of a source was replaced again and again while we waited. (The first version
       // inferred it from "a GeoJSON source is pending and frames are rendered" and blamed a setData loop on an app that
       // merely loaded slowly on an overloaded machine. A wrong diagnosis is worse than none.)
-      if (w.replaced.length) return { why: `the app keeps replacing the data of source(s) ${w.replaced.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`, never: true };
+      if (w.loops.length) return { why: `the app keeps replacing the data of source(s) ${w.loops.map((r) => `${r.id} (${r.n} times in ${Math.round(w.ms)}ms)`).join(', ')} — setData in a requestAnimationFrame loop or a timer. ${never}`, never: true };
     }
     // Before "tiles are still loading": inline GeoJSON needs no network, so a dead worker is the stronger explanation.
     const dead = deadWorkerDiagnosis(pending, w.workerSourcesLoaded);

@@ -1209,7 +1209,7 @@ export class FeatureHandle {
     );
   }
 
-  /** The feature's full geometry as the MAP holds it (source data; falls back to rendered pieces). */
+  /** The feature's full geometry as the MAP holds it (source data; where the source cannot give it back, a tiled one: ONE drawn piece, which a tile border may clip). */
   async geometry(opts: { timeout?: number } = {}): Promise<Geometry> {
     return this.map._retry<Geometry>(`${this}.geometry()`, opts.timeout ?? this.map.timeout, async (deadline) => {
       const r = await this.map._callBy<{ ok: true; geometry: Geometry } | { ok: false; message: string }>(deadline, 'geometry', toWire(this.query));
@@ -1550,7 +1550,9 @@ ${indent(explain)}`,
    * The feature's geometry ON THE MAP matches — read from the map's source, not from the app's own
    * state, and compared in pixels. `expected`: a GeoJSON geometry, a list of lng/lat vertices
    * (polygon ring if the feature is a polygon, else a line), or `{ circle: { center, edge } }`.
-   * Polygon rings may start at any vertex and wind either way. Retries.
+   * Polygon rings may start at any vertex and wind either way. Retries; a `.not` concludes only from a settled map.
+   * Where the source cannot give back its data (a tiled source), one drawn piece is compared: a match passes, a
+   * mismatch is no verdict either way.
    */
   async toHaveGeometry(received: FeatureHandle, expected: GeometryExpectation | LngLat[], options?: { timeout?: number; tolerancePx?: number }) {
     if (!(received instanceof FeatureHandle)) throw new Error('toHaveGeometry: receiver must be map.feature(...)');
@@ -1558,8 +1560,9 @@ ${indent(explain)}`,
     const tolerancePx = options?.tolerancePx ?? 2;
     const map = received.map;
     let verdict: GeometryVerdict = { ok: false, reason: 'never checked' };
-    const { pass, inconclusive, unanswered } = await pollVerdict(timeout, this.isNot, async (_i, deadline) => {
-      await map._callBy(deadline, 'waitForIdle', () => Math.max(50, Math.min(500, deadline - Date.now())));
+    const settle = new Settle();
+    const { pass, inconclusive, unanswered } = await pollVerdict(timeout, this.isNot, async (i, deadline) => {
+      const s = await settle.wait(map, i, deadline, this.isNot);
       let exp = expected as GeometryExpectation;
       if (Array.isArray(expected)) {
         // Found on a wild app: [[lng, lat], …] here ended as "Invalid LngLat object: (NaN, NaN)" from inside the page.
@@ -1571,9 +1574,17 @@ ${indent(explain)}`,
         exp = found[0]?.geometryType === 'Polygon' ? { type: 'Polygon', coordinates: [coords] } : { type: 'LineString', coordinates: coords };
       }
       verdict = await map._callBy<GeometryVerdict>(deadline, 'compareGeometry', toWire(received.query), exp, tolerancePx);
+      if (verdict.ok) return { verdict: true }; // a match needs no settling: that geometry is on the map
+      // "Not that geometry" is a verdict of absence: taken only from a settled map. While a source loads new data, what
+      // is drawn (and so the geometry of a tiled source) is still the old one.
+      if (this.isNot && !s.settled) return { verdict: undefined, why: `${notSettled(s.why)}; last seen: ${verdict.reason}` };
       // Every comparison that was actually made carries the geometry it was made against; without one, nothing was
-      // compared (no feature matches, or several do) — "not that geometry" cannot be concluded.
-      return verdict.ok || verdict.actual !== undefined ? { verdict: verdict.ok } : { verdict: undefined, why: verdict.reason };
+      // compared (no feature matches, or several do) — "not that geometry" cannot be concluded. Nor from what is DRAWN
+      // (a source that cannot give back its data: a tiled one): that is ONE piece of the feature, which a tile border may
+      // clip, so a mismatch says nothing about the full shape. `.not.toHaveGeometry(the feature's own shape)` passed on
+      // such a piece.
+      if (verdict.actual === undefined) return { verdict: undefined, why: verdict.reason };
+      return verdict.from === 'rendered' ? { verdict: undefined, why: `only one drawn piece could be compared, and a mismatch with a piece says nothing about the full shape; last seen: ${verdict.reason}` } : { verdict: false };
     });
     const explain = pass === this.isNot ? await failureState(map, 'toHaveGeometry', received.query, unanswered) : '';
     return {
@@ -1591,23 +1602,41 @@ ${indent(explain)}`,
 
   /**
    * A popup is open AND anchored where it should be: at a location, or with its tip on a feature
-   * (its anchor pixel hit-tests to the feature). Optional `text`. Retries; `.not` waits for none.
+   * (its anchor pixel hit-tests to the feature). Optional `text`: a substring, or a RegExp tested without its g and y
+   * flags, as in a query's `where`. Retries; `.not` waits for none.
    * For the popup's content use the Locator: `await map.popup({ feature: q })`.
    */
   async toHavePopup(map: MapHandle, where: OverlayWhere & { text?: string | RegExp } = {}, options?: { timeout?: number }) {
     if (!(map instanceof MapHandle)) throw new Error('toHavePopup: receiver must be a MapHandle');
     const timeout = options?.timeout ?? this.timeout;
     const { text, ...loc } = where;
+    // A copy without g and y: the caller's own /g RegExp kept its lastIndex from one poll to the next, so an open popup
+    // matched on one poll and not on the next, and `.not` passed while it was open.
+    const want = text instanceof RegExp ? new RegExp(text.source, text.flags.replace(/[gy]/g, '')) : text;
     let matching: Overlay[] = [];
     let all: Overlay[] = [];
-    const { pass, inconclusive } = await pollVerdict(timeout, this.isNot, async (_i, deadline) => {
-      const moving = await map._callBy<boolean>(deadline, 'isMoving');
-      all = await map._overlays('popup', {}, deadline);
-      matching = (await map._overlays('popup', loc, deadline)).filter((p) => text === undefined || (typeof text === 'string' ? p.text.includes(text) : text.test(p.text)));
-      // Where a popup is anchored is only known once the camera stops — in either polarity: `.not` used to
-      // pass on a moving map with the popup open.
-      if (moving) return { verdict: undefined, why: 'the map was moving (whether a popup is anchored there is decided once the camera stops)' };
-      return { verdict: matching.length > 0 };
+    const settle = new Settle();
+    const { pass, inconclusive } = await pollVerdict(timeout, this.isNot, async (i, deadline) => {
+      // The popups and the camera, read together; a removed or 0×0 map throws (no verdict).
+      const look = async (): Promise<Poll> => {
+        const r = await map._callBy<{ moving: boolean; all: Overlay[]; list: Overlay[]; missingLayer?: string }>(deadline, 'overlaysChecked', 'popup', { ...loc, feature: loc.feature && toWire(loc.feature) });
+        all = r.all;
+        matching = r.list.filter((p) => want === undefined || (typeof want === 'string' ? p.text.includes(want) : want.test(p.text)));
+        // Where a popup is anchored is only known once the camera stops — in either polarity: `.not` used to
+        // pass on a moving map with the popup open.
+        if (r.moving) return { verdict: undefined, why: 'the map was moving (whether a popup is anchored there is decided once the camera stops)' };
+        if (r.missingLayer) return { verdict: undefined, why: r.missingLayer };
+        return { verdict: matching.length > 0 };
+      };
+      const seen = await look();
+      // `feature` is a hit test at the popup's tip, so "no popup on that feature" is a verdict about the map's features
+      // too: like toHaveFeature's absence, it is taken only from a settled map (a feature still loading is not drawn YET).
+      // Looked at first: a popup found needs no settling, and a removed map says so at once. With no popup open at all,
+      // nothing that loads can put one on the feature: that absence is certain, and waiting for a settled map only
+      // failed it on a map that does not settle in time (a slow page, a tile that never comes).
+      if (seen.verdict !== false || !this.isNot || !loc.feature || all.length === 0) return seen;
+      const s = await settle.wait(map, i, deadline, true);
+      return s.settled ? look() : { verdict: undefined, why: notSettled(s.why) };
     });
     return {
       pass,
@@ -1634,15 +1663,18 @@ ${indent(explain)}`,
     let unanswered: string | undefined; // the last poll was abandoned at the deadline, and no earlier one was answered
     let answered = false;
     let failed: string | undefined; // the last poll's error, when no poll was answered (an unregistered mapId, say)
+    let detached: string | undefined; // the map was removed: it still answers, with its last camera — no verdict
     for (let i = 0; ; i++) {
       unanswered = undefined;
       try {
         // Abandoned at the deadline: on a page that cannot answer, the assertion fails at its timeout, not when it answers.
-        const moving = await map._callBy<boolean>(deadline, 'isMoving');
-        view = await map._callBy<Awaited<ReturnType<MapHandle['viewState']>>>(deadline, 'viewState');
-        settled = !moving;
+        const r = await map._callBy<{ moving?: boolean; view?: Awaited<ReturnType<MapHandle['viewState']>>; detached?: string }>(deadline, 'viewChecked');
+        detached = r.detached;
+        if (r.view) view = r.view;
+        settled = !r.moving && !detached;
         pass =
           settled &&
+          !!view &&
           (expected.zoom === undefined || near(view.zoom, expected.zoom, zt)) &&
           (expected.bearing === undefined || angleApart(view.bearing, expected.bearing) <= ANGLE_TOLERANCE) &&
           (expected.pitch === undefined || near(view.pitch, expected.pitch, ANGLE_TOLERANCE)) &&
@@ -1663,7 +1695,7 @@ ${indent(explain)}`,
       if (Date.now() + wait >= deadline) break;
       await new Promise((r) => setTimeout(r, wait));
     }
-    if (!settled || unanswered) pass = this.isNot; // never came to rest, or could not be asked: fail, whichever way the assertion was written
+    if (!settled || unanswered) pass = this.isNot; // never came to rest, removed, or could not be asked: fail, whichever way the assertion was written
     const actual = view && { center: view.center, zoom: view.zoom, bearing: view.bearing, pitch: view.pitch };
     const seen = actual ? `last seen: ${JSON.stringify(actual)}` : 'nothing seen';
     return {
@@ -1674,7 +1706,7 @@ ${indent(explain)}`,
       message: () =>
         `expect(map).${this.isNot ? 'not.' : ''}toHaveView(${JSON.stringify(expected)})\n\n` +
         `Expected: ${JSON.stringify(expected)} (±${zt} zoom, ±${dt}° centre, ±${ANGLE_TOLERANCE}° bearing and pitch), map at rest, within ${timeout}ms\n` +
-        `Received: ${unanswered ? `no verdict: ${unanswered} (${seen})` : !answered && failed ? `no verdict: ${failed} (${seen})` : settled ? JSON.stringify(actual) : `the map never came to rest within ${timeout}ms (${seen})`}`,
+        `Received: ${unanswered ? `no verdict: ${unanswered} (${seen})` : !answered && failed ? `no verdict: ${failed} (${seen})` : detached ? `no verdict: ${detached} (${seen})` : settled ? JSON.stringify(actual) : `the map never came to rest within ${timeout}ms (${seen})`}`,
     };
   },
 } satisfies Record<string, Matcher>;

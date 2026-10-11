@@ -388,6 +388,29 @@ function wireToggle(testId: string, layerIds: string[]) {
 }
 
 // ---------------------------------------------------------------------------
+// Basemap switcher: a new basemap style from the server, the app's own layers kept on top
+// ---------------------------------------------------------------------------
+
+// Light / dark basemap switchers are among the most common map UIs. The basemap is a style of its own, loaded from its
+// URL: setStyle(url, { diff: false }) throws the old style away at once, and the map has no style until the new one is
+// in. transformStyle (MapLibre's documented way) puts the app's sources and layers back on top of the new basemap; the
+// images the app added go with the old style, so they are added again once the new one has loaded. Like the tiles, the
+// basemap styles live "on a server": in tests page.route answers them (tests/basemaps.ts); in manual dev they 404.
+let basemap = { sources: ['basemap'], layers: ['background', 'basemap'] }; // what the current basemap brought
+(document.querySelector('[data-testid="basemap"]') as HTMLSelectElement).addEventListener('change', (ev) => {
+  const name = (ev.target as HTMLSelectElement).value;
+  map.once('style.load', addAppImages);
+  map.setStyle(`${location.origin}/basemaps/${name}.json`, {
+    diff: false,
+    transformStyle: (previous, next) => {
+      const own = { sources: Object.entries(previous?.sources ?? {}).filter(([id]) => !basemap.sources.includes(id)), layers: (previous?.layers ?? []).filter((l) => !basemap.layers.includes(l.id)) };
+      basemap = { sources: Object.keys(next.sources), layers: next.layers.map((l) => l.id) };
+      return { ...next, glyphs: previous?.glyphs ?? next.glyphs, sources: { ...next.sources, ...Object.fromEntries(own.sources) }, layers: [...next.layers, ...own.layers] };
+    },
+  });
+});
+
+// ---------------------------------------------------------------------------
 // Sensors: hidden through paint, by data (archive) or by feature-state (mute)
 // ---------------------------------------------------------------------------
 
@@ -565,6 +588,12 @@ function makeStationIcon(): ImageData {
   return ctx.getImageData(0, 0, size, size);
 }
 
+/** The images the app's layers use. Images belong to a style: a new style (a basemap switch) needs them added again. */
+function addAppImages(): void {
+  if (!map.hasImage('station-icon')) map.addImage('station-icon', makeStationIcon());
+  if (!map.hasImage('ghost-icon')) map.addImage('ghost-icon', new ImageData(24, 24)); // all pixels rgba(0,0,0,0)
+}
+
 // ---------------------------------------------------------------------------
 // Terra Draw
 // ---------------------------------------------------------------------------
@@ -620,7 +649,7 @@ for (const mode of ['line', 'rectangle', 'circle'] as const) {
 // ---------------------------------------------------------------------------
 
 map.on('load', () => {
-  map.addImage('station-icon', makeStationIcon());
+  addAppImages();
 
   wireToggle('toggle-parcels', ['parcels', 'parcels-outline']);
   wireToggle('toggle-alerts', ['alerts', 'alerts-labels']);
@@ -628,7 +657,6 @@ map.on('load', () => {
   wireToggle('toggle-roads', ['roads']);
   wireToggle('toggle-buildings', ['buildings']);
   wireToggle('toggle-sensors', ['sensor-zones', 'sensors', 'sensors-ghost']);
-  map.addImage('ghost-icon', new ImageData(24, 24)); // all pixels rgba(0,0,0,0)
 
   const adapter = new TerraDrawMapLibreGLAdapter({ map });
   terraDraw = new TerraDraw({
