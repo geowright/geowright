@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { geowright } from '../src/playwright';
-import { FAIL_FAST_MS, PROBE_FAIL_FAST_MS } from './slow-machine';
+import { allowForThrottle, FAIL_FAST_MS, PROBE_FAIL_FAST_MS } from './slow-machine';
 import { makeTilePng } from './tile-png';
 
 /** ACT gap: actions that originate ON the map, with real mouse input at projected pixels. */
@@ -384,6 +384,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   const counts = (page: import('@playwright/test').Page) => page.evaluate(() => ({ clicks: (window as any).__layerClicks, styledata: (window as any).__styledata }));
 
   test('an opaque image layer drawn above a feature: click() is refused, and the message names it', async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     await addVeil(page, { opacity: 1 });
     // the premise: the veil really is drawn over alert 1 (34.77, 32.085)
     await expect(map, 'the premise: the opaque veil is drawn over alert 1').toHaveLayerPixels('veil', { at: { lng: 34.77, lat: 32.085 } });
@@ -407,6 +408,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   });
 
   test('an opaque image with a transparent hole over the feature: the click lands; with the hole elsewhere it is refused', async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     const alert = { lng: 34.77, lat: 32.085 };
     await addVeil(page, { opacity: 1, around: alert, d: 0.01, hole: 'centre' });
     await expect(map, 'the premise: the image is drawn around alert 1').toHaveLayerPixels('veil', { at: { lng: alert.lng - 0.008, lat: alert.lat + 0.008 } });
@@ -537,6 +539,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   // animated canvas, a paint transition, a colour. So every new action probes again. (The premises are checked AFTER the
   // second click: a probe between the clicks would change the overlay's stamp and hide the bug.)
   test('a verdict serves one action: a canvas veil that turned opaque after a click refuses the next click', async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     await addCanvasVeil(page, false);
     await watch(page, 'alerts');
     await map.feature({ layer: 'alerts', id: 1 }).click(); // through the transparent canvas: probed, lands
@@ -565,6 +568,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   });
 
   test("a verdict serves one action: a background layer whose colour turned opaque refuses the next click", async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     await page.evaluate(() => (window as any).__geowright_maps.main.addLayer({ id: 'dim', type: 'background', paint: { 'background-color': 'rgba(0,0,0,0)', 'background-color-transition': { duration: 0 } } }));
     await map.waitForIdle();
     await watch(page, 'alerts');
@@ -578,6 +582,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   });
 
   test('a verdict serves one action: a heatmap whose radius grew over the target refuses the next click', async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     await page.evaluate((a) => {
       const m = (window as any).__geowright_maps.main;
       // a hot spot 0.004° east of alert 1: at radius 5 it does not reach the alert, at radius 150 it covers it
@@ -598,6 +603,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   // The other way round: an 'occluded' verdict must not outlive its action either. A 2px dot: only a handful of its
   // candidate pixels hit-test, so one refused click has probed them all.
   test('a verdict serves one action: once a canvas veil over a small target is cleared, the target can be clicked', async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     await page.evaluate((a) => {
       const w = window as any;
       const m = w.__geowright_maps.main;
@@ -670,6 +676,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   // A raster source with inline `bounds`: MapLibre draws every tile that meets them WHOLE. Alert 1 (34.77) is west of the
   // bounds (34.775) but inside the edge tile: the opaque tile covers it, and the gate must not trust the bounds.
   test('an opaque tiled raster whose bounds end just short of a feature (the edge tile covers it): the click is refused', async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     const png = makeTilePng();
     await page.route('**/veiltiles/**', (r) => r.fulfill({ status: 200, contentType: 'image/png', body: png }));
     await page.evaluate(() => {
@@ -687,6 +694,7 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   // The snapshot does not probe (four renders per listed entity): a feature under a pixel-only layer is listed with its
   // pixel AND the layer over it, not as a plain "click here".
   test('the snapshot marks a feature under a pixel-only layer (it does not probe); click() refuses it under an opaque one', async ({ map, page }) => {
+    allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     await addVeil(page, { opacity: 1 });
     await map.waitForIdle();
     const snap = await map.snapshot();

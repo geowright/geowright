@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { GeowrightError } from '../src/playwright';
-import { FAIL_FAST_MS } from './slow-machine';
+import { allowForThrottle, FAIL_FAST_MS } from './slow-machine';
 
 /** When something fails, the report gets a picture of the map with the expectation drawn on it. */
 test.describe('failure artefacts', () => {
@@ -26,6 +26,7 @@ test.describe('failure artefacts', () => {
   });
 
   test('a failed action throws GeowrightError; failures attach what was on the map as text (`map state — …`)', async ({ map }, testInfo) => {
+    allowForThrottle(3 * FAIL_FAST_MS); // three expected failures, each waits out its timeout
     const feature = await map.feature({ layer: 'alerts', id: 99 }).click({ timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(feature).toBeInstanceOf(GeowrightError);
     const location = await map.clickAt({ lng: 34.0, lat: 32.08 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);

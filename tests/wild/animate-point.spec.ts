@@ -1,4 +1,4 @@
-import { cpuSlowdown } from '../slow-machine';
+import { allowForThrottle, cpuSlowdown } from '../slow-machine';
 import { DEMOTILES, example, expect, test } from './harness';
 
 // MapLibre example "Animate a point": a circle layer whose GeoJSON source is replaced on every
@@ -21,6 +21,7 @@ const IDLE_FAIL_MS = 7000 * cpuSlowdown();
 
 test.describe('wild: animate-a-point', () => {
   test('the point is on the map and never becomes idle (waitForIdle must be opted out)', async ({ wild }) => {
+    allowForThrottle(IDLE_FAIL_MS); // the expected failure waits out its timeout
     const map = await wild.open(example('animate-a-point'), { routes: DEMOTILES, waitForIdle: false });
     await expect(map).toHaveFeature({ layer: 'point' });
     // this is the point of the example: the animation must NOT stop. A regression that breaks the

@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import { FAIL_FAST_MS } from './slow-machine';
+import { allowForThrottle, FAIL_FAST_MS } from './slow-machine';
 
 test('a map removed during a click explains the detached canvas', async ({ map, page }) => {
   await page.evaluate(() => {
@@ -15,6 +15,7 @@ test('a map removed during a click explains the detached canvas', async ({ map, 
 // MapLibre's remove() deletes the style, so its feature query answers "nothing" without throwing — and every
 // negative feature assertion passed on a map nobody can see. A removed map is "could not look", never "absent".
 test('a removed map is not an empty map: negative feature assertions fail on it', async ({ map, page }) => {
+  allowForThrottle(3 * FAIL_FAST_MS); // three expected failures, each waits out its timeout
   await page.evaluate(() => (window as any).__geowright_maps.main.remove());
   const rejects = (p: Promise<unknown>) => p.then(() => null, (e: Error) => e);
   const not = await rejects(expect(map).not.toHaveFeature({ layer: 'alerts' }, { timeout: FAIL_FAST_MS }));

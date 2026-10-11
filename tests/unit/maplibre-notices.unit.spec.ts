@@ -3,7 +3,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 // @ts-expect-error: a plain .mjs build script, no typings
-import { bundled } from '../../scripts/maplibre-notices.mjs';
+import { bundled, sections } from '../../scripts/maplibre-notices.mjs';
 
 /**
  * scripts/maplibre-notices.mjs: what MapLibre's prebuilt dist bundles, read from its source maps (decision 0020). Code
@@ -67,4 +67,17 @@ test('code copied from vector-tile-js is covered by the @mapbox/vector-tile text
   const b = bundled(fakeMaplibre(copied, ['@mapbox/vector-tile'])) as Bundled;
   expect(b.packages.map((p) => p.name)).toContain('@mapbox/vector-tile');
   expect(b.copied).toEqual([]);
+});
+
+// The heading says which option of a choice is used (decision 0020); wild/scripts/apps.mjs check accepts the other
+// options' texts below on that word. A license that is a choice AND something else is not a choice: no election.
+test('a package\'s heading names the option used only when its license is a choice of licenses and nothing else', () => {
+  const pkg = (license: string) => ({ name: 'some-pkg', version: '1.0.0', license, text: 'TEXT' });
+  const heads = (sections({ packages: ['(MIT OR Apache-2.0)', '(MIT OR Apache-2.0) AND CC-BY-4.0', 'MIT OR (Apache-2.0 AND CC-BY-4.0)'].map(pkg), copied: [] }, 'bundled in maplibre-gl 6.10.0') as string[])
+    .map((s) => s.split('\n')[0]);
+  expect(heads).toEqual([
+    '## some-pkg - 1.0.0 ((MIT OR Apache-2.0)), used under MIT (the file below carries every option\'s text), bundled in maplibre-gl 6.10.0',
+    '## some-pkg - 1.0.0 ((MIT OR Apache-2.0) AND CC-BY-4.0), bundled in maplibre-gl 6.10.0',
+    '## some-pkg - 1.0.0 (MIT OR (Apache-2.0 AND CC-BY-4.0)), bundled in maplibre-gl 6.10.0',
+  ]);
 });

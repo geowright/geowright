@@ -8,13 +8,21 @@
 //
 //   node scripts/failed-test-results.mjs [--results test-results] [--out test-results-failed.tgz]
 //
-// Every file of a failed test's directory goes in, except `node_modules` trees (a unit test's copied package), plus every
-// `.last-run.json` (which names the failed tests). One archive, always written, so the upload step has a file even when
-// the run failed before any test did. Exit code 0 unless the archive cannot be written.
+// Playwright gives each test one directory directly under the run's output directory, and keeps it when the test passes,
+// with whatever the test put there. So only those directories are looked at: a file inside a passed test's directory is
+// never taken for a failed test, even one named trace.zip, error-context.md or .last-run.json (the packer's own unit
+// test once kept a fake results tree there, and one real CI failure was packed as four). A directory there that holds its
+// own `.last-run.json` is another run's output directory (the version matrix writes to test-results/compat): the same
+// rule applies inside it.
+//
+// Every file of a failed test's directory goes in, except `node_modules` trees (a unit test's copied package), plus each
+// run's `.last-run.json` (which names the failed tests). One archive, always written, so the upload step has a file even
+// when the run failed before any test did. Exit code 0 unless the archive cannot be written.
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readdirSync, realpathSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const MARKERS = ['trace.zip', 'error-context.md'];
 
@@ -22,18 +30,18 @@ export function failedTestFiles(results) {
   const files = [];
   const dirs = [];
   let skipped = 0;
-  const walk = (dir) => {
+  // `dir` is a run's output directory: its child directories are that run's tests.
+  const run = (dir) => {
     const names = readdirSync(dir);
     if (names.includes('.last-run.json')) files.push(join(dir, '.last-run.json'));
-    if (MARKERS.some((m) => names.includes(m))) {
-      dirs.push(dir);
-      collect(dir);
-      return;
-    }
     for (const name of names) {
-      if (name === 'node_modules') continue;
       const p = join(dir, name);
-      if (statSync(p).isDirectory()) walk(p);
+      if (!statSync(p).isDirectory()) continue;
+      const inner = readdirSync(p);
+      if (MARKERS.some((m) => inner.includes(m))) {
+        dirs.push(p);
+        collect(p);
+      } else if (inner.includes('.last-run.json')) run(p);
     }
   };
   const collect = (dir) => {
@@ -45,7 +53,7 @@ export function failedTestFiles(results) {
       } else files.push(p);
     }
   };
-  if (existsSync(results)) walk(results);
+  if (existsSync(results)) run(results);
   return { dirs, files: files.map((f) => relative(results, f).split(sep).join('/')), skippedNodeModules: skipped };
 }
 
@@ -67,7 +75,17 @@ const arg = (name, dflt) => {
   return i > 0 && process.argv[i + 1] ? process.argv[i + 1] : dflt;
 };
 
-if (process.argv[1] && import.meta.url.endsWith(process.argv[1].split(sep).join('/'))) {
+// Run, not imported: compare real paths. The module URL percent-encodes a space or an "é" and names the real path behind a
+// symlink, so comparing it with the raw argv path missed in such a checkout, and the script wrote nothing and exited 0.
+const isMain = (() => {
+  try {
+    return Boolean(process.argv[1]) && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false; // argv[1] names no file: not this script
+  }
+})();
+
+if (isMain) {
   const results = arg('--results', 'test-results');
   const out = arg('--out', 'test-results-failed.tgz');
   const { dirs, files, skippedNodeModules } = pack(results, out);

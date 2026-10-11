@@ -150,6 +150,218 @@ test('check fails when an app\'s dist/ ships no notices, or a notice without its
   expect(run(tree, 'check').code, 'every package with its text: passes').toBe(0);
 });
 
+// What dist/ bundles is held to the allowlist like the app's own LICENSE (CONTRIBUTING, "Licenses"; wild/README.md,
+// "Bring your app" step 2): each section's TEXT is classified, as a LICENSE file is. A choice of licenses passes only
+// when its heading names the option used and that option is on the list (decision 0020).
+const GPL = 'GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n';
+test('check fails when a package in an app\'s dist/ notices is under a license off the allowlist', () => {
+  const tree = scratchTree();
+  const planted = plantApp(tree);
+  const notices = (...sections: string[]) => writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n${sections.join('\n')}`);
+  const refused = `wild/apps/planted/${NOTICES}: "`;
+
+  notices(`## some-lib - 1.0.0 (GPL-3.0-only)\n\n${GPL}`);
+  let r = run(tree, 'check');
+  expect(r.code, 'a GPL-3.0 package').toBe(1);
+  expect(r.out).toContain(`${refused}some-lib - 1.0.0 (GPL-3.0-only)" is not on the allowlist`);
+  expect(r.out).toContain('GPL');
+
+  // The text decides, not the heading: an MIT heading over a GPL text is refused too, and a text nobody recognises.
+  notices(`## some-lib - 1.0.0 (MIT)\n\n${GPL}`, `## mystery-lib - 1.0.0 (MIT)\n\nCopyright (c) 2026 Someone. All rights reserved.\n`);
+  r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`${refused}some-lib - 1.0.0 (MIT)" is not on the allowlist`);
+  expect(r.out).toContain(`${refused}mystery-lib - 1.0.0 (MIT)" is not on the allowlist`);
+  expect(r.out).toContain('not one this script recognises');
+
+  // A choice of licenses, as scripts/maplibre-notices.mjs writes it, used under an option on the list: passes.
+  const dual = `${MIT}\n${GPL}`;
+  notices(`## dual-lib - 1.0.0 ((MIT OR GPL-3.0-only)), used under MIT (the file below carries every option's text)\n\n${dual}`);
+  expect(run(tree, 'check').code, 'a choice, used under MIT, both texts below').toBe(0);
+
+  for (const head of [
+    'dual-lib - 1.0.0 ((MIT OR GPL-3.0-only))', // a choice, but which option is used is not said
+    'dual-lib - 1.0.0 ((MIT OR GPL-3.0-only)), used under GPL-3.0-only', // the option used is off the list
+    'dual-lib - 1.0.0 (GPL-3.0-only), used under MIT', // no choice to make: GPL is the only license
+    'dual-lib - 1.0.0 ((GPL-3.0-only OR MPL-2.0)), used under MIT', // MIT is not one of the options
+  ]) {
+    notices(`## ${head}\n\n${dual}`);
+    r = run(tree, 'check');
+    expect(r.code, head).toBe(1);
+    expect(r.out, head).toContain(`${refused}${head}" is not on the allowlist`);
+  }
+
+  // The option used must be there as text: a choice whose file carries only the refused option's text is refused.
+  notices(`## dual-lib - 1.0.0 ((MIT OR GPL-3.0-only)), used under MIT\n\n${GPL}`);
+  expect(run(tree, 'check').code, 'used under MIT, but no MIT text below').toBe(1);
+});
+
+// The heading decides too: it carries the license the package declares, and Vite's build.license copies only the first
+// license file a package ships, so a package declared `MIT AND CC-BY-4.0` can sit above the MIT text alone. A refused
+// id in a heading refuses the section whatever text is below, unless it is an unchosen option of an election.
+test('check fails when a notices heading declares a license off the allowlist above an allowed text', () => {
+  const tree = scratchTree();
+  const planted = plantApp(tree);
+  const notices = (section: string) => writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n${section}`);
+  const refused = `wild/apps/planted/${NOTICES}: "`;
+  for (const head of [
+    'mixed-lib - 1.0.0 (MIT AND CC-BY-4.0)', // the CC-BY part's file is not the one Vite copied
+    'some-lib - 1.0.0 (GPL-3.0-only)',
+    'dual-lib - 1.0.0 ((MIT OR GPL-3.0-only))', // a choice, but which option is used is not said
+    'dual-lib - 1.0.0 ((MIT OR GPL-3.0-only)), used under GPL-3.0-only', // the option used is off the list
+    'mixed-lib - 1.0.0 ((MIT OR Apache-2.0) AND CC-BY-4.0), used under MIT', // an AND: no election
+    'old-lib - 1.0.0 (gpl-3.0)', // Vite copies package.json's license as written; SPDX ids match in any case
+  ]) {
+    notices(`## ${head}\n\n${MIT}`);
+    const r = run(tree, 'check');
+    expect(r.code, head).toBe(1);
+    expect(r.out, head).toContain(`${refused}${head}" is not on the allowlist`);
+    expect(r.out, head).toContain('its heading declares');
+  }
+
+  // An election names its other options in the heading: those pass, with the used option's text below. So does a
+  // package's name, outside the parentheses, that only looks like a license id.
+  notices(`## dual-lib - 1.0.0 ((MIT OR GPL-3.0-only)), used under MIT\n\n${MIT}`);
+  expect(run(tree, 'check').code, 'a choice used under MIT, MIT text below').toBe(0);
+  notices(`## gpl-lib - 1.0.0 (MIT)\n\n${MIT}`);
+  expect(run(tree, 'check').code, 'a package named gpl-lib, under MIT').toBe(0);
+
+  // The same for a vendored build's notices.
+  const vendored = join(tree, 'wild/fixtures/vendor/planted@1');
+  mkdirSync(vendored, { recursive: true });
+  writeFileSync(join(vendored, 'LICENSE'), MIT);
+  writeFileSync(join(vendored, 'THIRD_PARTY_LICENSES.md'), `# Licenses\n\n## some-lib - 1.0.0 (GPL-3.0-only)\n\n${MIT}`);
+  const r = run(tree, 'check');
+  expect(r.code, 'a vendored build: a GPL heading over an MIT text').toBe(1);
+  expect(r.out).toContain('wild/fixtures/vendor/planted@1/THIRD_PARTY_LICENSES.md: "some-lib - 1.0.0 (GPL-3.0-only)" is not on the allowlist');
+});
+
+test('check fails when a vendored build under wild/fixtures/vendor/ lists a package under a license off the allowlist', () => {
+  const tree = scratchTree();
+  const vendored = join(tree, 'wild/fixtures/vendor/planted@1');
+  mkdirSync(vendored, { recursive: true });
+  writeFileSync(join(vendored, 'LICENSE'), MIT);
+  // A build that bundles nothing says so in prose and lists no section (wild/fixtures/vendor/d3@3): passes.
+  writeFileSync(join(vendored, 'THIRD_PARTY_LICENSES.md'), '# Licenses\n\nIt bundles nothing but its own code.\n');
+  expect(run(tree, 'check').code, 'no section').toBe(0);
+
+  writeFileSync(join(vendored, 'THIRD_PARTY_LICENSES.md'), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n## some-lib - 1.0.0 (GPL-3.0-only)\n\n${GPL}`);
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('wild/fixtures/vendor/planted@1/THIRD_PARTY_LICENSES.md: "some-lib - 1.0.0 (GPL-3.0-only)" is not on the allowlist');
+  expect(r.out).not.toContain('example-lib');
+
+  // A section without its text is refused as in an app's dist/: whatever its heading says, nothing below shows it.
+  writeFileSync(join(vendored, 'THIRD_PARTY_LICENSES.md'), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n## other-lib - 2.0.0 (ISC)\n`);
+  let empty = run(tree, 'check');
+  expect(empty.code, 'a section with no text').toBe(1);
+  expect(empty.out).toContain('wild/fixtures/vendor/planted@1/THIRD_PARTY_LICENSES.md: "other-lib - 2.0.0 (ISC)" has no license text');
+  // With no text, its heading is still read: a GPL package listed with nothing below is refused for both.
+  writeFileSync(join(vendored, 'THIRD_PARTY_LICENSES.md'), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n## gpl-lib - 1.0.0 (GPL-3.0-only)\n`);
+  empty = run(tree, 'check');
+  expect(empty.code, 'a GPL section with no text').toBe(1);
+  expect(empty.out).toContain('wild/fixtures/vendor/planted@1/THIRD_PARTY_LICENSES.md: "gpl-lib - 1.0.0 (GPL-3.0-only)" has no license text');
+  expect(empty.out).toContain('wild/fixtures/vendor/planted@1/THIRD_PARTY_LICENSES.md: "gpl-lib - 1.0.0 (GPL-3.0-only)" is not on the allowlist');
+});
+
+// An election ("used under A") holds only for a choice and nothing else, and covers only the choice's own texts.
+test('check refuses an election in the notices when the license is more than a choice, or a refused text below is not an option', () => {
+  const tree = scratchTree();
+  const planted = plantApp(tree);
+  const notices = (section: string) => writeFileSync(join(planted, NOTICES), `# Licenses\n\n## example-lib - 1.0.0 (MIT)\n\n${MIT}\n${section}`);
+  const refused = `wild/apps/planted/${NOTICES}: "`;
+
+  // Where the expression has an AND too, its other part applies whichever option is used: the CC-BY text below is that
+  // part's, so the section is refused like any CC-BY one. The first heading is what scripts/maplibre-notices.mjs wrote
+  // for such a license before it learned the same rule.
+  const ccBy = 'Attribution 4.0 International\n\nCreative Commons Attribution 4.0 International Public License\n';
+  for (const head of [
+    'mixed-lib - 1.0.0 ((MIT OR Apache-2.0) AND CC-BY-4.0), used under MIT (the file below carries every option\'s text), bundled in maplibre-gl 6.10.0',
+    'mixed-lib - 1.0.0 (MIT OR (Apache-2.0 AND CC-BY-4.0)), used under MIT',
+    'mixed-lib - 1.0.0 (CC-BY-4.0 AND (Apache-2.0 OR MIT)), used under MIT',
+  ]) {
+    notices(`## ${head}\n\n${MIT}\n${ccBy}`);
+    const r = run(tree, 'check');
+    expect(r.code, head).toBe(1);
+    expect(r.out, head).toContain(`${refused}${head}" is not on the allowlist`);
+    expect(r.out, head).toContain('CC-BY');
+  }
+
+  // Below an election, a refused text passes only as one of the choice's options: a GPL text under a choice of MIT or
+  // Apache-2.0 is some other code's license.
+  notices(`## dual-lib - 1.0.0 ((MIT OR Apache-2.0)), used under MIT\n\n${MIT}\n### vendored-lib\n\n${GPL}`);
+  const r = run(tree, 'check');
+  expect(r.code, 'a GPL text below a choice of MIT or Apache-2.0').toBe(1);
+  expect(r.out).toContain(`${refused}dual-lib - 1.0.0 ((MIT OR Apache-2.0)), used under MIT" is not on the allowlist`);
+
+  // An option with an exception is still one option; an option's text below passes.
+  notices(`## dual-lib - 1.0.0 ((MIT OR GPL-2.0-only WITH Classpath-exception-2.0)), used under MIT\n\n${MIT}\n${GPL}`);
+  expect(run(tree, 'check').code, 'a choice whose other option carries an exception').toBe(0);
+});
+
+test('check requires the elected allowed license text even when every supplied text is allowed', () => {
+  const tree = scratchTree();
+  const planted = plantApp(tree);
+  const head = 'dual-lib - 1.0.0 (MIT OR Apache-2.0), used under Apache-2.0';
+  writeFileSync(join(planted, NOTICES), `# Licenses\n\n## ${head}\n\n${MIT}`);
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain(`${head}" is not on the allowlist`);
+  expect(r.out).toContain('choice of licenses');
+  const apache = readFileSync(join(ROOT, 'LICENSE'), 'utf8');
+  writeFileSync(join(planted, NOTICES), `# Licenses\n\n## ${head}\n\n${MIT}\n${apache}`);
+  expect(run(tree, 'check').code, 'the elected Apache text is present').toBe(0);
+});
+
+for (const [identity, text] of [
+  ['AGPL', 'GNU AFFERO GENERAL PUBLIC LICENSE\nVersion 3, 19 November 2007\n'],
+  ['LGPL', 'GNU LESSER GENERAL PUBLIC LICENSE\nVersion 2.1, February 1999\n'],
+  ['Library GPL', 'GNU LIBRARY GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n'],
+  ['AGPL identifier', 'AGPL-3.0-only'],
+  ['LGPL identifier', 'LGPL-2.1-only'],
+] as const) {
+  test(`check refuses ${identity} text under an election whose only refused option is GPL`, () => {
+    const tree = scratchTree();
+    const planted = plantApp(tree);
+    const head = 'dual-lib - 1.0.0 (MIT OR GPL-2.0-only), used under MIT';
+    writeFileSync(join(planted, NOTICES), `# Licenses\n\n## ${head}\n\n${MIT}\n${text}`);
+    const r = run(tree, 'check');
+    expect(r.code).toBe(1);
+    expect(r.out).toContain(`${head}" is not on the allowlist`);
+    expect(r.out).toContain('choice of licenses');
+  });
+}
+
+// The notices files under wild/fixtures/vendor/ are written by hand, in no enforced format: text outside the "## "
+// sections (a preamble, a "###" heading, prose) names no license off the list either. Prose passes.
+test('check fails on a refused license text outside any "## " section of a notices file', () => {
+  const tree = scratchTree();
+  const vendored = join(tree, 'wild/fixtures/vendor/planted@1');
+  mkdirSync(vendored, { recursive: true });
+  writeFileSync(join(vendored, 'LICENSE'), MIT);
+  const file = join(vendored, 'THIRD_PARTY_LICENSES.md');
+  for (const [what, text] of [
+    ['in prose, with no section', `# Licenses\n\nIt bundles some-lib 1.0.0 (GPL-3.0-only); its license:\n\n${GPL}`],
+    ['under a "###" heading, with no "## " section', `# Licenses\n\n### some-lib - 1.0.0 (GPL-3.0-only)\n\n${GPL}`],
+    ['above an MIT section', `# Licenses\n\n${GPL}\n## example-lib - 1.0.0 (MIT)\n\n${MIT}`],
+  ]) {
+    writeFileSync(file, text);
+    const r = run(tree, 'check');
+    expect(r.code, what).toBe(1);
+    expect(r.out, what).toContain('wild/fixtures/vendor/planted@1/THIRD_PARTY_LICENSES.md: text outside any "## " section names a license off the allowlist');
+    expect(r.out, what).toContain('GPL');
+  }
+  writeFileSync(file, `# Licenses\n\nIt bundles some-lib 1.0.0, whose license is below.\n\n## some-lib - 1.0.0 (MIT)\n\n${MIT}`);
+  expect(run(tree, 'check').code, 'prose above an MIT section').toBe(0);
+
+  // The same for an app's dist/.
+  const planted = plantApp(tree);
+  writeFileSync(join(planted, NOTICES), `# Licenses\n\nIt also bundles some-lib 1.0.0:\n\n${GPL}\n## example-lib - 1.0.0 (MIT)\n\n${MIT}`);
+  const r = run(tree, 'check');
+  expect(r.code, 'a GPL text above an app\'s first section').toBe(1);
+  expect(r.out).toContain(`wild/apps/planted/${NOTICES}: text outside any "## " section names a license off the allowlist`);
+});
+
 test('check fails when an app\'s notices list maplibre-gl but not the packages MapLibre\'s dist bundles inside itself', () => {
   const tree = scratchTree();
   const planted = plantApp(tree);

@@ -162,7 +162,10 @@ from ("Taken from [X](…)", "Copied from https://…").
 Every app's committed `dist/` carries `dist/THIRD_PARTY_LICENSES.md`: the license text of each npm package its
 build bundles (React, ReactDOM, Vue, Svelte, `d3-*`, luma.gl / math.gl / loaders.gl, maplibre-gl, …), written by
 Vite's `build.license` (by `scripts/build.mjs` for `pmtiles`, which only copies files). `node wild/scripts/apps.mjs
-check`, run by the unit suite, fails when an app's `dist/` has none, or a package in it has no text.
+check`, run by the unit suite, fails when an app's `dist/` has none, or a package in it has no text or a text off the
+allowlist, or a text outside the `## ` sections names a license off it (a choice of licenses, and nothing else, passes
+when its heading names the option used, that option is on the list and its text is there, and any other text off the
+list is another option's).
 Vite lists `maplibre-gl` there as one package, so each app's build expands it (`maplibreNotices` / `expand` from
 `scripts/maplibre-notices.mjs`) with the packages MapLibre's prebuilt dist bundles inside itself, read from the source
 maps of the installed copy: for 6.10.0 the list above plus `kdbush` and `@mapbox/tiny-sdf`, which its main file adds;
@@ -178,7 +181,8 @@ and further MIT / ISC / BSD / Unlicense packages: their texts are in `wild/fixtu
 and six `@turf/*` 7.2.0 modules (MIT), and its CSS inlines Material Symbols icons (Apache-2.0): the texts, and those
 of the code terra-draw adapted (MIT / ISC), are in its `THIRD_PARTY_LICENSES.md`. Every directory under
 `wild/fixtures/vendor/` keeps a `THIRD_PARTY_LICENSES.md` (for d3 v3: that it bundles only itself), checked by
-`node wild/scripts/apps.mjs check`.
+`node wild/scripts/apps.mjs check`, which also holds each `## ` section's text to the allowlist, and the text outside
+the sections to naming no license off it, as for an app.
 
 Full inventory and per-item licensing already tracked in `wild/README.md` (the table of
 `maplibre-examples/`, `apps/`, `fixtures/`) and `wild/fixtures/SOURCES.md` (per-fixture origin,

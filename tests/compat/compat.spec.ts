@@ -3,7 +3,7 @@ import { geowright, expect, type MapHandle } from '../../src/playwright';
 import { routeVectorTiles } from '../../src/playwright/tiles';
 import { guardNetwork } from '../fixtures';
 import { LIBS } from './libs';
-import { FAIL_FAST_MS, PROBE_FAIL_FAST_MS } from '../slow-machine';
+import { allowForThrottle, FAIL_FAST_MS, PROBE_FAIL_FAST_MS } from '../slow-machine';
 
 /**
  * The version matrix: the SAME page and the SAME specs against every MapLibre / Mapbox-GL-v1-API major.
@@ -141,6 +141,7 @@ for (const lib of LIBS) {
     // is drawn solid black by MapLibre 2–5 and Mapbox GL 1, hole and all — and the probe then rightly says covered.) Opaque: refused, and named; translucent, or opaque with a
     // transparent hole over the feature: the click lands (a pixel probe decides, not the style).
     test('pixel-only layers above a feature: opaque refused and named; translucent, or a hole, lets the click through', async ({ map, page }) => {
+      allowForThrottle(PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
       const bravo = { lng: 34.8, lat: 32.08 };
       const veil = (o: { opacity: number; hole?: boolean }) =>
         page.evaluate(({ o, at }) => {

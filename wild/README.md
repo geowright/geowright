@@ -31,7 +31,9 @@ stand-in for OpenFreeMap "bright", whose OSM data / CC-BY design cannot be commi
 
 `node wild/scripts/apps.mjs check` (run by the unit suite, `tests/unit/wild-apps.unit.spec.ts`) holds every app here to
 the rules below: a license file on the allowlist, an `UPSTREAM.md` with the repository, the full commit and the hook
-line, a spec that opens it, and a `dist/THIRD_PARTY_LICENSES.md` with the license text of everything `dist/` bundles.
+line, a spec that opens it, and a `dist/THIRD_PARTY_LICENSES.md` with the license text of everything `dist/` bundles:
+each `## ` section's text on the allowlist, and no text outside the sections naming a license off it (the same for each
+`fixtures/vendor/*/THIRD_PARTY_LICENSES.md`).
 It also fails on a file under `fixtures/` that no row in `fixtures/SOURCES.md` or `fixtures/sources/*.md` names, and holds the
 one-line rule to what can be checked without the network ([0016](../docs/decisions/0016-wild-apps-not-bent-checked-offline.md),
 proposed): an app's sources name `__geowright_maps` only in the hook line its `UPSTREAM.md` shows, once per file, in the
@@ -91,4 +93,9 @@ written down in the issue, so the friction is not lost with the app. A dual lice
 the list (`MIT OR GPL-3.0`) is fine too, for an app as for a dependency inside a bundle: it is used under an option on
 the list, UPSTREAM.md (or the notices) says so, and only that option's license file is vendored — JSTS, `EDL-1.0 OR
 EPL-1.0`, inside the Turf fixture, is used under EDL-1.0 ([0020](../docs/decisions/0020-third-party-allowlist-adds-0bsd-and-unicode-data.md)).
-The helper recognises license files, not choices: it refuses a file off the list, so the election is a person's.
+The helper recognises license files, not choices: it refuses a file off the list, so the election is a person's. In
+the notices, `check` accepts a choice whose heading names the option used (`(A OR B), used under A`, as
+`scripts/maplibre-notices.mjs` writes it) when the license is a choice and nothing else (no `AND`), that option is on
+the list with its text below, and any text below that is off the list is another option's. Any other heading that
+declares a license off the list (`(MIT AND CC-BY-4.0)`) is refused whatever text is below it: Vite's `build.license`
+copies only the first license file a package ships.

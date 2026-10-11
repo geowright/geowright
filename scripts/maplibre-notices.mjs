@@ -230,8 +230,11 @@ export function bundled(dir, files = distFiles(dir)) {
  */
 export function sections({ packages, copied }, where) {
   const out = packages.map((p) => {
-    // A choice of licenses is used under the first option that is on the allowlist, and says so (decision 0020).
-    const chosen = / OR /.test(p.license) ? p.license.replace(/[()]/g, '').split(' OR ').find((l) => /^(MIT|ISC|BSD|Apache-2\.0)/.test(l)) : undefined;
+    // A choice of licenses is used under the first option that is on the allowlist, and says so (decision 0020). Only a
+    // choice and nothing else: in `(A OR B) AND C`, C applies whichever option is used (wild/scripts/apps.mjs agrees).
+    const options = p.license.replace(/[()]/g, ' ').trim().split(/\s+OR\s+/);
+    const choice = options.length > 1 && options.every((o) => /^[\w.+-]+(\s+WITH\s+[\w.+-]+)?$/.test(o));
+    const chosen = choice ? options.find((l) => /^(MIT|ISC|BSD|Apache-2\.0)/.test(l)) : undefined;
     const under = chosen ? `, used under ${chosen} (the file below carries every option's text)` : '';
     return `## ${p.name} - ${p.version} (${p.license})${under}${where ? `, ${where}` : ''}\n\n${p.text}\n${p.data ? `\n${p.data}\n` : ''}`;
   });

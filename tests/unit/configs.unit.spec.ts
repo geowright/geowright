@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
-import { readdirSync, readFileSync } from 'node:fs';
+import { execFileSync } from 'node:child_process';
+import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import core from '../../playwright.config';
 import compat from '../../playwright.compat.config';
 
@@ -25,4 +27,33 @@ test('no workflow step name holds ": " unquoted', () => {
       }
     }
   }
+});
+
+// In a .gitignore, `#` starts a comment only at the start of a line: `foo   # why` is the pattern "foo   # why", which
+// matches nothing (seen on the CI failure archive's line, which then sat untracked after every local run of its script).
+const GITIGNORE = fileURLToPath(new URL('../../.gitignore', import.meta.url));
+
+test('no .gitignore line carries a comment after its pattern', () => {
+  for (const [i, line] of readFileSync(GITIGNORE, 'utf8').split('\n').entries()) {
+    if (!line.startsWith('#') && /\s#/.test(line)) {
+      throw new Error(`.gitignore:${i + 1}: git reads the comment as part of the pattern — put it on its own line above:\n${line}`);
+    }
+  }
+});
+
+test('git ignores the archive scripts/failed-test-results.mjs writes by default', () => {
+  const dir = test.info().outputPath('repo');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(GITIGNORE, `${dir}/.gitignore`);
+  // Only this .gitignore decides (a developer's `*.tgz` anywhere else would hide the defect): no global or system config,
+  // no GIT_DIR from a hook, no excludes file (git reads $XDG_CONFIG_HOME/git/ignore or ~/.config/git/ignore by default,
+  // config or not) and no info/exclude from a template.
+  const env: NodeJS.ProcessEnv = { GIT_CONFIG_GLOBAL: '/dev/null', GIT_CONFIG_NOSYSTEM: '1' };
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('GIT_')) env[k] = v;
+  const git = (...args: string[]) =>
+    execFileSync('git', ['-c', 'core.excludesFile=/dev/null', '-C', dir, ...args], { encoding: 'utf8', env, stdio: ['ignore', 'pipe', 'pipe'] });
+  git('init', '-q', '--template=');
+  execFileSync(process.execPath, [fileURLToPath(new URL('../../scripts/failed-test-results.mjs', import.meta.url))], { cwd: dir, stdio: 'ignore' });
+  expect(existsSync(`${dir}/test-results-failed.tgz`)).toBe(true);
+  expect(git('status', '--porcelain', '--untracked-files=all').trim()).toBe('?? .gitignore');
 });

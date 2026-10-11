@@ -7,10 +7,13 @@
 //   node wild/scripts/apps.mjs check
 //       Every wild/apps/<name>/ keeps a license file on the allowlist, has an UPSTREAM.md naming the upstream
 //       repository, a full commit SHA and the hook line, and is opened by a spec in tests/wild/; its built dist/ ships
-//       dist/THIRD_PARTY_LICENSES.md with a section and a license text for each package it bundles;
+//       dist/THIRD_PARTY_LICENSES.md with a section and a license text for each package it bundles, each text on the
+//       allowlist (a choice of licenses, and nothing else: the option its heading says is used), no heading declaring a
+//       license off it (but a choice's other options) and no text outside the sections naming one;
 //       wild/maplibre-examples/ keeps its license; every file under wild/fixtures/ is named in SOURCES.md or a
 //       sources/*.md record (by path, by name, or — data only, not code — by a directory it is in); each vendored build
-//       under wild/fixtures/vendor/ keeps a license file and a THIRD_PARTY_LICENSES.md; no TODO(new-app) is left anywhere.
+//       under wild/fixtures/vendor/ keeps a license file and a THIRD_PARTY_LICENSES.md held to the same rule as dist/'s;
+//       no TODO(new-app) is left anywhere.
 //       The one-line rule (docs/decisions/0016), as far as it can be checked offline: each app's sources hold the hook
 //       line UPSTREAM.md shows, at most one per file, in the files UPSTREAM.md marks "+1 line" and in no other vendored
 //       file; each MapLibre example's committed patch is exactly one added line, the hook, and nothing removed (as
@@ -52,15 +55,25 @@ const ALLOWED = [
   ['Unlicense', /This is free and unencumbered software released into the public domain/i],
 ];
 // Any of these anywhere in the file refuses it, even next to an allowed text (a dual or mixed license needs a person).
+// Third: the SPDX ids it is offered under, so a choice of licenses in the notices can carry an option's text.
 const REFUSED = [
-  ['GPL / LGPL / AGPL', /GNU (Affero |Lesser |Library )?General Public License|\b[AL]?GPL-?[23]/i],
-  ['MPL', /Mozilla Public License/i],
-  ['EPL', /Eclipse Public License/i],
-  ['CC-BY (any Creative Commons license with attribution)', /Creative Commons Attribution|\bCC[- ]BY\b/i],
-  ['ODbL', /Open Database License|\bODbL\b/i],
-  ['SSPL', /Server Side Public License/i],
-  ['Business Source License', /Business Source License/i],
-  ['OFL (allowed for fonts only, not for an app)', /SIL Open Font License/i],
+  ['GPL / LGPL / AGPL', /GNU (Affero |Lesser |Library )?General Public License|\b[AL]?GPL-?[23]/i, /^[AL]?GPL-/],
+  ['MPL', /Mozilla Public License/i, /^MPL-/],
+  ['EPL', /Eclipse Public License/i, /^EPL-/],
+  ['CC-BY (any Creative Commons license with attribution)', /Creative Commons Attribution|\bCC[- ]BY\b/i, /^CC-BY-/],
+  ['ODbL', /Open Database License|\bODbL\b/i, /^ODbL-/],
+  ['SSPL', /Server Side Public License/i, /^SSPL-/],
+  ['Business Source License', /Business Source License/i, /^BUSL-/],
+  ['OFL (allowed for fonts only, not for an app)', /SIL Open Font License/i, /^OFL-/],
+];
+
+// The election exception must distinguish GPL, LGPL (including its old Library name), and AGPL:
+// recognising any one must not grant permission to carry either of the others' texts.
+const ELECTION_REFUSED = [
+  ['GPL', /GNU General Public License|\bGPL-?[23]/i, /^GPL-/],
+  ['LGPL', /GNU (Lesser|Library) General Public License|\bLGPL-?[23]/i, /^LGPL-/],
+  ['AGPL', /GNU Affero General Public License|\bAGPL-?[23]/i, /^AGPL-/],
+  ...REFUSED.slice(1),
 ];
 
 /** { ok: true, kinds } when the text is recognised as allowed and names nothing refused; otherwise { ok: false, why }. */
@@ -71,6 +84,102 @@ function classify(text) {
   const kinds = ALLOWED.filter(([, re]) => re.test(t)).map(([k]) => k);
   if (!kinds.length) return { ok: false, why: 'its text is not one this script recognises' };
   return { ok: true, kinds };
+}
+
+// The options a choice of licenses may be used under (SPDX ids, decision 0020), each with the ALLOWED text it is
+// recognised by: 0BSD reads as ISC's grant, EDL-1.0 is BSD-3-Clause, the Unicode data license as MIT's.
+const CHOOSABLE = [
+  [/^MIT$/, 'MIT'], [/^ISC$/, 'ISC'], [/^0BSD$/, 'ISC'], [/^BSD-[23]-Clause$/, 'BSD'], [/^EDL-1\.0$/, 'BSD'],
+  [/^Apache-2\.0$/, 'Apache-2.0'], [/^CC0-1\.0$/, 'CC0'], [/^Unlicense$/, 'Unlicense'], [/^(Unicode-DFS-201[56]|Unicode-3\.0)$/, 'MIT'],
+];
+
+/**
+ * The choice a notices heading elects an option of — `<package> - <version> (<expression>), used under <option>`, as
+ * scripts/maplibre-notices.mjs writes it — as its options (SPDX, `<id>` or `<id> WITH <exception>`) and the one used.
+ * Only for a choice and nothing else: an expression with an AND (`(A OR B) AND C`) has a part that applies whichever
+ * option is used, so it elects nothing.
+ */
+function electionOf(head) {
+  const at = head.indexOf('), used under ');
+  if (at < 0) return undefined;
+  const used = /^[\w.+-]*\w/.exec(head.slice(at + '), used under '.length))?.[0];
+  let open = -1; // the parenthesis that the one before ", used under" closes
+  for (let i = at, depth = 0; i >= 0 && open < 0; i--) {
+    if (head[i] === ')') depth++;
+    else if (head[i] === '(' && --depth === 0) open = i;
+  }
+  const options = head.slice(open + 1, at).replace(/[()]/g, ' ').trim().split(/\s+OR\s+/).map((o) => o.replace(/\s+/g, ' '));
+  if (!used || open < 0 || options.length < 2 || !options.every((o) => /^[\w.+-]+( WITH [\w.+-]+)?$/.test(o))) return undefined;
+  return { options, used };
+}
+
+const CHOICE_RULE = 'a choice of licenses passes when it is a choice and nothing else (no AND), its heading names the option used ("(A OR B), used under A"), that option is on the list with its text below, and every refused text below is one of its options\'';
+
+/**
+ * The election a heading makes (electionOf), when the option used is one of the choice's and on the allowlist: that
+ * option's ALLOWED kind and the choice's SPDX ids. Otherwise no kind and no ids.
+ */
+function validElection(head) {
+  const e = electionOf(head);
+  const kind = e?.options.includes(e.used) ? CHOOSABLE.find(([re]) => re.test(e.used))?.[1] : undefined;
+  return { kind, ids: kind ? e.options.map((o) => o.split(' ')[0]) : [] };
+}
+
+/**
+ * A heading's license, in its parentheses (`<package> - <version> (<license>)`), names no refused license by its SPDX
+ * id (REFUSED's third column; ids match in any case, as SPDX's do), apart from the other options of a valid election.
+ * It is what package.json declares, and Vite's build.license copies only the first license file a package ships:
+ * `(MIT AND CC-BY-4.0)` can head the MIT text alone. Outside the parentheses is the package's name, not its license.
+ */
+function headingAllowed(head) {
+  const { ids } = validElection(head);
+  let depth = 0;
+  const inParens = [...head].map((ch) => (ch === '(' ? (depth++, ' ') : ch === ')' ? ((depth = Math.max(0, depth - 1)), ' ') : depth ? ch : ' ')).join('');
+  const words = inParens.split(/[^\w.+-]+/).filter((w) => w && !ids.some((id) => id.toLowerCase() === w.toLowerCase()));
+  const declared = REFUSED.filter(([, , spdx]) => words.some((w) => new RegExp(spdx.source, 'i').test(w))).map(([k]) => k);
+  if (!declared.length) return { ok: true };
+  return { ok: false, why: `its heading declares ${declared.join(', ')}, whatever the text below${/\sOR\s/.test(head) ? `; ${CHOICE_RULE}` : ''}` };
+}
+
+/**
+ * One `## <heading>` section of a THIRD_PARTY_LICENSES.md: its heading names no refused license (headingAllowed), and
+ * its text passes as classify() a license file's, with one exception: a choice of licenses whose heading names the
+ * option used (electionOf) passes when that option is one of the choice's, is on the allowlist and has its text below,
+ * and any refused text below is another option's (CONTRIBUTING, "Licenses").
+ */
+function classifySection({ head, text }) {
+  const h = headingAllowed(head);
+  if (!h.ok) return h;
+  const c = classify(text);
+  if (c.ok && !head.includes('), used under ')) return c;
+  const { kind, ids } = validElection(head);
+  const t = text.replace(/\s+/g, ' ');
+  const unchosen = ELECTION_REFUSED.filter(([, re, spdx]) => re.test(t) && !ids.some((id) => spdx.test(id)));
+  if (kind && ALLOWED.find(([k]) => k === kind)[1].test(t) && !unchosen.length) return { ok: true, kinds: [kind] };
+  if (/\sOR\s/.test(head)) return { ok: false, why: `${c.ok ? "the elected option must have its license text below" : c.why}; ${CHOICE_RULE}` };
+  return c;
+}
+
+/** The `## <heading>` sections of a THIRD_PARTY_LICENSES.md, each with the text below it up to the next one. */
+const sectionsOf = (file) => read(file).split(/^## /m).slice(1).map((s) => {
+  const [head, ...body] = s.split('\n');
+  return { head: head.trim(), text: body.join('\n').trim() };
+});
+
+/**
+ * Every section has a license text and is on the allowlist (classifySection; one without a text, by its heading alone),
+ * and the text outside the sections (the preamble, prose, a `###` heading above the first `## `) names no refused
+ * license. Prose passes. An app's dist/ and a vendored build under wild/fixtures/vendor/ alike.
+ */
+function sectionsAllowed(file, sections, problems) {
+  for (const s of sections) {
+    if (!s.text) problems.push(`${rel(file)}: "${s.head}" has no license text (the package ships no license file: add its text below the heading, or have the build add it)`);
+    const c = s.text ? classifySection(s) : headingAllowed(s.head);
+    if (!c.ok) problems.push(`${rel(file)}: "${s.head}" is not on the allowlist (${ALLOWLIST}): ${c.why}`);
+  }
+  const outside = read(file).split(/^## /m)[0].replace(/\s+/g, ' ');
+  const refused = REFUSED.filter(([, re]) => re.test(outside)).map(([k]) => k);
+  if (refused.length) problems.push(`${rel(file)}: text outside any "## " section names a license off the allowlist (${ALLOWLIST}): it is (or mentions) ${refused.join(', ')}; give each package its own "## <package> - <version>" section`);
 }
 
 const isLicenseFile = (f) => /^(licen[cs]e|copying)([-._].*)?$/i.test(f);
@@ -312,6 +421,8 @@ function fixturesRecorded(problems) {
     const files = readdirSync(join(vendor, d));
     if (!files.some(isLicenseFile)) problems.push(`wild/fixtures/vendor/${d}/: no license file (keep the package's own, byte-identical)`);
     if (!files.includes('THIRD_PARTY_LICENSES.md')) problems.push(`wild/fixtures/vendor/${d}/: no THIRD_PARTY_LICENSES.md (what the build bundles, established by reading it, and each one's license text: decision 0020)`);
+    // A build that bundles nothing but its own code says so in prose, with no section (vendor/d3@3).
+    else sectionsAllowed(join(vendor, d, 'THIRD_PARTY_LICENSES.md'), sectionsOf(join(vendor, d, 'THIRD_PARTY_LICENSES.md')), problems);
   }
 }
 
@@ -340,12 +451,10 @@ function noticesOf(dir, problems) {
     problems.push(`${rel(file)}: missing. dist/ redistributes what the build bundles, so it must ship their license texts (Vite: build.license; see wild/README.md, "Bring your app")`);
     return;
   }
-  const sections = read(file).split(/^## /m).slice(1).map((s) => {
-    const [head, ...body] = s.split('\n');
-    return { head: head.trim(), text: body.join('\n').trim() };
-  });
+  const sections = sectionsOf(file);
   if (!sections.length) problems.push(`${rel(file)}: lists no package (one "## <package> - <version>" section each, license text below)`);
-  for (const s of sections) if (!s.text) problems.push(`${rel(file)}: "${s.head}" has no license text (the package ships no license file: add its text to the build)`);
+  // What dist/ bundles is held to the allowlist like the app itself (wild/README.md, "Bring your app", step 2).
+  sectionsAllowed(file, sections, problems);
   // Vite lists maplibre-gl as ONE package, but its prebuilt dist bundles others inside itself. The build adds them
   // from MapLibre's source maps (scripts/maplibre-notices.mjs); offline, only a floor can be checked: the packages
   // every MapLibre 3-6 build bundles.

@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import { test, expect } from './fixtures';
 import { geowright, type MapHandle } from '../src/playwright';
-import { block, FAIL_FAST_MS } from './slow-machine';
+import { allowForThrottle, block, FAIL_FAST_MS } from './slow-machine';
 
 /** The default action timeout follows the test's timeout; an action's `timeout` is a wall-clock promise. */
 test.describe('timeouts', () => {
@@ -104,6 +104,7 @@ test.describe('timeouts', () => {
   // cannot be recalled, and the action used to wait for the answer for as long as the stall lasted, then report what it
   // said. Now it fails at its timeout, says the click was sent and unconfirmed, and never sends it again.
   test('feature().click: a page that stalls after the press fails after input at its timeout, and the click is not sent again', async ({ map, page }) => {
+    allowForThrottle(STALL); // it waits for the stall to end
     await page.evaluate(() => {
       const w = window as any;
       w.__alertClicks = 0;

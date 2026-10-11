@@ -1,7 +1,7 @@
 import { test, expect } from './fixtures';
 import { geowright, type MapHandle } from '../src/playwright';
 import { vectorTileHandler } from '../src/playwright/tiles';
-import { FAIL_FAST_MS } from './slow-machine';
+import { allowForThrottle, FAIL_FAST_MS } from './slow-machine';
 
 /**
  * ASSERT gap: an action in the regular DOM UI must be verifiable ON THE MAP.
@@ -63,6 +63,7 @@ test.describe('assert gap', () => {
   });
 
   test('failure message distinguishes off-screen from missing, and hidden layers', async ({ map, page }) => {
+    allowForThrottle(3 * FAIL_FAST_MS); // three expected failures, each waits out its timeout
     const offscreen = await expect(map).toHaveFeature({ layer: 'alerts', id: 4 }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(offscreen!.message).toContain('exist in the source but are not rendered');
 
@@ -90,6 +91,7 @@ test.describe('assert gap', () => {
   });
 
   test('where: an array or an unknown operator is no verdict, not "matches everything"', async ({ map }) => {
+    allowForThrottle(4 * FAIL_FAST_MS); // four expected failures (no verdict), each waits out its timeout
     for (const where of [{ severity: ['high', 'medium'] }, { severity: { equals: 'high' } }] as any[]) {
       for (const not of [false, true]) {
         const m = not ? expect(map).not : expect(map);
@@ -150,6 +152,7 @@ test.describe('assert gap', () => {
 
   // the message said "rendered" for a query that matches only what a user can SEE.
   test('toHaveFeature says "visible" when it looks for visible features; toHaveGeometry says what is on the map', async ({ map }) => {
+    allowForThrottle(3 * FAIL_FAST_MS); // three expected failures, each waits out its timeout
     const e = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: FAIL_FAST_MS }));
     expect(e?.message).toContain(`Expected: at least one visible feature matching, within ${FAIL_FAST_MS}ms`);
     const any = await rejects(expect(map).toHaveFeature({ layer: 'alerts', id: 999 }, { timeout: FAIL_FAST_MS, visible: 'any' }));
@@ -160,6 +163,7 @@ test.describe('assert gap', () => {
   });
 
   test('toHaveView: zoomTolerance and degreesTolerance widen the match, and the message states them', async ({ map }) => {
+    allowForThrottle(3 * FAIL_FAST_MS); // three expected failures, each waits out its timeout
     // the demo is at rest at 34.78,32.08 zoom 12
     const zoom = await rejects(expect(map).toHaveView({ zoom: 12.2 }, { timeout: FAIL_FAST_MS }));
     expect(zoom?.message).toContain('±0.01 zoom');
@@ -367,6 +371,7 @@ test.describe('a verdict needs a map it could look at', () => {
   });
 
   test('.not on a mistyped layer fails, and says the layer does not exist', async ({ map }) => {
+    allowForThrottle(3 * FAIL_FAST_MS); // three expected failures, each waits out its timeout
     const e = await rejects(expect(map).not.toHaveFeature({ layer: 'alert' }, { timeout: FAIL_FAST_MS }));
     expect(e, '.not.toHaveFeature passed for a layer that does not exist').not.toBeNull();
     expect(e?.message).toContain('layer "alert" does not exist. Layers:');
