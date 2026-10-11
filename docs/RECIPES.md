@@ -13,10 +13,23 @@ npx geowright init            # [--dir tests] [--url /] [--force]
 Writes `geowright.fixture.ts` (a `map` fixture), `geowright.webgl.ts` (the software-WebGL launch flags) and `map.spec.ts`
 (a first spec that prints `map.snapshot()` — read it once: it tells you your layer ids and property names). It looks at
 your `package.json`, recognises react-map-gl, `@vis.gl/react-maplibre`, svelte-maplibre-gl and vue-maplibre-gl, and prints
-the hook in the form that wrapper needs. It never overwrites a file without `--force`. Where the project has no
-`playwright.config.*` it writes a complete one (flags wired in, `baseURL`, `webServer`) with two lines marked CHECK: where
-your app is served and how it is started. An existing config is never edited, not even with `--force`: `init` prints the
-two lines to add to it.
+the hook in the form that wrapper needs. It warns when the `maplibre-gl` or `mapbox-gl` range there is not one geowright
+is tested with (MapLibre GL JS 2–6, Mapbox GL JS 1.13), or has no version to tell by (`latest`). It never overwrites a file
+without `--force`. Where the project has no `playwright.config.*` it writes a complete one (flags wired in, `baseURL`,
+`webServer`) with two lines marked CHECK: where your app is served and how it is started. An existing config is never
+edited, not even with `--force`: `init` prints what to add to it, or says that it launches with the flags already (a
+second run of `init`, or a config they were pasted into; the import alone does not count; every Chromium project must have the flags in its effective launchOptions). Where the config has `projects` (`npm init playwright` writes chromium,
+firefox and webkit), that is the import and `launchOptions: { args: WEBGL_SOFTWARE_FLAGS }` in the `use` of each Chromium
+project: a second `projects` key would replace the ones there. Where a `use` has `launchOptions` already, the flags go
+into it (`...WEBGL_SOFTWARE_FLAGS` in its `args`): a second `launchOptions` would replace it, and a project's own replaces
+the config's whole, so a config without `projects` whose `use` has `launchOptions` gets the flags there. Without `--dir`,
+the files go where that config's projects look for tests, read as Playwright reads them: a project's own `testDir` and
+`testMatch`, else the config's (a setup project that takes only `*.setup.ts` does not count). `init` warns when no
+project would find `map.spec.ts` (step 3 would say "No tests found"), and adds a note where it cannot read the config
+well enough to tell: a `testDir` from a variable or an escaped string literal, or a config that spreads another (`{ ...base }`,
+`defineConfig(base, { … })`). The fixture opens `--url` (default `/`) relative to the config's `use.baseURL`: a config without
+one (Playwright leaves it unset by default) needs it set and the app served, or a full URL
+(`--url http://localhost:5173/`).
 
 ## The one line, per wrapper
 

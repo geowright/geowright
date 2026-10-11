@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, matchesGlob, relative, resolve, sep } from 'node:path';
 
 /**
  * `npx geowright init` — the first five minutes. Writes a fixture, the software-WebGL launch flags and a first
@@ -63,23 +63,66 @@ export interface Detection {
 export function detect(pkgJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string>; peerDependencies?: Record<string, string> }): Detection {
   const deps = { ...pkgJson.peerDependencies, ...pkgJson.devDependencies, ...pkgJson.dependencies };
   const wrappers = WRAPPERS.filter((w) => w.pkg in deps);
-  let mapLibrary: Detection['mapLibrary'];
-  if (deps['maplibre-gl']) mapLibrary = { pkg: 'maplibre-gl', range: deps['maplibre-gl'], supported: true };
-  else if (deps['mapbox-gl']) {
-    const major = Number(/(\d+)/.exec(deps['mapbox-gl'])?.[1]);
-    mapLibrary = { pkg: 'mapbox-gl', range: deps['mapbox-gl'], supported: major === 1, why: major === 1 ? undefined : 'Mapbox GL JS v2+ is proprietary and is NOT tested by geowright (v1.13 is). It shares the v1 API family, so much of this is likely to work — unverified.' };
-  }
+  const pkg = deps['maplibre-gl'] ? 'maplibre-gl' : deps['mapbox-gl'] ? 'mapbox-gl' : undefined;
+  const mapLibrary: Detection['mapLibrary'] = pkg && { pkg, range: deps[pkg], ...judge(pkg, deps[pkg]) };
   return { wrappers, mapLibrary, playwright: '@playwright/test' in deps, typescript: 'typescript' in deps };
 }
 
-/** The two lines an existing playwright.config needs (printed by init, and in the comment of geowright.webgl). */
+/**
+ * Whether the map library a dependency range installs is one geowright is tested with (README "Supported versions":
+ * MapLibre GL JS 2–6, Mapbox GL JS 1.13), and why not. The major is the range's first number (`^6.1.0`, `>=5 <6`,
+ * `6.x`); a range without one (`latest`, `*`, a git or file spec) is unknown, never guessed. An npm alias
+ * (`"mapbox-gl": "npm:maplibre-gl@^4"`, as react-map-gl users wrote it) is judged by the package it installs.
+ */
+function judge(dep: 'maplibre-gl' | 'mapbox-gl', spec: string): { supported: boolean; why?: string } {
+  const alias = /^npm:((?:@[^/@]+\/)?[^@]+)(?:@(.*))?$/.exec(spec.trim());
+  const lib = alias ? alias[1] : dep;
+  const m = /^[\s=v^~<>]*(\d+)/.exec(alias ? alias[2] ?? '' : spec);
+  const major = m ? Number(m[1]) : undefined;
+  const unknown = 'cannot tell the major version from this range;';
+  if (lib === 'maplibre-gl') {
+    if (major === undefined) return { supported: false, why: `${unknown} geowright is tested with MapLibre GL JS 2–6 (\`npm ls maplibre-gl\` shows the one installed).` };
+    if (major < 2) return { supported: false, why: `MapLibre GL JS ${major} is NOT tested by geowright (2–6 are). It shares the API of Mapbox GL JS 1.13, which is tested, so much of this is likely to work — unverified.` };
+    if (major > 6) return { supported: false, why: `MapLibre GL JS ${major} is newer than the versions this geowright release is tested with (2–6). Much of this is likely to work — unverified; a newer geowright may cover it.` };
+    return { supported: true };
+  }
+  if (lib === 'mapbox-gl') {
+    if (major === 1) return { supported: true };
+    if (major === undefined) return { supported: false, why: `${unknown} geowright is tested with Mapbox GL JS 1.13 only; v2 and later are proprietary and NOT tested (\`npm ls mapbox-gl\` shows the one installed).` };
+    if (major < 1) return { supported: false, why: `Mapbox GL JS ${major} is older than the version geowright is tested with (1.13).` };
+    return { supported: false, why: 'Mapbox GL JS v2+ is proprietary and is NOT tested by geowright (v1.13 is). It shares the v1 API family, so much of this is likely to work — unverified.' };
+  }
+  return { supported: false, why: `this installs ${lib}, which geowright is not tested with (MapLibre GL JS 2–6 and Mapbox GL JS 1.13 are).` };
+}
+
+const JS_ESCAPES: Record<string, string> = { '\\': '\\\\', "'": "\\'", '\n': '\\n', '\r': '\\r', '\u2028': '\\u2028', '\u2029': '\\u2029' };
+/**
+ * A value (--url, --dir) as a single-quoted JavaScript string literal, the quote style of the files init writes: an
+ * apostrophe or a backslash in it no longer gives a file that does not parse.
+ */
+const jsString = (s: string) => `'${s.replace(/[\\'\n\r\u2028\u2029]/g, (c) => JS_ESCAPES[c])}'`;
+
+/** The flags, in the `use` of a Chromium project. */
+const LAUNCH_OPTIONS = 'launchOptions: { args: WEBGL_SOFTWARE_FLAGS }';
+
+/**
+ * The two lines an existing playwright.config with no `projects` needs (printed by init, and in the comment of
+ * geowright.webgl). A config with `projects` takes the import and, in its Chromium projects' `use`, LAUNCH_OPTIONS.
+ */
 export const configLines = (dir: string) => [
-  `import { WEBGL_SOFTWARE_FLAGS } from './${dir}/geowright.webgl.js';`,
-  `projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: WEBGL_SOFTWARE_FLAGS } } }],`,
+  `import { WEBGL_SOFTWARE_FLAGS } from ${jsString(`./${dir}/geowright.webgl.js`)};`,
+  `projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], ${LAUNCH_OPTIONS} } }],`,
 ];
 
 /** A path as the user can paste it into a POSIX shell. */
 export const shellPath = (p: string) => (/^[\w@%+=:,./-]+$/.test(p) ? p : `'${p.replace(/'/g, `'\\''`)}'`);
+
+/**
+ * A path as `npx playwright test <path>` reads it: Playwright takes every file argument as a regular expression over
+ * absolute paths, so `e2e (map)/map.spec.ts` selects nothing ("No tests found"). `.` is left as it is: it matches
+ * itself too, and the path stays the one the user knows.
+ */
+const testFilter = (p: string) => p.replace(/[\\^$*+?()[\]{}|]/g, '\\$&');
 
 /**
  * The command line of `geowright init`: `--dir X` / `--dir=X`, `--url X` / `--url=X`, `--force`. A value that is
@@ -102,6 +145,232 @@ export function parseInitArgs(args: string[]): Pick<InitOptions, 'dir' | 'url' |
   return out;
 }
 
+/** A file's text, or '' where it cannot be read (a directory, no permission): then init says what it says for any config. */
+const readText = (file: string) => {
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+};
+
+/** A string, template or regular-expression literal (a regular expression only where one can start: after `:,[(=`). */
+const LITERAL = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`|(?<=[:,[(=]\s*)\/(?![*/])(?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+\/[a-z]*/;
+
+/**
+ * The config's code without its comments: a commented-out `testDir` (the scaffold that `npm init playwright` writes has
+ * several such lines) is not read. Strings and regular-expression literals are kept whole, so a glob is never taken for
+ * the start of a comment.
+ */
+const withoutComments = (text: string) =>
+  text.replace(new RegExp(`${LITERAL.source}|\\/\\*[\\s\\S]*?\\*\\/|\\/\\/[^\\n]*`, 'g'), (m) => (/^\/[*/]/.test(m) ? ' ' : m));
+
+/** The code with every literal replaced by `_`s of its length: brackets, commas and words in a string are not code. */
+const mask = (code: string) => code.replace(new RegExp(LITERAL.source, 'g'), (m) => '_'.repeat(m.length));
+
+/** The index of the bracket that closes the one at `open`, in code whose literals are masked; -1 where none does. */
+function closing(masked: string, open: number): number {
+  for (let i = open, depth = 0; i < masked.length; i++) {
+    if ('([{'.includes(masked[i])) depth++;
+    else if (')]}'.includes(masked[i]) && --depth === 0) return i;
+  }
+  return -1;
+}
+
+/**
+ * The config's code split at its `projects` lists: each project's code (undefined for one that is not an object literal: a
+ * variable, a call, a spread of a list), whether the project spreads another object into itself (`{ ...shared, name }`:
+ * what it takes from there is not read), and the rest of the code, where the config-wide keys are. `projects` is
+ * undefined where the config has none. Brackets are counted with every literal masked, so a `]` in a string or a
+ * regular expression does not end a list.
+ */
+function splitProjects(code: string): { top: string; projects?: ({ code: string; spread: boolean } | undefined)[] } {
+  const masked = mask(code);
+  let top = '', from = 0, projects: ({ code: string; spread: boolean } | undefined)[] | undefined;
+  for (const k of code.matchAll(/(?<![\w$.])(['"]?)projects\1\s*:\s*|(?<=[{,]\s*)projects\s*(?=[,}])/g)) {
+    if (k.index < from || (masked[k.index] === '_' && !k[1])) continue; // inside a list already read, or inside a string
+    projects ??= [];
+    const open = k.index + k[0].length;
+    const close = k[0].includes(':') && masked[open] === '[' ? closing(masked, open) : -1;
+    if (close < 0) {
+      projects.push(undefined); // `projects: allProjects`, `{ projects }`
+      continue;
+    }
+    for (const [at, end] of items(masked, open, close)) {
+      if (masked[at] !== '{' || closing(masked, at) !== end) projects.push(undefined);
+      else projects.push({ code: code.slice(at, end + 1), spread: items(masked, at, end).some(([first]) => masked.startsWith('...', first)) });
+    }
+    top += code.slice(from, k.index);
+    from = close + 1;
+  }
+  return { top: top + code.slice(from), projects };
+}
+
+/**
+ * What lies between the bracket at `open` and the one at `close` in masked code, split at its top-level commas (a list's
+ * elements, a call's arguments, an object's properties): the first and last index of each, blanks trimmed. A trailing
+ * comma gives nothing.
+ */
+function items(masked: string, open: number, close: number): [number, number][] {
+  const out: [number, number][] = [];
+  for (let i = open + 1, start = i, depth = 0; i <= close; i++) {
+    if (i === close || (depth === 0 && masked[i] === ',')) {
+      const text = masked.slice(start, i);
+      const first = start + text.length - text.trimStart().length, last = start + text.trimEnd().length - 1;
+      if (first <= last) out.push([first, last]);
+      start = i + 1;
+    } else if ('([{'.includes(masked[i])) depth++;
+    else if (')]}'.includes(masked[i])) depth--;
+  }
+  return out;
+}
+
+/**
+ * The config object, where init finds it: what `export default` or `module.exports =` gives (directly, or through the
+ * `const` it names), else the first defineConfig call. `whole` is its text (with several defineConfig arguments, the last
+ * one's), and `own` the part from its last top-level spread on: a key after `...base` replaces what base gives, one before
+ * it may be replaced, and defineConfig(base, { … }) is base with the last argument's keys spread over it (defineConfig in
+ * node_modules/playwright/lib/common/index.js). `built`: keys may come from code init does not read (a spread, an earlier
+ * argument, a variable, a call), so a key that `own` does not set is unknown, not unset. Undefined where there is neither
+ * an export nor a defineConfig call: then init reads the whole file.
+ */
+function configObject(code: string): { whole: string; own: string; built: boolean } | undefined {
+  const masked = mask(code);
+  const exported = /(?<![\w$.])(?:export\s+default|module\.exports\s*=)\s*/.exec(masked);
+  let at = exported ? exported.index + exported[0].length : masked.search(/(?<![\w$.])defineConfig\s*(?:<[^()]*>)?\s*\(/);
+  if (at < 0) return undefined;
+  const unknown = { whole: '', own: '', built: true };
+  const name = exported && /^([A-Za-z_$][\w$]*)(?![\w$])(?!\s*[(<.[])/.exec(masked.slice(at))?.[1]; // `export default config`
+  if (name) {
+    const declared = new RegExp(`(?<![\\w$.])(?:const|let|var)\\s+${name.replace(/\$/g, '\\$')}(?![\\w$])[^=;]*=\\s*`).exec(masked);
+    if (!declared) return unknown; // imported: built elsewhere
+    at = declared.index + declared[0].length;
+  }
+  const call = /^defineConfig\s*(?:<[^()]*>)?\s*\(/.exec(masked.slice(at));
+  const args = call ? items(masked, at + call[0].length - 1, closing(masked, at + call[0].length - 1)) : [[at, closing(masked, at)] as [number, number]];
+  const [start, end] = args.at(-1) ?? [-1, -1];
+  if (masked[start] !== '{' || end < 0 || closing(masked, start) !== end) return unknown; // `defineConfig(base)`, a call
+  const spreads = items(masked, start, end).filter(([first]) => masked.startsWith('...', first));
+  const from = spreads.length ? spreads[spreads.length - 1][1] + 1 : start;
+  return { whole: code.slice(start, end + 1), own: code.slice(from, end + 1), built: args.length > 1 || spreads.length > 0 };
+}
+
+/** A direct object property, with the last assignment winning; null means an unreadable value/spread. */
+function property(code: string, key: string): string | null | undefined {
+  const masked = mask(code);
+  if (!masked.trim().startsWith('{')) return null;
+  const open = masked.indexOf('{');
+  let value: string | null | undefined;
+  for (const [start, end] of items(masked, open, closing(masked, open))) {
+    const part = code.slice(start, end + 1);
+    if (part.startsWith('...')) {
+      // Playwright's device descriptors supply browserName, but never launchOptions.
+      if (key === 'browserName' && /^\.\.\.devices\[['"]Desktop (?:Chrome|Firefox|Safari)['"]\]$/.test(part)) {
+        value = part.includes('Firefox') ? "'firefox'" : part.includes('Safari') ? "'webkit'" : "'chromium'";
+      } else if (!(key === 'launchOptions' && /^\.\.\.devices\[['"][^'"]+['"]\]$/.test(part))) value = null;
+      continue;
+    }
+    const match = new RegExp(`^(?:${key}|['"]${key}['"])\\s*:`).exec(part);
+    if (match) value = part.slice(match[0].length).trim();
+    else if (part === key) value = null;
+  }
+  return value;
+}
+
+/** Only claim completion when every potentially Chromium project has effective, readable launch args. */
+function allChromiumLaunched(cfg: ReturnType<typeof configObject>): boolean {
+  if (!cfg || cfg.built) return false;
+  const sharedUse = property(cfg.whole, 'use');
+  const sharedLaunch = sharedUse ? property(sharedUse, 'launchOptions') : sharedUse;
+  const sharedBrowser = sharedUse ? property(sharedUse, 'browserName') : sharedUse;
+  const projects = splitProjects(cfg.whole).projects ?? [{ code: '{}', spread: false }];
+  let chromium = 0;
+  return projects.length > 0 && projects.every((p) => {
+    if (!p || p.spread) return false;
+    const use = property(p.code, 'use');
+    if (use === null) return false;
+    const browser = use ? property(use, 'browserName') : undefined;
+    const effectiveBrowser = browser === undefined ? sharedBrowser : browser;
+    if (effectiveBrowser && /^(?:['"])(?:firefox|webkit)(?:['"])$/.test(effectiveBrowser)) return true;
+    chromium++;
+    const launch = use ? property(use, 'launchOptions') : undefined;
+    const effective = launch === undefined ? sharedLaunch : launch;
+    const args = effective ? property(effective, 'args') : undefined;
+    return typeof args === 'string' && (args === 'WEBGL_SOFTWARE_FLAGS' ||
+      (args.startsWith('[') && args.endsWith(']') && items(mask(args), 0, args.length - 1)
+        .some(([start, end]) => /^\.\.\.\s*WEBGL_SOFTWARE_FLAGS$/.test(args.slice(start, end + 1)))));
+  }) && chromium > 0;
+}
+
+/** A string literal (a template without `${…}`) or a regular-expression literal at the start of `s`, and what follows it. */
+function literalAt(s: string): { text: string; value: string | RegExp; rest: string } | undefined {
+  const m = /^\s*(?:(['"`])((?:\\[\s\S]|(?!\1)[^\\])*?)\1|\/((?:\\.|\[(?:\\.|[^\]\\\n])*\]|[^/\\\n[])+)\/([a-z]*))/.exec(s);
+  if (!m) return undefined;
+  const rest = s.slice(m[0].length);
+  if (m[1]) return m[2].includes('\\') || (m[1] === '`' && m[2].includes('${')) ? undefined : { text: m[0].trim(), value: m[2], rest };
+  try {
+    return { text: m[0].trim(), value: new RegExp(m[3], m[4]), rest };
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Every value of `key` in a config's code, where each is a plain literal (`testMatch` may be a list of them), and whether
+ * some value is not one (`path.join(__dirname, 'e2e')`, a variable). Read from the text: init never runs the user's config.
+ */
+function readKey(code: string, key: 'testDir' | 'testMatch'): { values: { text: string; value: string | RegExp }[]; unreadable: boolean } {
+  const out = { values: [] as { text: string; value: string | RegExp }[], unreadable: false };
+  for (const k of code.matchAll(new RegExp(`(?<![\\w$.])['"]?${key}['"]?\\s*:`, 'g'))) {
+    let rest = code.slice(k.index + k[0].length);
+    const list = key === 'testMatch' && /^\s*\[/.test(rest);
+    if (list) rest = rest.replace(/^\s*\[/, '');
+    const found: { text: string; value: string | RegExp }[] = [];
+    for (let v = literalAt(rest); v; v = list && /^\s*,\s*[^\s\]]/.test(v.rest) ? literalAt(v.rest.replace(/^\s*,/, '')) : undefined) {
+      found.push({ text: v.text, value: v.value });
+      rest = v.rest;
+    }
+    const end = list ? /^\s*,?\s*\]\s*(?:[,}]|$)/ : /^\s*(?:[,}]|$)/;
+    if (found.length && end.test(rest) && (key === 'testMatch' || typeof found[0].value === 'string')) out.values.push(...found);
+    else out.unreadable = true;
+  }
+  // `{ testDir }` (playwright-bdd's `const testDir = defineBddConfig(…)`): a variable's value
+  if (new RegExp(`(?<=[{,]\\s*)${key}\\s*(?=[,}])`).test(mask(code))) out.unreadable = true;
+  return out;
+}
+
+/**
+ * A path or a glob with the dot that starts a segment (`.e2e`, not `.` or `..`) replaced by a character no glob gives a
+ * meaning to: Node's matchesGlob has no `dot` option, and its `*` and `**` never match such a segment; Playwright's
+ * minimatch is given `dot: true`, and they do.
+ */
+const undot = (p: string) => p.replace(/(^|\/)\.(?!\.?(?:\/|$))/g, '$1');
+
+/**
+ * Whether Playwright collects `file` (relative to the project) under a `testMatch` pattern, as its createFileMatcher does:
+ * a RegExp is tested against the absolute path; a glob (given a leading `**` segment where it has none) is matched against
+ * it case-insensitively, dot directories included.
+ */
+function testMatches(pattern: string | RegExp, cwd: string, file: string): boolean {
+  const abs = join(cwd, file).split(sep).join('/');
+  if (typeof pattern !== 'string') {
+    pattern.lastIndex = 0;
+    return pattern.test(abs);
+  }
+  return matchesGlob(undot(abs.toLowerCase()), undot((pattern.startsWith('**/') ? pattern : `**/${pattern}`).toLowerCase()));
+}
+
+type Key = ReturnType<typeof readKey>;
+/** Playwright's own testMatch where neither the project nor the config sets one. */
+const DEFAULT_TEST_MATCH = '**/*.@(spec|test).?(c|m)[jt]s?(x)';
+
+/** `http://…`, `file:…`: a URL that needs no `baseURL`. Anything else (`/`, `/app/`) is resolved against `use.baseURL`. */
+const isFullUrl = (url: string) => /^[a-z][a-z\d+.-]*:/i.test(url);
+
+/** Where a dev server of this project is likely served: Vite's default port, else the common 3000. */
+const appPort = (pkgJson: { dependencies?: Record<string, string>; devDependencies?: Record<string, string> }) =>
+  'vite' in { ...pkgJson.devDependencies, ...pkgJson.dependencies } ? 5173 : 3000;
+
 export const FILES = (ext: 'ts' | 'js', url: string) => ({
   [`geowright.fixture.${ext}`]: `import { test as base } from '@playwright/test';
 import { geowright${ext === 'ts' ? ', type MapHandle' : ''} } from 'geowright';
@@ -115,7 +384,7 @@ export { expect } from 'geowright'; // Playwright's expect + the map matchers
  */
 export const test = base.extend${ext === 'ts' ? '<{ map: MapHandle }>' : ''}({
   map: async ({ page }, use) => {
-    await page.goto('${url}');
+    await page.goto(${jsString(url)});${isFullUrl(url) ? '' : ' // relative to use.baseURL in playwright.config; or a full URL'}
     const map = geowright(page);
     await map.waitForIdle(); // a map that animates for ever never idles: delete this line (assertions retry anyway)
     await use(map);
@@ -126,7 +395,18 @@ export const test = base.extend${ext === 'ts' ? '<{ map: MapHandle }>' : ''}({
  * Headless Chromium has no GPU: these flags give deterministic software WebGL (SwiftShader) — the same set
  * MapLibre GL JS uses in its own CI. In playwright.config:
  *
- *   ${'${configLines}'}
+ *   ${'${importLine}'}
+ *
+ * and in the \`use\` of each Chromium project in its \`projects\` (a second \`projects\` key would replace them all):
+ *
+ *   ${LAUNCH_OPTIONS},
+ *
+ * or, where the config has no \`projects\`:
+ *
+ *   ${'${projectsLine}'}
+ *
+ * Where a \`use\` has launchOptions already, put the flags in their \`args\` instead (\`...WEBGL_SOFTWARE_FLAGS\`): a second
+ * launchOptions replaces the first, and a project's launchOptions replaces the config's whole.
  */
 export const WEBGL_SOFTWARE_FLAGS = [
   '--disable-gpu',
@@ -157,17 +437,16 @@ test('what is on my map?', async ({ map }) => {
 export const CONFIG_NAMES = ['ts', 'js', 'mts', 'mjs', 'cts', 'cjs'].map((e) => `playwright.config.${e}`);
 
 export function configFile(dir: string, pkgJson: { scripts?: Record<string, string>; dependencies?: Record<string, string>; devDependencies?: Record<string, string> }): string {
-  const deps = { ...pkgJson.devDependencies, ...pkgJson.dependencies };
   const script = pkgJson.scripts?.dev ? 'npm run dev' : pkgJson.scripts?.start ? 'npm start' : 'npm run dev';
-  const port = 'vite' in deps ? 5173 : 3000;
+  const port = appPort(pkgJson);
   return `import { defineConfig, devices } from '@playwright/test';
-import { WEBGL_SOFTWARE_FLAGS } from './${dir}/geowright.webgl.js';
+${configLines(dir)[0]}
 
 // Written by \`geowright init\` because this project had no Playwright config. CHECK the two marked lines.
 const baseURL = process.env.BASE_URL ?? 'http://localhost:${port}'; // <- CHECK: where your app is served
 
 export default defineConfig({
-  testDir: './${dir}',
+  testDir: ${jsString(`./${dir}`)},
   use: { baseURL },
   // Headless Chromium has no GPU: without these flags a WebGL map does not render.
   projects: [{ name: 'chromium', use: { ...devices['Desktop Chrome'], launchOptions: { args: WEBGL_SOFTWARE_FLAGS } } }],
@@ -196,27 +475,86 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
   }
   const detection = detect(pkgJson);
   const ext = detection.typescript || existsSync(join(o.cwd, 'tsconfig.json')) ? 'ts' : 'js';
+  // An existing config decides where Playwright looks: a spec that no project collects (outside its testDir, or one its
+  // testMatch does not match) is never run, and step 3 says "No tests found". Each project takes its own testDir and testMatch, else the config's, else Playwright's defaults (the config's
+  // directory, DEFAULT_TEST_MATCH): takeFirst in Playwright's config loader. A config without `projects` is one project.
+  // So a testMatch that only a setup project sets says nothing about the Chromium project beside it.
+  const existing = CONFIG_NAMES.find((n) => existsSync(join(o.cwd, n)));
+  const configText = existing ? readText(join(o.cwd, existing)) : '';
+  const code = withoutComments(configText);
+  const split = splitProjects(code);
+  // The config object itself (a spread of another config, or several defineConfig arguments: the keys it takes from
+  // there are not read), else, where init does not find it, the whole file.
+  const cfg = configObject(code);
+  const keys = (c: string) => ({ testDir: readKey(c, 'testDir'), testMatch: readKey(c, 'testMatch') });
+  const shared = keys(splitProjects(cfg ? cfg.own : code).top);
+  const unread: Key = { values: [], unreadable: true };
+  /** A key; `built`: unknown because of how a project ('projects') or the config ('config') is built. */
+  type Picked = { key: Key; built?: 'projects' | 'config' };
+  const projects = (split.projects ?? [{ code: '', spread: false }]).map((p) => {
+    const own = p && keys(p.code);
+    // its own key, else the config's
+    const pick = (k: 'testDir' | 'testMatch'): Picked =>
+      !p || !own ? { key: unread, built: 'projects' } // not an object literal
+      : own[k].values.length || own[k].unreadable ? { key: own[k] }
+      : p.spread ? { key: unread, built: 'projects' } // a spread it may take the key from
+      : shared[k].values.length || shared[k].unreadable || !cfg?.built ? { key: shared[k] }
+      : { key: unread, built: 'config' };
+    const testDir = pick('testDir'), testMatch = pick('testMatch');
+    /** Relative to the project ('' is the project itself); undefined where init cannot tell. */
+    const dirs = [...new Set(testDir.key.values.map((v) => relative(o.cwd, resolve(o.cwd, v.value as string)).split(sep).join('/')))];
+    return {
+      dir: testDir.key.unreadable || dirs.length > 1 ? undefined : (dirs[0] ?? ''),
+      dirText: testDir.key.values[0]?.text ?? "none (the config's directory)",
+      dirBuilt: testDir.built,
+      match: testMatch.key.values.length || testMatch.key.unreadable ? testMatch.key : { values: [{ text: `'${DEFAULT_TEST_MATCH}'`, value: DEFAULT_TEST_MATCH }], unreadable: false },
+      matchBuilt: testMatch.built,
+    };
+  });
+  const within = (d: string, td: string) => {
+    const r = relative(resolve(o.cwd, td), resolve(o.cwd, d));
+    return r === '' || (r !== '..' && !r.startsWith(`..${sep}`) && !isAbsolute(r));
+  };
+  const inProject = (td: string) => td !== '' && td !== '..' && !td.startsWith('../') && !isAbsolute(td);
+  /** Whether a project collects `<d>/map.spec`: true, false, or undefined where init cannot tell. */
+  const collects = (p: (typeof projects)[number], d: string) =>
+    p.dir === undefined ? undefined : !within(d, p.dir) ? false : p.match.unreadable ? undefined : p.match.values.some((v) => testMatches(v.value, o.cwd, `${d}/map.spec.${ext}`));
   // `./e2e/` and `e2e` are the same directory; the form matters in the import path written into the config
-  const dir = o.dir?.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '') || (existsSync(join(o.cwd, 'e2e')) ? 'e2e' : 'tests');
+  const given = o.dir?.replace(/\\/g, '/').replace(/^(\.\/)+/, '').replace(/\/+$/, '');
+  const usual = existsSync(join(o.cwd, 'e2e')) ? 'e2e' : 'tests';
+  // No --dir, and no project would collect the spec in the usual directory: the testDir, in the project, of the projects
+  // that would collect it there (not a setup project whose testMatch takes only *.setup.ts), else of those that may (a
+  // testMatch init does not read: the spec is collected in their testDir or nowhere). Where they look in several
+  // directories, which one is a guess: none is taken.
+  const dirsWhere = (yes: boolean | undefined) => [...new Set(projects.flatMap((p) => (p.dir !== undefined && inProject(p.dir) && collects(p, p.dir) === yes ? [p.dir] : [])))];
+  const sure = dirsWhere(true);
+  const candidates = sure.length ? sure : dirsWhere(undefined);
+  const fromConfig = given || projects.some((p) => collects(p, usual) !== false) || candidates.length !== 1 ? undefined : candidates[0];
+  const dir = given || fromConfig || usual;
   const written: string[] = [], skipped: string[] = [];
-  for (const [name, body] of Object.entries(FILES(ext, o.url ?? '/'))) {
+  const url = o.url ?? '/';
+  for (const [name, body] of Object.entries(FILES(ext, url))) {
     const file = join(o.cwd, dir, name);
     if (existsSync(file) && !o.force) {
       skipped.push(relative(o.cwd, file));
       continue;
     }
     mkdirSync(dirname(file), { recursive: true });
-    writeFileSync(file, body.replace('${configLines}', configLines(dir).join('\n *   ')));
+    // A function, not a string: a `$&` in --dir is not a replacement pattern. In the /** */ comment a `*/` (a --dir
+    // ending in `*`) is written `*\/`: inside the string literal it still reads `*/` when the line is copied.
+    const [importLine, projectsLine] = configLines(dir);
+    writeFileSync(file, body.replace('${importLine}', () => importLine.replace(/\*\//g, '*\\/')).replace('${projectsLine}', () => projectsLine));
     written.push(relative(o.cwd, file));
   }
   let config: string | undefined;
-  if (!CONFIG_NAMES.some((n) => existsSync(join(o.cwd, n)))) {
+  if (!existing) {
     config = `playwright.config.${ext}`;
     writeFileSync(join(o.cwd, config), configFile(dir, pkgJson));
     written.push(config);
   }
 
   log('geowright init');
+  if (fromConfig) log(`  into ${fromConfig}/, the testDir of ${existing}`);
   for (const f of written) log(`  wrote    ${f}`);
   for (const f of skipped) log(`  kept     ${f}  (exists; --force overwrites)`);
   log('');
@@ -240,11 +578,97 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
   log('');
   if (config) log(`2. There was no Playwright config: wrote ${config} with the headless-WebGL launch flags in it.\n   CHECK its two marked lines: where your app is served, and how it is started.`);
   else {
-    log(`2. Headless WebGL needs launch flags. Add these two lines to YOUR playwright.config (init never edits it):`);
-    for (const line of configLines(dir)) log(`     ${line}`);
+    // Unused objects and one configured project cannot establish every project's effective launch options.
+    const launched = allChromiumLaunched(cfg);
+    const imported = /\{[^{}]*(?<![\w$.])WEBGL_SOFTWARE_FLAGS(?![\w$])[^{}]*\}\s*(?:from\b|=\s*require\s*\()/.test(code);
+    const half = `2. Headless WebGL needs launch flags. ${existing} imports WEBGL_SOFTWARE_FLAGS, but not every Chromium project is confirmed to launch with them.`;
+    // Where a `use` has launchOptions already, a second launchOptions key replaces the first (the flags or the project's
+    // own args are lost, with no error), and Playwright merges the config's `use` and a project's one level deep
+    // (mergeObjects in node_modules/playwright/lib/common/index.js): a project's launchOptions replaces the config's whole.
+    const LAUNCH_OPTIONS_KEY = /(?<![\w$.])(['"]?)launchOptions\1\s*:|(?<=[{,]\s*)launchOptions\s*(?=[,}])/;
+    const configLaunch = LAUNCH_OPTIONS_KEY.test(splitProjects(cfg ? cfg.whole : code).top);
+    const projectLaunch = split.projects?.some((p) => !p || LAUNCH_OPTIONS_KEY.test(p.code));
+    if (launched) log(`2. ${existing} already has the headless-WebGL launch flags (WEBGL_SOFTWARE_FLAGS): nothing to add.`);
+    else if (split.projects === undefined && !configLaunch) {
+      if (imported) {
+        log(`${half}\n   Add this line to YOUR playwright.config (init never edits it):`);
+        log(`     ${configLines(dir)[1]}`);
+      } else {
+        log(`2. Headless WebGL needs launch flags. Add these two lines to YOUR playwright.config (init never edits it):`);
+        for (const line of configLines(dir)) log(`     ${line}`);
+      }
+    } else {
+      if (imported) log(`${half}\n   Add to YOUR playwright.config (init never edits it),`);
+      else {
+        log(`2. Headless WebGL needs launch flags. Add them to YOUR playwright.config (init never edits it): at the top,`);
+        log(`     ${configLines(dir)[0]}`);
+      }
+      const and = imported ? '' : 'and ';
+      if (split.projects !== undefined) {
+        // A config with `projects` (`npm init playwright` writes chromium, firefox and webkit) takes the flags in its Chromium
+        // projects. A second `projects` key pasted after the first replaces them all, firefox and webkit vanish without an
+        // error; pasted before it, it is ignored.
+        log(`   ${and}in the \`use\` of each Chromium project in its \`projects\` (a second \`projects\` key would replace them all):`);
+        log(`     ${LAUNCH_OPTIONS},`);
+        if (projectLaunch) {
+          log(`   Where that \`use\` has launchOptions already, add the flags to it (a second launchOptions replaces the first,`);
+          log(`   with no error): \`args: WEBGL_SOFTWARE_FLAGS,\` in it, or \`...WEBGL_SOFTWARE_FLAGS,\` at the end of its args.`);
+        }
+        if (configLaunch) {
+          log(`   ${existing}'s own \`use\` has launchOptions, and a project's launchOptions replaces it whole (Playwright`);
+          log(`   merges \`use\` one level deep): copy what it sets into the Chromium project's launchOptions too.`);
+        }
+      } else {
+        // no `projects`: the config's `use` is its one project's, and the flags go in the launchOptions it has
+        log(`   ${and}in the launchOptions of its \`use\` (a second launchOptions, or a project's own, would replace it):`);
+        log(`     args: WEBGL_SOFTWARE_FLAGS,`);
+        log(`   or, where it has args already, \`...WEBGL_SOFTWARE_FLAGS,\` at the end of them.`);
+      }
+    }
+    // The user's config may set no baseURL (Playwright leaves it unset by default), and then the fixture's
+    // page.goto('/') fails before the map is ever seen. Reading the config text for it would be fragile (it may come
+    // from a shared config, an environment variable or a webServer port), so this is said every time.
+    if (!isFullUrl(url)) {
+      log(`   The fixture opens '${url}' relative to use.baseURL. If your config sets none, the first spec fails with`);
+      log(`   "Cannot navigate to invalid URL": set use.baseURL to where your app is served (and start the app, or give the`);
+      log(`   config a webServer), or give the fixture a full URL:  npx geowright init${o.dir ? ` --dir ${shellPath(dir)}` : ''} --force --url http://localhost:${appPort(pkgJson)}/`);
+    }
   }
   if (!detection.playwright) log('   @playwright/test is not installed here yet:  npm i -D @playwright/test geowright && npx playwright install chromium');
   log('');
-  log(`3. npx playwright test ${shellPath(`${dir}/map.spec.${ext}`)}   — prints what is on your map; write assertions from that.`);
+  const spec = `${dir}/map.spec.${ext}`;
+  log(`3. npx playwright test ${shellPath(testFilter(spec))}   — prints what is on your map; write assertions from that.`);
+  // Said only where no project collects the spec: a warning where init knows that, a note where it cannot tell.
+  if (existing && projects.length && !projects.some((p) => collects(p, dir))) {
+    const unknown = projects.filter((p) => collects(p, dir) === undefined);
+    const why = new Set(unknown.map((p) => (p.dir === undefined ? (p.dirBuilt ?? 'testDir') : (p.matchBuilt ?? 'testMatch'))));
+    if (why.has('testDir')) {
+      log(`   note: ${existing} sets testDir in a form init does not read (only a plain string is read). Playwright finds`);
+      log(`   the spec only inside testDir: if ${dir}/ is not, run init again with --dir <your testDir>.`);
+    }
+    if (why.has('testMatch')) {
+      log(`   note: ${existing} sets testMatch in a form init does not read (only strings and regular expressions are read).`);
+      log(`   Playwright finds only the files it matches: if ${spec} is not one, rename it to a name it matches.`);
+    }
+    if (why.has('config')) {
+      log(`   note: ${existing} builds its config in a form init does not read (a spread, a variable, several defineConfig`);
+      log(`   arguments). Playwright finds ${spec} only inside its testDir, and only if its testMatch matches it: if it`);
+      log(`   is not inside, run init again with --dir <your testDir>; if testMatch does not match it, rename it.`);
+    }
+    if (why.has('projects')) {
+      log(`   note: ${existing} builds a project in a form init does not read (a variable, a spread). Playwright finds ${spec}`);
+      log(`   only in a project whose testDir contains it and whose testMatch matches it: if none does, run init again with --dir.`);
+    }
+    // every project read, and none collects it: the projects that look in its directory have a testMatch it does not match
+    const looking = unknown.length ? undefined : projects.filter((p) => within(dir, p.dir!));
+    if (looking && !looking.length) {
+      log(`   WARNING: ${existing} has testDir ${[...new Set(projects.map((p) => p.dirText))].join(', ')}: Playwright looks for tests only there,`);
+      log(`   so it does not find ${spec} ("No tests found"). Run init again with --dir ${candidates.length === 1 ? shellPath(candidates[0]) : '<one of them>'}`);
+      log(`   instead, and delete what this run wrote in ${dir}/.`);
+    } else if (looking) {
+      log(`   WARNING: ${existing} has testMatch ${[...new Set(looking.flatMap((p) => p.match.values.map((v) => v.text)))].join(', ')}, which ${spec} does not match:`);
+      log(`   Playwright does not find it ("No tests found"). Rename or move it so that testMatch matches it, and run that file.`);
+    }
+  }
   return { written, skipped, detection, config };
 }

@@ -7,6 +7,10 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
 
 The first published version.
 
+- `geowright init` checks software-WebGL flags in every Chromium project’s effective launch options,
+  including project overrides; unused objects do not count. Escaped config strings are reported as
+  unreadable rather than used to guess a test directory or collection match.
+
 **Assert and act on a WebGL map from Playwright**: MapLibre GL JS 2, 3, 4, 5, 6 and Mapbox GL JS 1.13 (the support
 table in the README says what is checked on which version). The app needs one line to register the map. It imports
 nothing, and nothing ships with it. In TypeScript, `/// <reference types="geowright/app" />` makes that line compile
@@ -108,7 +112,12 @@ as written (it adds types only).
   with `under-pixel-layer:<ids>` (EntityView `blocked`), since that layer may hide it there.
 - `npx geowright init` writes a fixture, the software-WebGL flags and a first spec that prints the snapshot. It also
   prints the hook for your wrapper (react-map-gl, `@vis.gl/react-maplibre`, svelte-maplibre-gl, vue-maplibre-gl). A whole
-  `playwright.config` is written only where there is none; where there is one, `init` prints the two lines to add to it.
+  `playwright.config` is written only where there is none; where there is one, `init` prints what to add to it (with
+  `projects` there, the flags go in the `use` of its Chromium projects; into the `launchOptions` a `use` has already),
+  unless it launches with them already, writes where its projects look for tests (each project's own `testDir` and
+  `testMatch`, else the config's, as Playwright reads them), and warns when no project would find the first spec, or
+  says where it cannot tell (a `testDir` from a variable, a config that spreads another). A `maplibre-gl` or `mapbox-gl`
+  range outside the tested versions gets a warning.
   `--dir` and `--url` take `--dir e2e` or `--dir=e2e`; a flag without its value is an error, not a guess.
 - Every runnable example in the README and `docs/RECIPES.md` is type-checked and runs in the test suite.
 - Tested against 33 apps its authors did not write: 23 MapLibre examples, plus 10 apps built on react-map-gl,
