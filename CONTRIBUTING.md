@@ -16,7 +16,12 @@
   Never `map.fire()`, never synthetic DOM events. Tests that would pass against a broken app are worthless.
 - **Public MapLibre API only** in `src/inpage/maplibre-adapter.ts` and `maplibre-paint.ts`. No underscore fields.
 - **`src/inpage/engine.ts` imports nothing from any map library.** Library knowledge lives behind the
-  adapter seam (`src/inpage/types.ts`).
+  adapter seam (`src/inpage/types.ts`). `tests/unit/seam-rules.unit.spec.ts` (in the unit suite) checks the
+  common forms of both of these rules, and its header lists them: an import of a map library into the engine or the
+  seam's types, type-only ones included, and anywhere in `src/inpage/` a read of an underscore field (`x._foo`, or
+  `x.foo_` as OpenLayers marks them) or of five known map internals (`map.style`, `map.painter`, …). The rest is
+  still review's: a map reached through an alias, reflection (`Reflect.get(map, '_frame')`), a key computed at
+  run time, an internal not on the list.
 - **No network in tests.** Everything an app fetches is fulfilled by `page.route` from fixtures in the repo.
 - **The flake bar.** A change is done when `npx playwright test --repeat-each=20` passes with zero
   flakes, zero retries and no fixed sleeps — on a quiet machine (check `uptime` first).
