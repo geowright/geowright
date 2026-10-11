@@ -14,7 +14,8 @@
     "build:node": "esbuild src/playwright/index.ts src/playwright/tiles.ts --bundle --platform=node --format=esm --packages=external --outdir=dist && esbuild src/cli/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/cli.js",
     "build:types": "tsc -p tsconfig.build.json",
     "build": "npm run build:inpage && npm run build:node && npm run build:types",
-    "pack:local": "npm run build && npm pack --pack-destination dist"
+    "pack:local": "npm run build && npm pack --pack-destination dist",
+    "prepublishOnly": "node -e \"const fs=require('fs'),m=['dist/index.js','dist/inpage.js','dist/cli.js'].filter(f=>!fs.existsSync(f));if(m.length){console.error('npm publish refused: dist/ is not built (missing '+m.join(', ')+'). Run npm run build, then read the file list of npm pack --dry-run.');process.exit(1)}\""
   },
   "devDependencies": {
     "@mapbox/mapbox-gl-draw": "^1.5.2",

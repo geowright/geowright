@@ -54,6 +54,7 @@ They are not repeated here, so there is one copy to keep true.
 ## Commands
 ```sh
 npm ci && npx playwright install chromium && node demo/scripts/copy-worker.mjs   # first time
+npx @playwright/mcp install-browser chromium # first time, for agent/: MCP launches its own Playwright's Chromium build
 npx playwright test                          # everything (demo + wild apps + unit)
 npx playwright test tests/act.spec.ts        # one spec
 npm run test:compat                          # the MapLibre 2–6 / Mapbox GL 1.13 matrix

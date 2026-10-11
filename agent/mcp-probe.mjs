@@ -1,6 +1,7 @@
 // Minimal MCP stdio client (newline-delimited JSON-RPC) to probe Playwright MCP without an LLM:
 // which tools exist, does --init-script inject the adapter, does evaluate return the snapshot,
 // does a coordinate click on a snapshot pixel open the right popup, is WebMCP picked up.
+// Exits 1 when any tool call returned an error (e.g. MCP's own Chromium build is not installed), so a script can tell.
 import { spawn } from 'node:child_process';
 
 const args = process.argv.slice(2); // extra args for the MCP server, e.g. --caps=vision
@@ -31,9 +32,12 @@ const rpc = (method, params) =>
     child.stdin.write(JSON.stringify({ jsonrpc: '2.0', id, method, params }) + '\n');
   });
 const notify = (method, params) => child.stdin.write(JSON.stringify({ jsonrpc: '2.0', method, params }) + '\n');
+const failed = []; // MCP reports a failed tool as a result with isError, not as a JSON-RPC error: check both
 const call = async (name, a) => {
   const r = await rpc('tools/call', { name, arguments: a });
-  return (r.result?.content ?? []).map((c) => c.text ?? `[${c.type}]`).join('\n') || JSON.stringify(r.error ?? r.result);
+  const text = (r.result?.content ?? []).map((c) => c.text ?? `[${c.type}]`).join('\n') || JSON.stringify(r.error ?? r.result);
+  if (r.error || r.result?.isError) failed.push(`${name}: ${text.replace(/^### Error\n/, '').split('\n')[0]}`);
+  return text;
 };
 const head = (s, n = 1500) => (s.length > n ? s.slice(0, n) + `\n… [${s.length - n} more chars]` : s);
 
@@ -66,4 +70,8 @@ if (after.includes('browser_mouse_click_xy')) {
   }
 }
 child.kill();
+if (failed.length) {
+  console.error(`\nFAILED: ${failed.length} tool call(s) returned an error:\n${failed.map((f) => `  ${f}`).join('\n')}`);
+  process.exit(1);
+}
 process.exit(0);

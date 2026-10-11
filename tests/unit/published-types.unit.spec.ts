@@ -1,9 +1,10 @@
 import { test, expect } from '@playwright/test';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { init } from '../../src/cli/init';
 
 /**
  * The published typings (`npm run build:types`, tsconfig.build.json) are made from every source file in that program.
@@ -140,6 +141,72 @@ test('`expect` from geowright keeps its type where only @playwright/test is reso
     const errors = out.split('\n').filter((l) => /error TS/.test(l));
     expect(errors.length, out).toBe(1);
     expect(errors[0]).toMatch(/spec\.ts\(5,\d+\): error TS2322/); // only the line that must fail
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+/**
+ * geowright is ES modules only. A CommonJS TypeScript project (no `"type": "module"`) type-checks `import … from
+ * 'geowright'` where TypeScript models Node's require() of an ES module (Node 22.12+, the engines floor): `module`
+ * nodenext from TypeScript 5.8 (its release notes), node20 from 5.9 (the value does not exist before). It also does
+ * under `module` commonjs, which does not model the module format, as long as no `moduleResolution` is set (commonjs
+ * with node16 is a config error, TS5110). Under node16 / node18, and under nodenext before 5.8, tsc refuses that import
+ * with TS1479, on init's own fixture, although nothing fails at run time. The README's Start section names the settings
+ * and their TypeScript floors; this checks what it says on the files `geowright init` writes, in a CommonJS project.
+ * Only one TypeScript is installed here, so the floors are checked as text. The evidence for them, from a one-off run
+ * of this same project on other TypeScript versions: on 5.7.3, nodenext gives TS1479 x2 and node20 gives TS6046 (not a
+ * valid value), commonjs is clean; on 5.9.3, 6.0.3 and 7.0.2, nodenext, node20 and commonjs are clean; node16 / node18
+ * give TS1479 x2 on every version that has them.
+ */
+test('a CommonJS TypeScript project type-checks the files init writes under the `module` settings the README names', () => {
+  const WORKS = ['nodenext', 'node20', 'commonjs'];
+  const REFUSED = ['node16', 'node18'];
+  const FLOOR: Record<string, string> = { nodenext: '5.8', node20: '5.9' }; // the first TypeScript where WORKS holds
+  const readme = readFileSync(join(ROOT, 'README.md'), 'utf8');
+  const from = readme.indexOf('\n## Start\n');
+  const start = readme.slice(from, readme.indexOf('\n## ', from + 1));
+  const line = start.split('\n').find((l) => /\bCommonJS\b/.test(l)) ?? '';
+  expect.soft(line, 'README "Start" says which tsconfig `module` a CommonJS TypeScript project needs').toMatch(/`module`|"module"/);
+  for (const m of [...WORKS, ...REFUSED]) expect.soft(line, `README "Start" names ${m}`).toMatch(new RegExp(`\\b${m}\\b`));
+  for (const [m, v] of Object.entries(FLOOR)) expect.soft(line, `README "Start" says ${m} needs TypeScript ${v}+`).toMatch(new RegExp(`\\b${m}\\b[^,]*?\\b${v.replace('.', '\\.')}\\+`));
+  expect.soft(line, 'README "Start" says commonjs goes without a moduleResolution').toMatch(/\bcommonjs\b[^,]*?\bno\b[^,]*?moduleResolution/);
+
+  const tsc = join(ROOT, 'node_modules/typescript/bin/tsc');
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), 'geowright-cjs-consumer-'))); // tsc names files relative to the real cwd
+  try {
+    const pkg = join(dir, 'node_modules/geowright');
+    mkdirSync(join(dir, 'node_modules/@playwright'), { recursive: true });
+    mkdirSync(join(dir, 'node_modules/@types'), { recursive: true });
+    mkdirSync(pkg, { recursive: true });
+    expect(existsSync(pkg), 'the consumer package directory exists before copying its manifest').toBe(true);
+    cpSync(join(ROOT, 'package.json'), join(pkg, 'package.json'));
+    execFileSync(process.execPath, [tsc, '-p', join(ROOT, 'tsconfig.build.json'), '--outDir', join(pkg, 'dist/types')], { cwd: ROOT, encoding: 'utf8' });
+    symlinkSync(join(ROOT, 'node_modules/@playwright/test'), join(dir, 'node_modules/@playwright/test'), 'dir');
+    for (const t of ['node', 'geojson']) symlinkSync(join(ROOT, 'node_modules/@types', t), join(dir, 'node_modules/@types', t), 'dir');
+    writeFileSync(
+      join(dir, 'package.json'),
+      JSON.stringify({ name: 'consumer', private: true, type: 'commonjs', dependencies: { 'maplibre-gl': '^6.10.0' }, devDependencies: { typescript: '^5.9.0', '@playwright/test': '^1.55.0' } }),
+    );
+    const { written } = init({ cwd: dir, log: () => {} });
+    expect(written.sort()).toEqual(['playwright.config.ts', 'tests/geowright.fixture.ts', 'tests/geowright.webgl.ts', 'tests/map.spec.ts']);
+
+    const errorsUnder = (module: string) => {
+      writeFileSync(
+        join(dir, 'tsconfig.json'),
+        JSON.stringify({ compilerOptions: { target: 'ES2022', module, strict: true, noEmit: true, skipLibCheck: true, types: ['node'] }, include: ['tests', 'playwright.config.ts'] }),
+      );
+      try {
+        execFileSync(process.execPath, [tsc, '-p', dir, '--pretty', 'false'], { cwd: dir, encoding: 'utf8' });
+        return [];
+      } catch (e) {
+        const out = String((e as { stdout?: string }).stdout ?? e);
+        return out.split('\n').filter((l) => /error TS/.test(l)).map((l) => l.replace(/^(\S+\(\d+),\d+\): (error TS\d+).*$/, '$1): $2'));
+      }
+    };
+    for (const m of WORKS) expect(errorsUnder(m), `module ${m}`).toEqual([]);
+    // the README's reason, exactly: only the two imports of 'geowright' in init's fixture fail, nothing else
+    for (const m of REFUSED) expect(errorsUnder(m), `module ${m}`).toEqual(['tests/geowright.fixture.ts(2): error TS1479', 'tests/geowright.fixture.ts(4): error TS1479']);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -22,6 +22,8 @@ npx geowright init      # a fixture, the software-WebGL flags (+ a whole playwri
 ```
 More: [docs/RECIPES.md](docs/RECIPES.md).
 
+A CommonJS TypeScript project (no `"type": "module"`)? geowright is ES modules only: under `"module": "node16"` or `"node18"` tsc rejects `import … from 'geowright'` with TS1479 (the tests still run). In the tsconfig that checks your tests, set `"module"` to `"nodenext"` (TypeScript 5.8+), `"node20"` (5.9+), or `"commonjs"` with no `"moduleResolution"`.
+
 ## App side: one line, no dependency
 
 <!-- example: skip (app-side code: it runs in your app, not in a test; `{ ... }` stands for your map options) -->
@@ -281,6 +283,7 @@ A browser agent gets an empty `region "Map"` from the accessibility snapshot. Tw
 
 ```sh
 npm i -D geowright
+npx @playwright/mcp install-browser chromium   # once: MCP brings its own Playwright, whose Chromium build your tests may not have
 npx @playwright/mcp --config geowright-mcp.json --caps=vision --init-script node_modules/geowright/dist/inpage.js
 # or --init-script node_modules/geowright/dist/inpage-agent.js: + the accessibility mirror, no --caps needed
 ```
@@ -400,6 +403,7 @@ license banner; `agent/mcp-probe.mjs` drives the whole path without an LLM):
 
 ```sh
 npm run build:inpage
+npx @playwright/mcp install-browser chromium   # once: MCP launches its own Playwright's Chromium build, not the suite's
 npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/init-page.ts \
     --init-script dist/inpage.js --caps=vision        # or dist/inpage-agent.js, no caps needed
 ```
