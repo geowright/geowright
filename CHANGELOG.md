@@ -97,7 +97,9 @@ as written (it adds types only).
 - **Vector tiles without a tile server**: `routeVectorTiles()` / `vectorTileHandler()` (`geowright/tiles`) cut real MVT
   tiles from GeoJSON inside `page.route`, at any zoom: above `maxZoom` (default 14) a tile is cut at that detail, so a
   source without `maxzoom` keeps its features (setting `maxzoom` on the source is still cheaper). Tile URLs may end in
-  `@2x` and any extension (`.pbf`, `.mvt`, `.vector.pbf`).
+  `@2x` and any extension (`.pbf`, `.mvt`, `.vector.pbf`), and may be on another origin with tile requests that carry
+  credentials (`credentials: 'include'`). `{ scheme: 'tms' }` serves a source that declares `scheme: 'tms'` (rows
+  counted from the south); the default is `'xyz'`, and the option must match the source.
 - **Browser agents** (Playwright MCP): a text snapshot of the map with clickable pixels and evaluated colours, and an
   accessibility mirror that makes features clickable buttons (`dist/inpage.js`, `dist/inpage-agent.js`, `--init-script`).
   On a basemap with 100 layers, the snapshot shrinks the basemap first so that the app's own features stay listed.

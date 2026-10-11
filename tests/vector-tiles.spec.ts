@@ -1,6 +1,6 @@
 import { test, expect } from './fixtures';
 import { BUILDINGS } from './buildings';
-import { vectorTileHandler } from '../src/playwright/tiles';
+import { routeVectorTiles, vectorTileHandler } from '../src/playwright/tiles';
 import { FAIL_FAST_MS } from './slow-machine';
 
 /**
@@ -68,6 +68,54 @@ test.describe('vector tile layer', () => {
   });
 });
 
+/**
+ * A production tile server is usually on another origin, and one that authenticates with cookies needs the app's tile
+ * requests to carry credentials (`transformRequest` → `credentials: 'include'`). A browser rejects
+ * `access-control-allow-origin: *` for a credentialed request; the helper used to send exactly that, so such an app got
+ * no tiles at all. The host below is never reached: page.route answers it, and the fixtures' network guard aborts
+ * anything else.
+ */
+test.describe('tiles on another origin', () => {
+  const HOST = 'https://tiles.geowright-test.invalid';
+  for (const credentials of [undefined, 'include'] as const) {
+    test(`the app's tile requests ${credentials ? 'carry credentials' : 'carry no credentials'}`, async ({ map, page }) => {
+      const failed: string[] = [];
+      page.on('requestfailed', (r) => void (r.url().startsWith(HOST) && failed.push(`${r.failure()?.errorText} ${r.url().slice(HOST.length)}`)));
+      await routeVectorTiles(page, `${HOST}/**`, { buildings: BUILDINGS });
+      await page.evaluate(({ host, credentials }) => {
+        const m = (window as any).__geowright_maps.main;
+        if (credentials) m.setTransformRequest((url: string) => (url.startsWith(host) ? { url, credentials } : { url }));
+        m.addSource('remote', { type: 'vector', tiles: [`${host}/vt/{z}/{x}/{y}.pbf`], maxzoom: 14 });
+        m.addLayer({ id: 'remote', type: 'fill', source: 'remote', 'source-layer': 'buildings', paint: { 'fill-color': '#e91e63' } });
+      }, { host: HOST, credentials });
+      // a tile the browser rejects reads as "no features here": say which requests failed, not only that 0 were found
+      await expect(map.features({ layer: 'remote' })).toHaveFeatureCount(25).catch((e: Error) => {
+        throw new Error(`${e.message}\n\nfailed tile requests: ${failed.slice(0, 3).join(', ') || 'none'}`);
+      });
+    });
+  }
+});
+
+/**
+ * A vector source may declare `scheme: 'tms'` (a TMS tile server: rows counted from the south). MapLibre then asks for
+ * row 2^z - 1 - y of the same template, and a helper that reads every URL as XYZ cuts the mirrored row of the world:
+ * these buildings, all in one city, drew nothing, so a positive assertion failed and a `.not` on it passed whatever the
+ * data. A fixture with data in the mirrored band draws that band's features in the wrong place instead (tested below).
+ * `{ scheme: 'tms' }` reads the row the way the source asks for it.
+ */
+test.describe('a TMS vector source', () => {
+  test(`served with { scheme: 'tms' } it shows the same buildings as an xyz source`, async ({ map, page }) => {
+    await routeVectorTiles(page, '**/vt-tms/buildings/**', { buildings: BUILDINGS }, { scheme: 'tms' });
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      m.addSource('b-tms', { type: 'vector', scheme: 'tms', maxzoom: 14, tiles: [location.origin + '/vt-tms/buildings/{z}/{x}/{y}.pbf'] });
+      m.addLayer({ id: 'b-tms', type: 'fill', source: 'b-tms', 'source-layer': 'buildings', paint: { 'fill-color': '#e91e63' } });
+    });
+    await expect(map.features({ layer: 'b-tms' })).toHaveFeatureCount(25);
+    await expect(map).toHaveFeature({ layer: 'b-tms', id: 1013, where: { floors: { gte: 1 } } });
+  });
+});
+
 /** The route handler itself, without a browser: what it answers for a tile URL. */
 test.describe('vectorTileHandler', () => {
   const tileOf = (lng: number, lat: number, z: number) => {
@@ -75,9 +123,13 @@ test.describe('vectorTileHandler', () => {
     const r = (lat * Math.PI) / 180;
     return { x: Math.floor(((lng + 180) / 360) * n), y: Math.floor(((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * n) };
   };
-  const serve = async (url: string) => {
+  const answer = async (url: string, opts?: Parameters<typeof vectorTileHandler>[1], layers: Parameters<typeof vectorTileHandler>[0] = { buildings: BUILDINGS }) => {
     let res: { status?: number; body?: Buffer | string } = {};
-    await vectorTileHandler({ buildings: BUILDINGS })({ request: () => ({ url: () => url }), fulfill: async (r: typeof res) => void (res = r) } as any);
+    await vectorTileHandler(layers, opts)({ request: () => ({ url: () => url }), fulfill: async (r: typeof res) => void (res = r) } as any);
+    return res;
+  };
+  const serve = async (url: string, opts?: Parameters<typeof vectorTileHandler>[1]) => {
+    const res = await answer(url, opts);
     return { status: res.status, bytes: typeof res.body === 'string' ? res.body.length : res.body?.length ?? 0 };
   };
 
@@ -89,6 +141,34 @@ test.describe('vectorTileHandler', () => {
     }
     const { x, y } = tileOf(0, 0, 16); // nothing there: still a valid, empty tile
     expect(await serve(`http://localhost/vt/buildings/16/${x}/${y}.pbf`)).toEqual({ status: 200, bytes: 0 });
+  });
+
+  test(`{ scheme: 'tms' } reads the row from the south: the TMS URL of a tile gets the XYZ URL's tile`, async () => {
+    for (const z of [7, 10, 12, 14, 16]) { // below z7 the buildings are too small to survive simplification: empty tiles
+      const { x, y } = tileOf(34.716, 32.1035, z); // building 1013
+      const tmsY = 2 ** z - 1 - y;
+      const xyz = Buffer.from((await answer(`http://localhost/vt/buildings/${z}/${x}/${y}.pbf`)).body ?? '');
+      const tms = await answer(`http://localhost/vt/buildings/${z}/${x}/${tmsY}.pbf`, { scheme: 'tms' });
+      const body = Buffer.from(tms.body ?? '');
+      expect({ z, status: tms.status, empty: body.length === 0, same: body.equals(xyz) }).toEqual({ z, status: 200, empty: false, same: true });
+      // xyz is the default: the same URL read as XYZ is the mirrored row, in the other hemisphere (nothing there)
+      expect((await serve(`http://localhost/vt/buildings/${z}/${x}/${tmsY}.pbf`)).bytes).toBe(0);
+    }
+  });
+
+  test(`a TMS row read as XYZ with a world-wide fixture serves the other hemisphere's features, not an empty tile`, async () => {
+    const place = (name: string, lat: number) => ({ type: 'Feature' as const, properties: { name }, geometry: { type: 'Point' as const, coordinates: [34.716, lat] } });
+    const world = { places: { type: 'FeatureCollection' as const, features: [place('north', 32.1035), place('south', -32.1035)] } };
+    for (const z of [8, 12, 16]) {
+      const { x, y } = tileOf(34.716, 32.1035, z); // the northern place's tile, as a scheme: 'tms' source asks for it
+      const body = Buffer.from((await answer(`http://localhost/vt/places/${z}/${x}/${2 ** z - 1 - y}.pbf`, undefined, world)).body ?? '');
+      // MVT keeps string values verbatim: the names are in the bytes
+      expect({ z, north: body.includes('north'), south: body.includes('south') }).toEqual({ z, north: false, south: true });
+    }
+  });
+
+  test('a scheme other than xyz or tms is an error, not a silent xyz', () => {
+    expect(() => vectorTileHandler({ buildings: BUILDINGS }, { scheme: 'TMS' as any })).toThrow(/scheme must be 'xyz' or 'tms'/);
   });
 
   test('retina and double-extension tile URLs are understood', async () => {
