@@ -34,10 +34,13 @@ export const DEAD_WORKER_AFTER_MS = 5000;
 const SETTLE_GRACE_MS = 600;
 const SETTLE_GRACE_FRAMES = 8;
 
-/** The loads a source started during one settle wait, and whether every one of them was given inline GeoJSON. */
+/** Starts during one settle wait: inline data and the current uninterrupted sequence of overlapping loads. */
 interface Starts {
   n: number;
   inline: boolean;
+  first: number;
+  last: number;
+  overlapping: number;
 }
 
 /** Whether a source's data is inline GeoJSON (in its serialised style spec): nothing to download, data the app has in hand. */
@@ -315,10 +318,30 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       // ends: MapLibre 5 and 6 put the data a URL gave into the source once it has loaded, and from then on the source
       // reads as inline GeoJSON.
       const replaced = new Map<string, Starts>();
+      const fresh = new WeakSet<Starts>();
       const onSourceData = (e: { sourceId?: string; tile?: unknown; source?: unknown }) => {
         if (!e.sourceId || e.tile) return;
-        const seen = replaced.get(e.sourceId) ?? { n: 0, inline: true };
-        replaced.set(e.sourceId, { n: seen.n + 1, inline: seen.inline && inlineGeoJSON(e.source) });
+        const now = performance.now();
+        const seen = replaced.get(e.sourceId) ?? { n: 0, inline: true, first: now, last: now, overlapping: 0 };
+        const next = { ...seen, first: seen.overlapping ? seen.first : now, n: seen.n + 1, last: now, overlapping: seen.overlapping + 1, inline: seen.inline && inlineGeoJSON(e.source) };
+        replaced.set(e.sourceId, next);
+        fresh.add(next);
+        queueMicrotask(() => fresh.delete(next));
+      };
+      const onSourceLoaded = (e: { sourceId?: string; sourceDataType?: string; tile?: unknown }) => {
+        if (!e.sourceId) return;
+        const seen = replaced.get(e.sourceId);
+        if (!seen) return;
+        // A paged loader can start its next request inside the metadata completion event, before our listener
+        // runs. isSourceLoaded() is then false again. That same-turn start follows a completed load; it does not
+        // overlap it. Timer-driven queued replacements start after this event and retain their sequence.
+        if (!e.tile && e.sourceDataType === 'metadata' && fresh.has(seen)) {
+          seen.overlapping = 1;
+          seen.first = seen.last;
+        } else if (this.sourceLoaded(e.sourceId) === true) {
+          seen.overlapping = 0;
+          seen.first = performance.now();
+        }
       };
       const finish = (v: boolean) => {
         if (done) return;
@@ -327,12 +350,14 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         this.map.off('idle', onIdle);
         this.map.off('render', onRender);
         this.map.off('sourcedataloading', onSourceData as any);
-        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), styled: this.hasStyle(), pending: this.pendingSources(), workerSourcesLoaded: this.workerSourcesLoaded(), loops: this.loops(replaced) };
+        this.map.off('sourcedata', onSourceLoaded as any);
+        this.lastWait = v ? undefined : { frames, ms: performance.now() - started, moving: this.map.isMoving(), loaded: this.map.loaded(), styled: this.hasStyle(), pending: this.pendingSources(), workerSourcesLoaded: this.workerSourcesLoaded(), loops: this.loops(replaced, started) };
         resolve(v);
       };
       this.pendingSources(); // starts the "pending since" clock of every source that is not loaded yet
       this.map.on('render', onRender);
       this.map.on('sourcedataloading', onSourceData as any);
+      this.map.on('sourcedata', onSourceLoaded as any);
       const onIdle = () => {
         // 'idle' does not look at tile state of sources that are still fetching after an error
         // retry etc.; areTilesLoaded() is the public belt-and-braces check.
@@ -371,17 +396,18 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   }
 
   /**
-   * The sources whose data the app re-set two or more times while we waited, each time with inline GeoJSON: data the app
-   * has in hand and re-sets (a feed, an animation) — a loop. Data from a server (GeoJSON from a URL, tiles, an image) is
-   * a LOAD however often it is replaced, and the load ends: a paged loader (setData(the next part's URL) once a part has
-   * loaded), "clear, then load" (setData(empty); setData(url)), two URLs one after the other, or two effects of one
-   * click that each point a source at new tiles (setTiles) or a new image (updateImage). Such a map becomes idle once
-   * the data is in; taken for a loop, it was "never idle", and a .not or a count passed while the data was still on its
-   * way. One start from a server in the wait is enough: on MapLibre 5 and 6 a URL asked for while another one loads
-   * starts only once that one has loaded, with ITS data in the source, which reads as inline.
+   * Inline GeoJSON re-set at least twice is a loop. Server-backed sources (images, vector tiles, GeoJSON URLs)
+   * also count when at least three starts, without becoming loaded between them, span half the wait and continue
+   * near its end. One load, two URLs, or a finite burst followed by waiting for the newest load remain loads.
+   * This is observed replacement, not inferred from slow loading or rendering. The trade-off: a sustained finite
+   * burst can count as never idle during that wait; assertions take their verdict from the current map.
    */
-  private loops(starts: Map<string, Starts>): { id: string; n: number }[] {
-    return [...starts].filter(([, s]) => s.n >= 2 && s.inline).map(([id, s]) => ({ id, n: s.n }));
+  private loops(starts: Map<string, Starts>, started: number): { id: string; n: number }[] {
+    const now = performance.now();
+    return [...starts].filter(([, s]) => (s.n >= 2 && s.inline) || (
+      s.overlapping >= 3 && s.last - s.first >= (now - started) / 2 &&
+      now - s.last <= 1.5 * (s.last - s.first) / (s.overlapping - 1)
+    )).map(([id, s]) => ({ id, n: s.n }));
   }
 
   /** Sources that are not loaded right now (public isSourceLoaded), with their type and how long they have waited. */
@@ -436,8 +462,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     // Never idle is a verdict about the WHOLE map: while another source is still loading it is not settled either, and a
     // negative assertion must not conclude absence from a source that has not arrived. So the sources that never settle
     // by design are set aside, and only when nothing else is pending is the map "never idle".
-    // A source re-set in a loop is one re-set with inline data (loops()): data from a server is loading, however often
-    // the app replaced it, and stays pending.
+    // Repeated overlapping server loads count too (loops()); finite loads remain pending.
     const looping = w.loops.map((r) => r.id);
     const pending = w.pending.filter((p) => !animated.includes(p.id) && !looping.includes(p.id));
     if (!pending.length) {

@@ -342,6 +342,9 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   then `setData(url)`) is not waited for. 1.13 calls the source loaded, and the map idle, as soon as the first load ends,
   while the URL is still being fetched, so a `.not` or a count can pass before the new data arrives. MapLibre 2–6 are
   not affected. On 1.13, wait for something the app shows once its data is in before such an assertion.
+- **Sources re-pointed faster than they load** (image, vector tiles, GeoJSON URLs) count as never idle when repeated
+  overlapping starts continue through the wait. `.not` and counts then judge the current map; the newest data may
+  still be on its way. A single load, two replacements, or completed sequential loads still need to settle.
 - **Tiled sources:** the browser cannot know what is off-screen, and the failure messages say so.
 - **On a globe** MapLibre's own viewport-wide query is wrong; the workaround is a grid: an extrusion narrower than 16 px whose
   footprint centre is off-screen can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).

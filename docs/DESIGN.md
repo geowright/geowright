@@ -767,23 +767,17 @@ Assertions are unaffected, since their own idle wait is bounded rather than bloc
 lets a negative verdict be taken on such a map without idle; only an explicit, unconditional wait for idle needs
 to be opted out for a map like this. "Never idle" is said only when nothing ELSE is loading: the first version said it
 for an animated canvas while another source was still on its way, and a `.not` or a count of 0 passed on the source
-that had not arrived yet (the same half-loaded map as above, through another door). Nor is a source "re-set in a
-loop" while MapLibre is still fetching its data: a paged loader (`setData` with the next part's URL as soon as a part
-has loaded) and "clear, then load" (`setData(empty)`, then `setData(url)`) replace a GeoJSON source two or more times in
-one wait too, and such a map becomes idle once the data is in. Only a source re-set with inline data, data the
-application has in hand, counts as a loop; data from a server (GeoJSON from a URL, tiles, an image) counts as still
-loading however often it is replaced, and a source loaded that way is never called a loop. Before, a `.not` or a count
-passed half a second into such a load. The first form of this rule exempted GeoJSON from a URL only: two effects of one
-click that each point a vector source at new tiles (`setTiles`), or an image source at a new image (`updateImage`),
-still read as a loop, and a `.not` passed while the newest tiles were on their way. The second form read the data when
-the wait ended, and on MapLibre 5 and 6 that is too late: they put the data a URL gave into the source once it has
-loaded, and start a URL asked for meanwhile only then, so the source held an object, as if the application had set it
-inline. Two URLs one after the other (the second asked for while the first loads), or a page whose source loaded from a
-URL in two parts, read as a loop again, and a `.not` or a count passed while the second URL was loading. So the data is
-read as each load starts (the event's own `source`), and a source is a loop only when every load it started in the wait
-was given inline data. What remains: inline data replaced step after step for longer than a wait (each step awaited,
-none of them a fetch) still reads as a loop; and so, on MapLibre 5 and 6, do URLs asked for faster than they load, when
-a wait sees two of them start and no other load: each starts with the data of the one before in the source.
+that had not arrived yet (the same half-loaded map as above, through another door). A server-backed source is normally still loading: a paged loader, "clear, then load", two URLs one after
+another, and a finite burst of `setTiles` or `updateImage` calls must wait for the newest data. Inline GeoJSON
+replaced at least twice in a wait counts as a loop. Server-backed image, vector-tile and GeoJSON-URL sources also
+count as never idle when loads keep being replaced through the wait: at least three starts without becoming loaded
+between them, spanning at least half the wait, with the last start no more than 1.5 average start intervals before
+its end. Individual tile requests are not starts. The data is read from each start event, since MapLibre 5 and 6
+store a URL's previous response as inline data while a queued URL loads.
+The trade-off: a sustained but finite burst can be called never idle during that wait, and a `.not` or a true count
+then takes its verdict from the current map, even if the newest replacement has not arrived. A single slow load,
+two replacements, and loads completed one after another remain loads. Re-pointing every 200 ms while each load takes
+400 ms counts consistently as never idle for all three source kinds. This preserves the behavior: `waitForIdle()` still times out and explains the loop.
 
 Nor is a map "never idle" while its style itself is loading. A basemap switch (`setStyle(url, { diff: false })`)
 throws the old style away at once, and until the new one is in, `getStyle()` has no sources to call pending. MapLibre

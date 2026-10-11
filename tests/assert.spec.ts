@@ -585,6 +585,16 @@ test.describe('a negative verdict waits for the map to settle', () => {
         expect(e, `.not.toHaveFeatureCount(${PARTS + 1}) passed after ${took} ms, on a source MapLibre was still loading`).not.toBeNull();
       });
     }
+
+    test('a true count of the current page does not pass while later pages are loading', async ({ map, page }) => {
+      await start(page, map, 'data in parts');
+      // Page 3 is reached during the first settle wait. It is a completed page, not a timer replacing an
+      // unfinished request, even though its metadata listener starts page 4 before isSourceLoaded can be true.
+      const results = map.features({ layer: 'results' });
+      const e = await rejects(expect(results).toHaveFeatureCount(3, { timeout: 6000 }));
+      await expect(results, 'the premise: the final page arrives').toHaveFeatureCount(PARTS + 1);
+      expect(e, 'a count of an intermediate page needs the completed load').not.toBeNull();
+    });
   });
 
   // A style that is still loading has no sources yet, so none of them is "pending". The app replaces its style
@@ -885,7 +895,7 @@ test.describe('a negative verdict waits for the map to settle', () => {
   // loop, or of continuous repainting, turned into "not settled", its two assertions below failed at their deadline, and
   // no other spec noticed.
   test.describe('a map that never becomes idle by design still gets a verdict', () => {
-    const loops = {
+    const loops: Record<string, (page: import('@playwright/test').Page, map: MapHandle) => Promise<void>> = {
       'the app re-sets a source on every frame': async (page: import('@playwright/test').Page, map: MapHandle) => {
         await page.evaluate(() => {
           const m = (window as any).__geowright_maps.main;
@@ -911,6 +921,39 @@ test.describe('a negative verdict waits for the map to settle', () => {
         });
       },
     };
+    // replacements outpace the server, for all three source kinds.
+    for (const kind of ['image', 'vector', 'geojson'] as const) {
+      loops[`the app re-points a ${kind} source every 200 ms while each load takes 400 ms`] = async (page) => {
+        const png = await page.evaluate(() => {
+          const c = document.createElement('canvas');
+          c.width = c.height = 16;
+          return c.toDataURL('image/png').split(',')[1];
+        });
+        const tiles = vectorTileHandler({ shapes: { type: 'FeatureCollection', features: [] } });
+        await page.route('**/replaced/**', async (r) => {
+          // Server latency, not a sleep used to synchronize the assertion.
+          await new Promise((resolve) => setTimeout(resolve, 400));
+          if (kind === 'image') await r.fulfill({ contentType: 'image/png', body: Buffer.from(png, 'base64') });
+          else if (kind === 'vector') await tiles(r);
+          else await r.fulfill({ contentType: 'application/json', body: JSON.stringify({ type: 'FeatureCollection', features: [] }) });
+        });
+        await page.evaluate((kind) => {
+          const m = (window as any).__geowright_maps.main;
+          const url = (v: number) => `${location.origin}/replaced/${v}${kind === 'vector' ? '/{z}/{x}/{y}.pbf' : kind === 'image' ? '.png' : '.geojson'}`;
+          const c = m.getCenter();
+          const coordinates = [[c.lng - .01, c.lat + .01], [c.lng + .01, c.lat + .01], [c.lng + .01, c.lat - .01], [c.lng - .01, c.lat - .01]];
+          m.addSource('loop', kind === 'image' ? { type: kind, url: url(0), coordinates } : kind === 'vector' ? { type: kind, tiles: [url(0)] } : { type: kind, data: url(0) });
+          m.addLayer(kind === 'image' ? { id: 'loop', type: 'raster', source: 'loop' } : { id: 'loop', type: 'circle', source: 'loop', ...(kind === 'vector' && { 'source-layer': 'shapes' }) });
+          let v = 0;
+          setInterval(() => {
+            const source = m.getSource('loop');
+            if (kind === 'image') source.updateImage({ url: url(++v) });
+            else if (kind === 'vector') source.setTiles([url(++v)]);
+            else source.setData(url(++v));
+          }, 200);
+        }, kind);
+      };
+    }
     const NO_SUCH_ALERT = { layer: 'alerts', id: 999 };
     const absent = {
       '.not.toHaveFeature': (map: MapHandle, timeout: number) => expect(map).not.toHaveFeature(NO_SUCH_ALERT, { timeout }),

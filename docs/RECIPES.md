@@ -84,6 +84,12 @@ An animated source, a `setData` loop, a rotating camera: `waitForIdle()` times o
 not wait for idle on such a page — assertions and actions retry by themselves. To act on a feature that never stops
 moving: `click({ moving: 'allow' })` (README, "What an action waits for"; the reasoning: DESIGN, "Targets that never stop moving").
 
+Re-pointing an image (`updateImage`), vector tiles (`setTiles`), or GeoJSON URL (`setData`) faster than loads finish
+also counts as never idle when overlapping starts keep occurring through the wait (for example, every 200 ms with
+400 ms loads). `.not` and counts can pass from the current map while the newest data is still loading.
+One load, two replacements, or sequential completed loads still wait for the data; another pending source also
+prevents a never-idle verdict.
+
 **A static map that times out with "… DEAD WORKER …"** (or, for sources loaded from a URL, "source(s) … have not
 finished loading") is usually not a test problem: the app's map is broken in the browser too. The common case is MapLibre GL JS 6 under Vite's DEV server — the dependency
 optimizer moves `maplibre-gl` and its worker file is not found (the dev server's log says `maplibre-gl-worker.mjs …
