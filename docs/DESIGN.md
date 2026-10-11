@@ -194,9 +194,11 @@ on every retry:
    a probe, never no too often. It takes < 0.1 ms on the 80-layer dense basemap, so a map without such a layer above its
    features (most maps; a raster basemap at the bottom) pays nothing. When the gate says yes, the **target's own
    layer** is probed at that pixel (see "Visibility" below): hiding it changes nothing there → the pixel is covered, and
-   the next candidate is tried, at most three probes per aim; then the action fails `occluded`, naming the layer and
-   offering `ignoreLayers`. Probing the overlay instead does not work: a translucent radar adds pixels and hides
-   nothing. Deciding from the style alone does not either: an opaque-styled raster has transparent gaps. The verdict
+   the next candidate is tried, at most three covered ones per aim; then the action fails `occluded`, naming the layer and
+   offering `ignoreLayers`. A target that draws nothing at that pixel (a ring marker's transparent middle, a polygon
+   drawn only by its outline) reads as covered there even under a translucent layer: the probe's limit, in Visibility,
+   "What the probe reads there, and what it misses". Probing the overlay instead does not work: a translucent radar
+   adds pixels and hides nothing. Deciding from the style alone does not either: an opaque-styled raster has transparent gaps. The verdict
    lives for one action: its retries do not probe the same pixel again (keyed by the target, the pixel, the camera, and
    the gated layers with their sources and opacity), and the next action probes anew. What an overlay draws can change
    without anything a key can see (an animated canvas or video, a paint transition, a colour), so a verdict kept longer
@@ -204,8 +206,15 @@ on every retry:
    hit-testable over its whole radius on MapLibre >= 5, drawn or not; its hit is never an occluder, and the gate and the
    probe decide on every version, as for the other pixel-only layers. Where the target's opacity is data-driven the probe hides it by `visibility` and its source
    reloads: the action then waits for a rendered frame, the source loaded, and the target back in the hit test at that
-   pixel (event-based; measured: at most 2 frames and 115 ms without contention, 787 ms under severe contention), then aims again. `ignoreLayers`
-   covers these layers too; `force` skips the check.
+   pixel (event-based; measured: at most 2 frames and 115 ms without contention, 787 ms under severe contention), then aims again,
+   keeping the verdict. Where an overlay's source had new data meanwhile (a live feed, an image the app animates frame by
+   frame, tiles arriving), the same pixel is probed once more, and the action goes ahead only if that probe sees the target
+   too: kept as it was, the verdict pressed through an image whose next frame, arriving during the reload, covered the
+   target. New data again after that second probe is no reason for a third: keyed with that data, a heatmap the app re-set
+   every 40 ms had a new key at every aim, and three probes that each saw the target ended as "each is covered". What
+   arrives after the last probe is not seen. An overlay that changes in another way its key sees (an
+   opacity the app keeps setting) is probed again, at most three times per aim, and a refusal then says it kept changing,
+   never that the target is covered. `ignoreLayers` covers these layers too; `force` skips the check.
 5. **No DOM element covers the pixel** — a popup, a control, an overlay. Checked with
    `document.elementFromPoint`, so a marker or popup sitting exactly on a feature's best interior
    candidate correctly blocks that candidate and the search moves on to the next one.
@@ -440,7 +449,7 @@ conditions, not a fixed action cost. An early uncontrolled measurement under con
 85–180 ms and is not comparable with the single-worker results. The probe has two real costs beyond time: it fires
 MapLibre's `styledata` event, so an application with its own `styledata` listeners will see that; and the
 differential it measures is per *layer* at a pixel, not per feature, so a second feature from the same layer under
-the same pixel confounds it.
+the same pixel confounds it. (On a map below the fold the app also sees a `scroll` event: "The page's scroll", below.)
 
 How it hides the layer matters. With `visibility: none`, MapLibre reloads the layer's source (every source type
 but raster), and the tiles that come back from that reload lack the layer: right after the probe the feature was
@@ -454,20 +463,143 @@ app's transitions only after a frame has drawn the restored value (earlier, the 
 reloads and the feature never leaves the hit test (`tests/visibility.spec.ts`, and the compat matrix on every
 version).
 Only a layer whose opacity is data-driven (or a type without one) is still hidden by
-`visibility`, and pays the reload.
+`visibility`, and pays the reload. A matcher whose probe pays it (`toBeVisibleOnMap`, `toHaveLayerPixels`) returns only
+once the layer is drawn again, within its timeout: a frame drawn with the source loaded and, where the layer had
+features in the hit test before the probe, some there again. The source loaded is not enough for a symbol, which is
+hit-tested again only once it has been placed again. Before, a one-shot read right after such a matcher (a snapshot,
+`features(q).count()`) missed the feature the matcher had just seen: 1 run in 15 of a test that took a snapshot right
+after `.not.toHaveLayerPixels` failed so, and with a source big enough that its reload takes a while (50,000 features)
+every read did, on MapLibre 2 to 6 and Mapbox GL 1 (`tests/visibility.spec.ts`, the compat matrix). Actions wait for the
+same thing before they aim again (Actionability, item 4). The app may take the features away meanwhile (a selected marker
+removed: a filter, new data, the layer hidden, a filter on global state, a camera move). They never come back, and the
+wait lasted the matcher's whole timeout, after which `.not.toBeVisibleOnMap()` reported the probe's "visible" of a feature
+that was gone. It now ends at once when the layer has been hidden since the probe, when the map goes idle, or, on a map
+seen never to go idle (`repaint` on, an animated canvas or video source, or so diagnosed by the last `waitForIdle()`),
+once the source has been loaded again for 600 ms and 8 frames: MapLibre places symbols again no sooner than its fade
+duration (300 ms by default) after the last placement, and a symbol was measured back 0 to 227 ms after its source had
+loaded, a circle at once. Only on such a map: on a map that goes idle, with an app's `fadeDuration` of 1000 ms, a symbol
+was back about 1000 ms after the probe, and a give-up at 600 ms made a read right after the matcher miss it about every
+second time; it waits for idle there, however long the fade. A map the app animates otherwise (a paint property or the
+global state set on every frame, `repaint` off) is not seen as never idle. There a change since the probe of the
+layer's filter, its source's data, the camera or the global state starts the same give-up. Such a change does not end
+the wait by itself, since it need not take anything away (the same marker set again by a fetch that lands then, a new
+filter that keeps it, a camera moved by a hair, the global state of another layer set on every frame), and a symbol is
+hit-tested again only at its next placement: ending the wait at such a change, a read right after the matcher missed
+the symbol 18 times in 18 (the global state), 15 in 18 (the camera) and 4 in 6 (new data, a new filter). An app that
+keeps changing the layer or the camera (a live feed that sets its source's data, a filter animation, a camera that takes
+the feature out of view and moves on to new tiles) reloads the source at every step, and a frame with the source not
+loaded restarts the give-up's count. Restarted at every step, a step every 250 or 500 ms kept it from completing: the
+wait lasted the matcher's whole timeout, and `.not.toBeVisibleOnMap()` failed with "visible" on a feature the app had
+taken away or out of view (3000 points every 250 ms: 8 runs in 8 with a 5 s timeout, 4 in 4 with 15 s; a filter
+animation: 4 in 4; a pan or a zoom step to new tiles every 250 or 500 ms, on a map that never goes idle: 24 in 24 with
+5 s, 8 in 8 with 12 s, 4 in 4 with 15 s). After any change that starts the give-up the count now restarts only once, at
+the first reload after it. (A first version did that only after a new filter or new data, and the camera's steps still
+restarted it.) Under such a feed or animation `.not.toBeVisibleOnMap()` then passes in 1.9 to 2.2 s on a map that
+repaints every frame or that the app animates (once 4.3 s; 2.1 to 3.0 s on a 4x slower CPU), and in 0.3 to 0.5 s on a
+map that goes idle; ending the wait at the change, it took 1.4 to 2.1 s. Under the camera's steps it passes in 2.0 to
+2.7 s on a map that never goes idle (2.0 to 4.4 s on a 4x slower CPU), and in 0.9 to 4.3 s on one that otherwise goes
+idle. The give-up still needs 8 rendered frames with the source loaded after that first reload (read from the code), so
+a source loaded in fewer than 8 frames within the timeout still waits it out. A feed about as fast as the source's
+reload does that: 3000 points set on every frame or every 16 ms failed 11 runs in 16 beside another test run, with the
+source loaded in 0 to 3 frames after the feed started, and passed 4 in 4 alone. So does a change none of these checks
+see (the layer's zoom range) on an animated map. On a map seen never to go idle, or after such a change, with a fade
+above about 600 ms, that read may still miss a symbol not yet placed again.
 
-Three corrections to the probe. It reads the layer-on pixels **twice**: if they differ, something else is
-changing the pixels there (a fade, an animation under the feature, a camera that never stops), and hiding the layer
-counts only if it changes them clearly more (more than twice the control difference); otherwise there is no verdict
-yet. (A first version refused any control difference and turned "the trace is visible" on MapLibre's forever-panning
-realtime example into "no verdict"; a camera drifting a few pixels between reads is noise, a yellow line is signal.) (A control after the restore does not work where the layer was hidden by `visibility`: it is not drawn again until its source has reloaded.
-MapLibre 2–4 advance a paint transition only on a style change — the probe's own hide is one — so there a transition in
-progress under the feature can still pass for a contribution.) Without `redraw()` (Mapbox GL JS v1) the reads are real frames: their wait is budgeted from the matcher's
+Three corrections to the probe. It reads the layer-on pixels **twice** before it hides the layer and, where it hid the
+layer by its opacity, **once more** in the frame that puts it back: if they differ, something else is changing the
+pixels there (an overlay whose colour is in a paint transition, a fade, an animation under the feature, a camera that
+never stops), and hiding the layer counts only if it changes them clearly more (more than twice the largest of those
+differences); otherwise there is no verdict yet. (A first version refused any control difference and turned "the trace
+is visible" on MapLibre's forever-panning realtime example into "no verdict"; a camera drifting a few pixels between
+reads is noise, a yellow line is signal.) The read after the restore came later. Pixels change in whole 8-bit levels, so
+over an opaque overlay whose colour was in a slow transition a level could move between the read with the layer and the
+read without it and not between the two reads before (a control of 0), and the overlay's own change counted as the
+target showing through. Measured on MapLibre 6, probing back to back while an opaque image or background layer changed
+colour over 6 s: 9 to 14 probes in 132 to 176 said so, and in 5 runs of 8 a click was sent through such an image to a
+feature no user could see
+(`tests/act.spec.ts`, `tests/visibility.spec.ts` and the compat matrix keep the case, by chance and every time). Across the reads that span the hide a drift moves the pixels at least as far as
+across the hide, so it never counts. Where the layer was hidden by `visibility` there is no such read: the layer is not
+drawn again until its source has reloaded. There, after a control of 0, a change of one level at most in every channel
+is no verdict (all a slow drift does between two reads, and nothing a user could see), and a faster change that falls
+only while the layer is hidden can still pass for a contribution, as can, on MapLibre 2–4, which advance a paint
+transition only on a style change such as the probe's own hide, a transition in progress under such a feature. Without
+`redraw()` (Mapbox GL JS v1) the reads are real frames: their wait is budgeted from the matcher's
 remaining time, and a frame that does not come is "not yet", never a silent pass on paint alone. And
 `toBeVisibleOnMap` runs it once per verdict, as intended: a conclusive result is reused while the feature looks the same
 (re-probed after 1, 2, 4… s), instead of re-rendering the map four times on every poll of a waiting `.not`. The restore puts back
-what the app had only if the layer is still hidden by the probe; an app that hides the same layer in the frames between
+what the app had (an expression, a constant, or nothing at all) only if the layer is still hidden by the probe; an app that hides the same layer in the frames between
 (Mapbox GL v1) cannot be told apart from the probe and is still undone.
+
+**Where the probe looks.** The pixel is the feature's action point (Actionability): a point of its geometry that the hit
+test gives back to the feature, tried among the point and rings of 3, 6 and 10 px around it, a line's vertices and
+midpoints, a polygon's interior. A feature drawn further than that from its geometry has no such point: a label set under
+its point by `text-offset` (the demo's own labels hit-test 16 to 34 px below it), a line with `line-offset`, anything with
+a `*-translate`. MapLibre's hit test follows the drawing, so every candidate misses. That failure was first read as "not
+visible", and `.not.toBeVisibleOnMap()` passed on a label that was drawn. "Could not look" is now no verdict in either
+direction, the evaluator's rule below ("never a false invisible") applied to the probe; only a feature covered at every
+candidate, by another feature or by DOM, is "not visible" from the probe. A part of the map that a scrolling panel around
+it clips (a 720 px map in a 300 px panel) is not covered: `elementFromPoint` there finds whatever is beyond the panel,
+often the `<body>`, and that read as "covered by DOM", so `.not.toBeVisibleOnMap()` passed on a feature a user sees once
+the panel is scrolled. A pixel outside the box of an ancestor whose overflow clips is "clipped" now: no verdict, as
+outside the window, and an action on it fails `offscreen`, naming the panel. Only such an ancestor clips: the `<body>`
+found at the pixel for another reason (a map hidden with `visibility: hidden`, a backdrop drawn as the body's `::after`)
+is a page a user does not see the map through, still "covered by DOM"; taken for a clip, it had made
+`.not.toBeVisibleOnMap()` fail with no verdict on a hidden map. And only an ancestor on the map's containing-block chain,
+as CSS clips: an overflow clips the boxes it contains, and a map positioned out of it is not clipped (MapLibre's usual
+full-page CSS, `position: absolute`, inside a static wrapper with `overflow: hidden` that is 0 px tall; a
+`position: fixed` map in a scrolling panel). Under a modal, such a map read as clipped: no verdict, and `autoPan` moved
+the camera. Where the hit test finds the map at the pixel under anything (`elementsFromPoint`), nothing clips it there: a
+clip takes the map out of the hit test, a cover does not. That absence alone is no sign of a clip, though, since a map
+is out of the hit test everywhere with `pointer-events: none` (on the page, as a modal dialog library sets it while its
+dialog is open, or on the map) or `visibility: hidden`: taken as one, such a map in that wrapper read as clipped again.
+The containing-block chain is read from the computed styles (`position`; a transform, `offset-path`,
+`transform-style: preserve-3d`, filter, perspective, containment or `will-change` that holds fixed boxes; never an
+element with `display: contents`, which has no box). A wrong reading goes either way: a containing block made by a
+property not read there makes its clip read as covered, and one read there that Chromium does not make, a clip of a map
+the wrapper does not contain. A size container (`container-type: inline-size`, Tailwind's `@container`) was read as one,
+and Chromium makes none: under a modal, a map in such a wrapper read as clipped again. `tests/offwindow.spec.ts` checks
+the reading against Chromium's own layout, property by property, on a block ancestor; an inline box or a table row,
+which holds less (a transform there makes nothing), is read as a block. Still read as covered: a page header fixed over
+the top of the map after the look's own scroll, which brings the map to the nearest edge of the window, under the
+header.
+Following the drawing instead (shifting the candidates by `text-offset` and `text-anchor`, `line-offset` and the
+translates) would also let actions reach such a feature, which fail with `not-found` today; that is not done.
+
+**The page's scroll.** The probe chooses its pixel as an action does, and the DOM check needs the map inside the browser
+window (`elementFromPoint` sees nothing outside it). On a map below the fold, the probe used to scroll the page, and any
+scrolling panel around the map, to bring the map into view, and left them there, as an action does on purpose (Actionability,
+item 6). An assertion that scrolls changes an app with scroll-driven state (a header that hides on scroll, lazy loading, the
+next screenshot) depending on whether it ran, and Playwright's own assertions do not scroll. The probe now scrolls, chooses
+its pixel and scrolls back in the same task; the pixels are read afterwards, and reading them needs no scroll. No frame
+shows the page scrolled, so an `IntersectionObserver` sees nothing, but Chromium still fires one `scroll` and one
+`scrollend` event for a scroll put back within a task, with nothing moved (`tests/offwindow.spec.ts` checks the page and a
+panel). Not scrolling at all would leave a map below the fold with no pixel to probe, and no verdict, although a user who
+scrolls sees the feature. A failure screenshot needs the map in the window too (a screenshot cannot reach outside it): it
+scrolls the map into view for the picture and back after it, a few round trips later, so there the app does see the page
+scrolled for that long. Each scroll is put back only where it is still where the look left it, so a scroll the app made
+meanwhile stays. One the app has under way does not: the look's scroll is instant, and an instant scroll ends a smooth one
+on the same scroller, so a look during the app's smooth scroll to the map ("show on map") left the page frozen where the
+look had found it, mid-way, with the map still out of the window. Before a look that would scroll, the probe reads the
+scroll positions twice, a frame apart; if they moved, it looks at the page as it is (a feature outside the window is then
+no verdict, and the matcher looks again). The failure screenshot does not check.
+
+**What the probe reads there, and what it misses.** The probe reads a square of 2R+1 device pixels a side around that
+point, R = round(2 × the device pixel ratio): about 5×5 CSS px. A feature whose drawn pixels do not reach the square reads
+"hiding the layer changes nothing" although its layer draws it a few pixels away, and the hit test still gives that spot
+to the feature, because it covers more than the paint does: the whole disc of a circle, the whole polygon, a label's
+box, the gaps of a dashed line. Measured on MapLibre 6: a ring marker (circle-opacity 0, a 4 px stroke at radius 14)
+probed at its centre, a fill with a transparent `fill-color` and an opaque `fill-outline-color` probed at an interior
+point, a two-line label probed between its lines (at line heights 1.2 and 1.6, with and without a halo), and a dotted
+line (`line-dasharray` [0.5, 3]) whose middle fell in a gap, one line in eight. Each one's paint verdict says visible
+and `toHaveLayerPixels` around it sees it; `toBeVisibleOnMap` fails, and `.not.toBeVisibleOnMap()` passes on a feature
+a user sees. This is the lesson recorded below for `toHaveLayerPixels` ("probe the area the content can be in, not a
+point"), not yet applied to features. The fix is to probe where the feature is drawn (a circle out to its radius and
+stroke, the symbol's box, several points along a line, a polygon's edge) and to let `.not` pass only when no probed spot
+changes; it is not done for 0.1.0. Until then `.not.toHaveFeature` is the absence check, `{ pixels: false }` the paint
+check, and `toHaveLayerPixels` where the feature is drawn the pixel check (README, Limits; `tests/visibility.spec.ts`
+pins the limit and these checks). An action's check for a pixel-only layer above its target (Actionability, item 4;
+decision 0022) reads the same square, so under a raster, even a translucent one, such a target counts as covered at
+every candidate and the action fails with `occluded`; `ignoreLayers` for that layer lets it through.
 
 Query semantics default to what a person can actually see: `visible: true` (implicit default) matches
 only paint-evaluated-visible features; `'any'` opts back into MapLibre's own broader notion of
@@ -519,7 +651,12 @@ below `minzoom` or at / above `maxzoom` (MapLibre's own rule), or layout `visibi
 may be an expression on global state, evaluated with the style-spec's visibility evaluator. The explanation is computed
 only when something has failed; the visibility verdict never pays for it. Writing this found a real bug: the pixel probe
 restored a layer with the constant `"visible"`, replacing a `visibility` expression and turning on a layer the app had
-hidden; it now puts back what was there.
+hidden; it now puts back what was there. That fix still wrote `"visible"` where the app had set no visibility at all,
+and the app's `getLayoutProperty()` and `getStyle()` then said `visible` after an assertion (on every supported version:
+a toggle written `=== 'visible' ? 'none' : 'visible'`, whose first click does nothing in the app, hid the layer on its
+first click once a test had probed it). An unset visibility is now put back unset: every version takes `undefined`
+without validating it and draws the layer (`tests/visibility.spec.ts` and the compat matrix compare `getStyle()`
+before and after).
 
 ## Globe and terrain
 
@@ -990,7 +1127,7 @@ matrix as 96 tests. What the four initial failures taught:
   `getTerrain()` are optional calls. Marker and popup CSS classes are `mapboxgl-…` on the v1 family.
 - **The pixel probe without `redraw()`.** Mapbox GL JS v1 has no public synchronous render. The same
   read-back works inside the public `render` event, which fires in the task that drew the frame:
-  `triggerRepaint()`, read on `render`, hide the layer, repeat. That costs three real frames, and the
+  `triggerRepaint()`, read on `render`, hide the layer, repeat. That costs four real frames, and the
   frame without the layer can reach the screen (a one-frame flicker) — so the seam method may now
   return a promise, and an adapter on such a version lists the difference among its caveats.
 - **A matcher bug only an old version could show.** `toBeVisibleOnMap()` assigned its verdict after
@@ -1031,7 +1168,7 @@ millisecond, and several thousand of them together still land well under 100 ms.
 density turned out to be correctness (features with no reachable pixel at all), not speed, which is
 why the ring-candidate mechanism described under actionability exists.
 
-The injected in-page script grew from roughly 22 KB to about 410 KB (not minified; 88 KB gzipped, 200 KB if it were
+The injected in-page script grew from roughly 22 KB to about 455 KB (not minified; 99 KB gzipped, 200 KB if it were
 minified — measured on the 0.1.0 build) once the bundled MapLibre style-spec evaluator (used for paint-visibility
 checks) was added, injected once per page load. This is a real, deliberate size-for-correctness trade, and it carries a version-coupling
 risk worth stating plainly: an application on a MapLibre release newer than the bundled evaluator,
@@ -1040,6 +1177,13 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
 
 **Known limitations:**
 
+- A feature drawn more than a few pixels away from its geometry (`text-offset`, `line-offset`, a `*-translate`) has no
+  candidate pixel that hit-tests back to it: an action on it fails with `not-found` (`clickAt` where it is drawn works),
+  and `toBeVisibleOnMap` reaches no verdict (Visibility, "Where the probe looks").
+- The pixel probe reads about 5×5 CSS px at one point of the feature. A feature that draws nothing there (a ring marker
+  with a transparent fill, a polygon drawn only by its outline, a two-line label probed between its lines, a dashed line
+  probed in a gap) reads as not visible: `toBeVisibleOnMap` fails and `.not.toBeVisibleOnMap()` passes on it, and under a
+  pixel-only layer an action on it fails with `occluded` (Visibility, "What the probe reads there, and what it misses").
 - `hover({ moving: 'allow' })` is only dependable when a frame of the page is short compared with the time the target
   spends under one pixel; `click` holds up under contention, hover does not (a `mousemove` is frame-aligned).
 - A feature whose source the application replaces on every frame is refused without `moving: 'allow'` even when it
@@ -1073,11 +1217,16 @@ weaker answer described earlier ("visible," never a false "invisible") rather th
   - one probe per action on a map with such a layer over its features (four renders; measured medians
     were 15–45 ms across the versions tested), up to three when candidates are covered; none without one.
   - on Mapbox GL v1 the probe renders real frames: the one without the layer can be seen (a one-frame flicker).
-  - where the target's opacity is data-driven, the probe reloads its source and the action waits for it to come back.
-  - the verdict threshold is the probe's: any difference counts as "shows through", so a 97%-opaque veil lets the
-    click through.
+  - where the target's opacity is data-driven, the probe reloads its source and the action waits for it to come back;
+    and it has no read after the restore, so an overlay that changes colour by itself by more than one level, only
+    while the target is hidden, can still be taken for the target showing through (Visibility, "Three corrections").
+  - the verdict threshold is the probe's: any difference clearly above what the pixels change by themselves counts as
+    "shows through" (where the target's opacity is data-driven, more than one colour level), so a 97%-opaque veil lets
+    the click through.
   - the press-time check sees only a pixel-only layer that was not over the target at the aim; new pixels inside an
-    overlay that was already there (the next radar frame filling a gap) between the aim and the press are not checked.
+    overlay that was already there (the next radar frame filling a gap) between the last probe and the press are not
+    checked. Where the probe reloads the target's source that time includes the reload, and new data in an overlay
+    during the first one gets one more probe (Actionability, item 4).
   - `moving: 'allow'` is not checked at all: a moving target's pixel changes between a probe and the press.
   - on MapLibre 2 and Mapbox GL 1 (no `getLayersOrder()`) the layer order comes from `getStyle()`, which leaves custom
     layers out: a custom layer drawn over a feature (a WebGL overlay such as deck.gl's) is not checked there. The

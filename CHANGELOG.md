@@ -23,7 +23,9 @@ as written (it adds types only).
   else still loading. A matcher that
   cannot reach a verdict fails whichever way it is written, and says why: the map is not registered or was removed, a
   named layer does not exist (to assert that a layer was removed, check `map.layers()`), several features match where
-  one is required, the camera is moving (`toHavePopup`), the map was never registered (`toHaveView`). A removed or
+  one is required, the camera is moving (`toHavePopup`), the map was never registered (`toHaveView`), no pixel of the
+  feature's geometry hit-tests back to it (`toBeVisibleOnMap`: a feature drawn away from its geometry, such as a label
+  with `text-offset`; an action on it fails with `not-found`). A removed or
   0×0 map is an error for `features(q).count()` and `all()`, never an empty map. On a page too busy to answer, a
   matcher, `map.marker()` and `map.popup()` fail at their timeout with "the page did not answer" (the pixel probes of
   `toBeVisibleOnMap` and `toHaveLayerPixels` are the exception: they wait for the page).
@@ -49,7 +51,8 @@ as written (it adds types only).
   standing still — it needs `moving: 'allow'`), under the pointer, the
   topmost visible hit, and not covered by a DOM element. A raster, image, video, canvas, heatmap, hillshade, color-relief,
   background or custom layer (deck.gl's interleaved layers are custom layers; MapLibre 3 and later) drawn above the target at that pixel is checked with a pixel probe of the target's own layer: an opaque one refuses
-  the action and is named; a translucent one, or a transparent gap in an opaque one, lets it through (`ignoreLayers`
+  the action and is named, also while it changes colour by itself (pixels that change between the probe's reads are no
+  evidence that the target shows through; README, Limits); a translucent one, or a transparent gap in an opaque one, lets it through (`ignoreLayers`
   skips the probe; `moving: 'allow'` is not checked). Every action probes anew. A heatmap, which MapLibre 5 and later
   hit-test over its whole radius, covers only by its pixels, as on every other version. For `click`, `dblclick`,
   `rightClick` and `tap`, the hit test runs again when the press arrives and must find the same feature, still painted

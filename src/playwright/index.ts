@@ -407,8 +407,10 @@ export class MapHandle {
    * @internal Failure artefact: the map as it is NOW, with marks drawn on it. The overlay is added,
    * screenshotted and removed in one go (never left in the app's DOM), and nothing here may throw:
    * a failing artefact must not mask the real failure — nor hold it up: it gives up at `by`.
+   * A map outside the window is scrolled into view for the picture and back after it: a failing assertion leaves the page
+   * where it was too (an action has scrolled it there already). `extra` as a function: marks to look up once it is in view.
    */
-  async _attachFailureScreenshot(name: string, query: FeatureQuery | undefined, extra: DebugMark[] = [], opts: ActionPointOptions = {}, by = Date.now() + DIAGNOSTIC_GRACE_MS): Promise<void> {
+  async _attachFailureScreenshot(name: string, query: FeatureQuery | undefined, extra: DebugMark[] | ((by: number) => Promise<DebugMark[]>) = [], opts: ActionPointOptions = {}, by = Date.now() + DIAGNOSTIC_GRACE_MS): Promise<void> {
     if (!this.failureScreenshots) return;
     try {
       test.info();
@@ -418,7 +420,8 @@ export class MapHandle {
     const id = `geowright-marks-${Math.random().toString(36).slice(2)}`;
     try {
       const left = () => by - Date.now();
-      const marks = [...extra, ...(query ? await this._callBy<DebugMark[]>(by, 'debugMarks', toWire(query), opts) : [])];
+      await this._callBy(by, 'scrollForShot', id).catch(() => {}); // (no map: a picture of the page all the same)
+      const marks = [...(typeof extra === 'function' ? await extra(by) : extra), ...(query ? await this._callBy<DebugMark[]>(by, 'debugMarks', toWire(query), opts) : [])];
       const drawn = this.page.evaluate(
         ([overlayId, mapId, list]) => {
           const map = (window as any).__geowright_maps?.[mapId as string];
@@ -466,15 +469,26 @@ export class MapHandle {
     } catch {
       /* best effort */
     } finally {
-      // Sent even when out of time: the page runs it after the drawing, whenever it gets to them.
-      await within(this.page.evaluate((overlayId) => document.getElementById(overlayId)?.remove(), id), Math.max(0, by - Date.now()), () => '').catch(() => {});
+      // Sent even when out of time: the page runs it after the drawing and the scroll, whenever it gets to them.
+      await within(
+        this.page.evaluate(
+          ([overlayId, mapId]) => {
+            document.getElementById(overlayId)?.remove();
+            (window as any).__geowright?.putBackScroll?.(mapId, overlayId);
+          },
+          [id, this.mapId] as const,
+        ),
+        Math.max(0, by - Date.now()),
+        () => '',
+      ).catch(() => {});
     }
   }
 
   /**
    * @internal `_call`, but gives up at `deadline`. ONLY for calls without side effects the app can act on (queries,
-   * waits, an action's look, whose pixel probe puts the style back by itself): the abandoned evaluate keeps running in
-   * the page and its answer is dropped. Never wrap real input.
+   * waits, an action's look, whose pixel probe puts the style back by itself), or whose side effect is undone by a call
+   * sent anyway (a failure screenshot's scroll): the abandoned evaluate keeps running in the page and its answer is
+   * dropped. Never wrap real input.
    */
   _callBy<T>(deadline: number, method: string, ...args: unknown[]): Promise<T> {
     return this._answerBy(deadline, method, this._call<T>(method, ...args));
@@ -1453,15 +1467,17 @@ const matchers = {
         return s.settled ? { verdict: false } : { verdict: undefined, why: `${notSettled(s.why)}; last probe: ${why}` };
       },
       // Each probe re-renders four times, and a layer hidden by `visibility` (data-driven opacity) has its source
-      // reloaded after it: back off, so that a slow machine gets to finish that before the next probe knocks it over again.
+      // reloaded after it (the probe returns once the layer is drawn again, within the time left): back off, so that a
+      // slow machine gets to finish that before the next probe knocks it over again.
       [250, 500, 1000, 2000],
     );
     if (inconclusive) why = undecided(inconclusive);
     if (pass === this.isNot && !unanswered) {
       // One bounded look for where to draw the mark: clientPoint() would wait (a full action timeout) for a location
-      // that is off-screen or on the far side of the globe — after this assertion's own timeout.
+      // that is off-screen or on the far side of the globe — after this assertion's own timeout. Looked up once the
+      // screenshot has the map in view, without a scroll of its own (one the screenshot would not put back).
       const by = Date.now() + DIAGNOSTIC_GRACE_MS;
-      const mark = await received._callBy<{ client: { x: number; y: number } }>(by, 'clientPoint', options.at).then((r): DebugMark[] => [{ ...r.client, kind: 'target', label: layer }], () => []);
+      const mark = (until: number) => received._callBy<{ client: { x: number; y: number } }>(until, 'clientPoint', options.at, false).then((r): DebugMark[] => [{ ...r.client, kind: 'target', label: layer }], () => []);
       await received._attachFailureScreenshot('map screenshot — toHaveLayerPixels', undefined, mark, {}, by);
     }
     return {
@@ -1477,10 +1493,20 @@ const matchers = {
    *  1. paint: the layer's paint properties, evaluated for this feature, draw something
    *  2. pixels (default on; `{ pixels: false }` to skip): the canvas pixels at the feature's action
    *     point change when its layer is not drawn. Catches transparent icons and same-colour-as-
-   *     background; needs an unoccluded point, so an occluded feature is not visible either.
+   *     background; needs an unoccluded point, so an occluded feature is not visible either. That point is on the
+   *     feature's geometry: a feature drawn more than a few pixels away from it (text-offset, line-offset, a
+   *     *-translate) has none, and gets no verdict either way. The pixels read are a patch of about 5×5 CSS px at
+   *     that point: a feature that draws nothing there (a ring marker's transparent middle, a fill drawn only by its
+   *     outline, the gap between a two-line label's lines) reads as not visible, and `.not` passes on it although a
+   *     user sees it. To assert that a feature is gone, use `expect(map).not.toHaveFeature(q)`.
    * The pixel probe re-renders the map four times (with the layer, again as a control, without, restored) and
    * briefly hides the layer within one task (nothing is composited, but 'styledata' fires) — it runs
-   * after the cheap paint check has passed, and its result is reused while the feature does not change.
+   * after the cheap paint check has passed, and its result is reused while the feature does not change. Where the
+   * layer's opacity is data-driven it is hidden by `visibility`, MapLibre reloads its source, and the matcher returns
+   * once the layer is drawn again (as `toHaveLayerPixels` does): a read right after it sees what it saw. On a map not
+   * wholly inside the window, it scrolls the map into view to choose that point and scrolls back in the same task: the
+   * page ends where it was (the app's scroll listeners see a 'scroll' event, with nothing moved). While the page is
+   * scrolling by itself (the app's own smooth scroll), it looks without scrolling, so as not to cut that scroll short.
    */
   async toBeVisibleOnMap(received: FeatureHandle, options?: { timeout?: number; pixels?: boolean }) {
     if (!(received instanceof FeatureHandle)) throw new Error('toBeVisibleOnMap: receiver must be map.feature(...)');
@@ -1513,8 +1539,16 @@ const matchers = {
           const reuse = last && last.key === key && Date.now() - last.at < last.every;
           const probe = reuse
             ? last!.probe
-            : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; message: string }>('pixelProbe', toWire(query), () => ({ ignoreLayers: map.ignoreLayers, budgetMs: probeBudget(deadline) }));
-          if (!probe.ok) return invisible(`pixels: no clean point to probe — ${probe.message}`);
+            : await map._call<{ ok: true; diff?: number; inconclusive?: string; surface: { x: number; y: number }; layer: string } | { ok: false; reason?: string; message: string }>('pixelProbe', toWire(query), () => ({ ignoreLayers: map.ignoreLayers, budgetMs: probeBudget(deadline) }));
+          if (!probe.ok) {
+            // Covered by another feature or by DOM at every candidate point (or painted invisibly after all): a user cannot
+            // see it there. Anything else is "could not look", never "not visible", in either polarity: no candidate pixel
+            // hit-tests back to it (it is drawn away from its geometry: a label's text-offset, line-offset, a *-translate),
+            // it is outside the window, several features match.
+            if (probe.reason === 'occluded' || probe.reason === 'dom-covered' || probe.reason === 'invisible') return invisible(`pixels: no clean point to probe — ${probe.message}`);
+            const offset = probe.reason === 'not-found' ? '. A feature drawn away from its geometry (a label with text-offset, line-offset, a *-translate) has no such pixel; { pixels: false } checks its paint only' : '';
+            return { verdict: undefined, why: (why = `pixels: nowhere to probe — ${probe.message}${offset}`) };
+          }
           if (!reuse) last = probe.inconclusive === undefined ? { key, at: Date.now(), every: last?.key === key ? Math.min(last.every * 2, 8000) : 1000, probe } : undefined;
           // No verdict YET — the pixels changed by themselves, or no frame came in time: never "passed on paint alone".
           if (probe.inconclusive !== undefined) return { verdict: undefined, why: (why = `pixels: ${probe.inconclusive}`) };

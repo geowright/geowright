@@ -415,20 +415,23 @@ test.describe('the pixel-only-layer gate (decision 0022)', () => {
     for (const m of ['basic', 'multidirectional']) expect(at(m), m).toEqual(['shade']);
   });
 
-  test("the stamp changes with an overlay's opacity and its source's data events, but not with the target's own source", () => {
+  test("the stamp changes with an overlay's opacity, its data with its source's data events, neither with the target's own source", () => {
     const layers: Record<string, any> = { target: { type: 'circle', source: 'points' }, radar: { type: 'raster', source: 'tiles', paint: { 'raster-opacity': 0.5 } }, heat: { type: 'heatmap', source: 'points' } };
     const events: Record<string, number> = { tiles: 0, points: 0 };
     const m = styleMap(layers, { tiles: { type: 'raster' }, points: { type: 'geojson' } });
-    const stamps = () => Object.fromEntries(pixelOccluders(m as any, 'target', { x: 1, y: 1 }, Object.keys(layers), (s) => events[s]).map((o) => [o.layer, o.stamp]));
+    const stamps = () => Object.fromEntries(pixelOccluders(m as any, 'target', { x: 1, y: 1 }, Object.keys(layers), (s) => events[s]).map((o) => [o.layer, { stamp: o.stamp, data: o.data }]));
     const before = stamps();
     layers.radar.paint['raster-opacity'] = 1;
     const opaque = stamps();
-    expect(opaque.radar, 'opacity 0.5 -> 1').not.toBe(before.radar);
+    expect(opaque.radar.stamp, 'opacity 0.5 -> 1').not.toBe(before.radar.stamp);
+    expect(opaque.radar.data, 'opacity 0.5 -> 1: the same data').toBe(before.radar.data);
     events.tiles++;
-    expect(stamps().radar, "a data event of the overlay's source").not.toBe(opaque.radar);
-    // a probe that hides the target by visibility reloads ITS source: the heatmap on that source keeps its stamp
+    const fed = stamps();
+    expect(fed.radar.data, "a data event of the overlay's source").not.toBe(opaque.radar.data);
+    expect(fed.radar.stamp, "a data event of the overlay's source: the same stamp").toBe(opaque.radar.stamp);
+    // a probe that hides the target by visibility reloads ITS source: the heatmap on that source keeps its stamp and data
     const heat = stamps().heat;
     events.points += 5;
-    expect(stamps().heat, "the target's own source").toBe(heat);
+    expect(stamps().heat, "the target's own source").toEqual(heat);
   });
 });

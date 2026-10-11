@@ -119,7 +119,12 @@ layer's paint properties are evaluated for that feature (data-driven expressions
 which property hid it (`[NOT VISIBLE: circle-opacity evaluates to 0]`) and why: its value, the expression branch that
 produced it, and the zoom (`-> parks#7 is not visible at zoom 11.2: fill-opacity is 0 because the match on ["get","kind"]
 took its fallback for kind="park"`). `visible: 'any'` opts out; `visible: false` matches
-only the invisible ones. `expect(map.feature(q)).toBeVisibleOnMap()` adds a pixel probe (catches a transparent icon image).
+only the invisible ones. `expect(map.feature(q)).toBeVisibleOnMap()` adds a pixel probe at one point of the feature
+(catches a transparent icon image; what one point misses is in [Limits](#limits)). On a map not wholly inside the browser
+window, the probe scrolls the map into view to choose that point and scrolls back in the same task: an assertion leaves the
+page where it was (the app's scroll listeners still see a `scroll` event, with nothing moved). While the page is still
+scrolling by itself (the app's own smooth scroll), the probe does not scroll: a feature outside the window then has no
+verdict until the scroll ends. Only actions leave the map scrolled into view. A feature in a part of the map that a scrolling panel around it clips gets no verdict either way.
 Actions refuse an invisible feature unless `{ force: true }`. How it works: [DESIGN — Visibility](docs/DESIGN.md#visibility-rendered-is-not-visible).
 
 ### What an action waits for (actionability)
@@ -130,7 +135,7 @@ Actions refuse an invisible feature unless `{ force: true }`. How it works: [DES
 3. the pixel is **on** the feature — for polygons an interior point far from the edge, never the centroid
 4. the feature is the **topmost visible hit** at that pixel (its own label on top does not count as an occluder; neither does anything the style paints invisibly, e.g. a transparent hit area)
 5. no DOM element (popup, control, overlay) covers the pixel
-6. a layer the hit test cannot see (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) drawn **above** the feature at that pixel: the feature's own layer is probed there, and if hiding it changes no pixel the point is covered and the next one is tried (a translucent overlay, or a transparent gap in an opaque one, lets the action through; so does a heatmap that draws nothing there, although MapLibre 5 and later hit-test it over its whole radius). Each action probes anew. Maps without such a layer above their features pay nothing
+6. a layer the hit test cannot see (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) drawn **above** the feature at that pixel: the feature's own layer is probed there, and if hiding it changes no pixel the point is covered and the next one is tried (a translucent overlay, or a transparent gap in an opaque one, lets the action through; so does a heatmap that draws nothing there, although MapLibre 5 and later hit-test it over its whole radius; a target that itself draws nothing at that pixel, such as a ring marker's transparent middle or the inside of a polygon drawn only by its outline, reads as covered even under a translucent overlay: [Limits](#limits)). Each action probes anew. Maps without such a layer above their features pay nothing
 7. at the instant the real `pointerdown` arrives, the hit test is re-run; if the feature the query resolved to is no longer there (a look-alike that slid under the pointer does not count), is painted invisibly since the aim, or a layer of item 6 appeared over it since the aim, the click — or the tap, touch events included — is swallowed and the action retries
 
 Works unchanged on rotated, pitched, globe and terrain maps, and on a map inside a container scaled with CSS `transform: scale()`. A location on the far side of the globe, behind the camera or
@@ -263,7 +268,7 @@ Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visib
 |---|---|
 | `expect(map).toHaveFeature(query, { visible?, timeout? })` | at least one visible feature (`visible: 'any'` = merely rendered) |
 | `expect(map.features(q)).toHaveFeatureCount(n)` | exactly n |
-| `expect(map.feature(q)).toBeVisibleOnMap({ pixels? })` | one feature, painted by the style and contributing pixels |
+| `expect(map.feature(q)).toBeVisibleOnMap({ pixels? })` | one feature, painted by the style and contributing pixels to a patch of about 5×5 px at its action point (a ring or an outline can read as not visible: [Limits](#limits)). To assert absence: `.not.toHaveFeature` |
 | `expect(map).toHaveLayerPixels(layerId, { at, radiusPx? = 24 })` | `radiusPx` in CSS pixels. A layer without features (raster, image, canvas, video, heatmap, hillshade) contributes pixels around a location |
 | `expect(map.feature(q)).toHaveGeometry(expected, { tolerancePx? = 2 })` | GeoJSON geometry · vertex list · `{ circle: { center, edge } }` |
 | `expect(map).toHavePopup({ at?, feature?, text?, tolerancePx? })` | a popup is open and anchored there |
@@ -271,7 +276,8 @@ Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visib
 
 A matcher that cannot reach a verdict fails **whichever way it is written**, and says why: the map is not registered or
 was removed, a named layer does not exist, several features match where one is required, the map has not settled (a
-`.not` or a count needs it idle, or seen to be never idle), the camera is moving (`toHavePopup`). "Could not look" never
+`.not` or a count needs it idle, or seen to be never idle), the camera is moving (`toHavePopup`), no pixel of the
+feature's geometry hit-tests back to it (`toBeVisibleOnMap`; see Limits). "Could not look" never
 passes as "absent". To assert that a layer was removed, check `map.layers()`.
 
 Failures throw `GeowrightError` (actions) or a normal expect failure; both carry "what is on the map" and attach text + an annotated screenshot.
@@ -339,6 +345,20 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
 - **Tiled sources:** the browser cannot know what is off-screen, and the failure messages say so.
 - **On a globe** MapLibre's own viewport-wide query is wrong; the workaround is a grid: an extrusion narrower than 16 px whose
   footprint centre is off-screen can be missed by viewport-wide queries (never mis-clicked; a query `at` it finds it).
+- **A feature drawn away from its geometry** (a label under its point by `text-offset`, `line-offset`, a `*-translate`)
+  is aimed at on its geometry: the point and a few pixels around it, a line's vertices and midpoints. When it is drawn
+  further away than that, an action on it fails with `not-found`; act where it is drawn with `clickAt` (`hoverAt`,
+  `tapAt`…). `toBeVisibleOnMap` reaches no verdict either way: `{ pixels: false }` checks its paint, and
+  `.not.toHaveFeature` asserts that it is gone.
+- **A feature that draws nothing at its action point** reads as not visible to the pixel probe of `toBeVisibleOnMap`,
+  which looks only at a patch of about 5×5 CSS px there (the first point the hit test gives back to the feature: a
+  point's centre, a line's middle, a polygon's interior far from its edge). That is the case for a ring marker with a
+  transparent fill, a polygon drawn only by its outline, a two-line label whose centre falls between its lines, a dashed
+  line whose middle falls in a gap. `toBeVisibleOnMap` fails on such a feature, and `.not.toBeVisibleOnMap()` **passes**
+  although a user sees it. Assert that a feature is gone with `.not.toHaveFeature`; check one of these with
+  `toBeVisibleOnMap({ pixels: false })` (its paint) and `toHaveLayerPixels` where it is drawn (its pixels). An action
+  reads the same patch for a pixel-only layer above its target: under a raster, even a translucent one, an action on such
+  a feature fails with `occluded`; pass `{ ignoreLayers: [...] }` for that layer.
 - **`hover` on a moving target** is only dependable when frames are short; `click` holds up.
 - **A feature whose source the app replaces on every frame is never "at rest"**, even one that stands still: "at rest"
   is the same pixel two frames running *and* no data replacement of its source in between (a starved renderer draws a
@@ -350,9 +370,11 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   What cannot be done is to take the click back.
 - **Pixel-only layers above a feature** (raster, image, video, canvas, heatmap, hillshade, color-relief, background, and custom layers such as deck.gl's) are checked with a pixel probe:
   a few renders per action on a map that has one over its features, and not at all for `moving: 'allow'`. Pixels that change
-  inside an overlay between the aim and the press are not re-checked; on MapLibre 2 and Mapbox GL 1 a custom layer is not
+  inside an overlay between the last probe and the press are not re-checked (over a target whose opacity is data-driven
+  that time includes a reload of its source, and an overlay given new data during the first one is probed once more); over such a target, an
+  overlay that changes colour by itself can still, rarely, pass for the target showing through; on MapLibre 2 and Mapbox GL 1 a custom layer is not
   checked at all; the snapshot does not probe (it marks such a feature `under-pixel-layer:<ids>`): [RECIPES](docs/RECIPES.md#a-raster-or-image-layer-is-drawn-over-my-features).
-- The injected script is about 410 KB, not minified (88 KB gzipped; it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
+- The injected script is about 455 KB, not minified (99 KB gzipped; it bundles MapLibre's style-expression evaluator); test-time only, nothing ships in your app.
 
 The full list, with costs measured on a dense map: [DESIGN — Costs and known limitations](docs/DESIGN.md#costs-and-known-limitations).
 
@@ -373,7 +395,7 @@ version ([0017](docs/decisions/0017-the-playwright-floor-is-the-one-ci-runs.md))
 | act: click / hover / drag on features and locations, click-time verification | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | occlusion by other features and by DOM, `force`, `ignoreLayers` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | visibility from paint evaluation (opacity 0, transparent colour, zero size) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
-| pixel probe (`toBeVisibleOnMap`, `toHaveLayerPixels`) | ✓ through the frame loop: 3 real frames, may flicker once | ✓ | ✓ | ✓ | ✓ | ✓ |
+| pixel probe (`toBeVisibleOnMap`, `toHaveLayerPixels`) | ✓ through the frame loop: 4 real frames, may flicker once | ✓ | ✓ | ✓ | ✓ | ✓ |
 | text snapshot, evaluated colours, entities | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | markers and popups (`map.marker`, `map.popup`, `toHavePopup`) | ✓ (`mapboxgl-` classes) | ✓ | ✓ | ✓ | ✓ | ✓ |
 | vector-tile sources, `routeVectorTiles` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |

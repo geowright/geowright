@@ -397,7 +397,7 @@ test.describe('wholePixels', () => {
 test.describe('verdictKey (a pixel verdict within one action)', () => {
   const view = { center: { lng: 34.78, lat: 32.08 }, zoom: 12, bearing: 0, pitch: 0 };
   const size = { w: 800, h: 600 };
-  const over = [{ layer: 'veil', stamp: '1|0|null|0.5' }];
+  const over: { layer: string; stamp: string; data?: string }[] = [{ layer: 'veil', stamp: '1|null|0.5', data: '0' }];
   const key = (o: Partial<{ target: string; c: PixelPoint; view: object; size: typeof size; over: typeof over }> = {}) =>
     verdictKey(o.target ?? 'alerts|1|{}', o.c ?? { x: 100.4, y: 200.6 }, o.view ?? view, o.size ?? size, o.over ?? over);
 
@@ -405,7 +405,7 @@ test.describe('verdictKey (a pixel verdict within one action)', () => {
     expect(key()).toBe(key({ c: { x: 100.2, y: 200.9 } }));
   });
 
-  test('any camera change, a resize, another pixel, target or overlay stamp: another key', () => {
+  test('any camera change, a resize, another pixel, target, overlay stamp or overlay data: another key', () => {
     const k = key();
     for (const [what, other] of [
       ['zoom', key({ view: { ...view, zoom: 11 } })],
@@ -415,7 +415,8 @@ test.describe('verdictKey (a pixel verdict within one action)', () => {
       ['size', key({ size: { w: 800, h: 500 } })],
       ['pixel', key({ c: { x: 102, y: 200 } })],
       ['target', key({ target: 'alerts|2|{}' })],
-      ['stamp', key({ over: [{ layer: 'veil', stamp: '1|0|null|1' }] })],
+      ['stamp', key({ over: [{ layer: 'veil', stamp: '1|null|1', data: '0' }] })],
+      ['data', key({ over: [{ layer: 'veil', stamp: '1|null|0.5', data: '1' }] })],
       ['overlays', key({ over: [...over, { layer: 'radar', stamp: 'x' }] })],
     ] as const) expect(other, what).not.toBe(k);
   });

@@ -771,16 +771,16 @@ function opacityZero(map: MlMap, layerId: string, type: string): boolean {
  * area test (a draped raster is not where `unproject` says). It may say too much, which costs a probe; it must never say
  * too little, which is a false pass (decision 0022).
  * `stamp`: changes when what the layer draws may have changed in a way it can see — its source (another object: removed
- * and added again), the source's data events (`dataEvents`; not for the target's own source), its `coordinates`, and the
- * layer's opacity. It only serves one action's retries (the engine keeps verdicts per action).
+ * and added again), its `coordinates`, and the layer's opacity; `data`: the source's data events (`dataEvents`; not for
+ * the target's own source). They only serve one action's retries (the engine keeps verdicts per action).
  */
-export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: number }, ids: string[], dataEvents: (source: string) => number): { layer: string; type: string; stamp: string }[] {
-  const out: { layer: string; type: string; stamp: string }[] = [];
+export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: number }, ids: string[], dataEvents: (source: string) => number): { layer: string; type: string; stamp: string; data: string }[] {
+  const out: { layer: string; type: string; stamp: string; data: string }[] = [];
   const from = ids.indexOf(target);
   if (from < 0) return out;
   const zoom = map.getZoom();
-  // The target's own source is left out of the stamps: a probe that hides the target by `visibility` reloads it, and a
-  // stamp that changed with that reload would never find the verdict just reached (probe, reload, probe… for ever).
+  // The target's own source is left out of `data`: a probe that hides the target by `visibility` reloads it, and a key
+  // that changed with that reload would never find the verdict just reached (probe, reload, probe… for ever).
   const targetSource = (map.getLayer(target) as { source?: string } | undefined)?.source;
   let terrain: unknown;
   try {
@@ -825,7 +825,7 @@ export function pixelOccluders(map: MlMap, target: string, at: { x: number; y: n
     } catch {
       paint = undefined;
     }
-    out.push({ layer: id, type: layer.type, stamp: `${src ? serial(src) : 0}|${sourceId && sourceId !== targetSource ? dataEvents(sourceId) : 0}|${JSON.stringify(coordinates ?? null)}|${JSON.stringify(paint ?? null)}` });
+    out.push({ layer: id, type: layer.type, stamp: `${src ? serial(src) : 0}|${JSON.stringify(coordinates ?? null)}|${JSON.stringify(paint ?? null)}`, data: String(sourceId && sourceId !== targetSource ? dataEvents(sourceId) : 0) });
   }
   return out;
 }

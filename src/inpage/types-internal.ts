@@ -61,20 +61,26 @@ export interface StyleCause {
 
 /**
  * What a pixel probe found: how much the pixels changed without the layer (`diff`, 0 = it contributes nothing there),
- * or why there is no verdict YET (`inconclusive`: the pixels changed by themselves between two reads, no frame came
- * within the time budget — ask again later), or why there never will be one here (`unavailable`: no WebGL context,
- * no such layer).
+ * or why there is no verdict YET (`inconclusive`: the pixels changed by themselves between reads with the layer drawn,
+ * or, with no read after the restore to tell, hiding it changed them by one colour level at most; no frame came within
+ * the time budget — ask again later), or why there never will be one here (`unavailable`: no WebGL context, no such
+ * layer).
  */
 export type ProbeResult = { diff: number; /** the probe made the layer's source reload: see `settleAfterProbe` */ reloads?: true } | { inconclusive: string } | { unavailable: string };
 
 /**
  * A layer the hit test cannot see (raster, image, heatmap, …) that is drawn above a target and may draw at a pixel.
- * `stamp`: opaque; it changes when what the layer draws there may have changed (new data in its source, a new opacity).
+ * `stamp`: opaque; it changes when what the layer draws there may have changed (a new opacity, another source object).
+ * `data`: opaque, optional; it changes with the data of the layer's source (new data, tiles arriving), kept out of
+ * `stamp`. A verdict is keyed by both. New `data` while the target reloads after its probe gets one more probe (an image
+ * the app animates frame by frame may cover the target now); new `data` again after that one is no reason for a third
+ * (the engine's actionPoint).
  */
 export interface PixelOccluder {
   layer: string;
   type: string;
   stamp: string;
+  data?: string;
 }
 
 /**
@@ -136,8 +142,13 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    */
   pixelOnly?(layer: string): boolean;
   /**
-   * Optional, after a probe that answered `reloads`: resolves once a frame has been rendered since the probe and the
-   * layer's source is loaded again — true then, false when `budgetMs` ran out first.
+   * Optional, after a probe that answered `reloads`: resolves once a frame has been rendered since the probe, the layer's
+   * source is loaded again and, where the layer had features in the hit test before the probe, it has some again, or the
+   * app has changed what it draws since (its filter, its visibility, its source's data), or the map has gone idle, or, on
+   * a map seen never to go idle (repaint on, an animated source, so diagnosed by the last waitForIdle) or once the camera
+   * or the global state has changed since the probe, the source has been loaded again for a while (a few hundred ms and
+   * several frames) — true then, false when `budgetMs` ran out first. Actions wait for it before they aim again; matchers
+   * before they return.
    */
   settleAfterProbe?(layer: string, budgetMs: number): Promise<boolean>;
   /**

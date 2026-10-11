@@ -15,6 +15,25 @@ export interface PendingSource {
 
 export const DEAD_WORKER_AFTER_MS = 5000;
 
+/**
+ * settleAfterProbe on a map seen never to go idle (repaint on, an animated source, or so diagnosed by the last
+ * waitForIdle), or once the layer's filter, its source's data, the camera or the global state has changed since the
+ * probe: how long, in time and in rendered frames, the layer's source must have been loaded again before the wait for
+ * its features gives up (they were taken away in a way no check sees, or by that change; after such a change, counted
+ * from the first reload after it: the later reloads do not restart it). A symbol is hit-tested again
+ * only once placed again, and MapLibre starts a placement no sooner than its fade duration (300 ms by default) after
+ * the one before. Measured (MapLibre 6, a map that repaints every frame, 50,000 points in the source, quiet machine, 12
+ * probes each): a symbol was back 0 to 227 ms (up to 14 frames) after its source had loaded, a circle in the same
+ * frame. Both bounds must pass: placement waits for the clock (that fade duration) and runs in frames, of which a
+ * loaded machine renders few. Out of both, the wait ends as it would with the features back: the probe's verdict
+ * stands, and the caller's next look sees what is there. On such a map, or after such a change, with a fade duration
+ * above about 600 ms, a read right after the matcher may miss a symbol that is not placed again yet. Not otherwise on a
+ * map that goes idle: with a fade of 1000 ms a symbol was back about 1000 ms after the probe, and a give-up at 600 ms
+ * missed it about every second time; the wait ends at idle there.
+ */
+const SETTLE_GRACE_MS = 600;
+const SETTLE_GRACE_FRAMES = 8;
+
 /** The loads a source started during one settle wait, and whether every one of them was given inline GeoJSON. */
 interface Starts {
   n: number;
@@ -413,11 +432,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     if (!w.styled) return { why: 'the style has not finished loading (the first one, or a new one from setStyle)', never: false };
     const never = 'Such a map NEVER becomes idle: do not wait for idle here; retrying assertions and actions work without it';
     // Deterministic, whatever the frame rate: an animated canvas source or a video source repaints the map for ever.
-    const sources = this.map.getStyle()?.sources ?? {};
-    const animated = Object.keys(sources).filter((id) => {
-      const spec = sources[id] as { type?: string; animate?: boolean };
-      return spec.type === 'video' || (spec.type === 'canvas' && spec.animate !== false);
-    });
+    const animated = animatedSources(this.map);
     // Never idle is a verdict about the WHOLE map: while another source is still loading it is not settled either, and a
     // negative assertion must not conclude absence from a source that has not arrived. So the sources that never settle
     // by design are set aside, and only when nothing else is pending is the map "never idle".
@@ -513,7 +528,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     for (const p of nullUncertainProperties(this.map)) out.push(`visibility uncertain for layer ${p} — it tests ['has', …] on a GeoJSON property that may be there with the value null (MapLibre draws with it; the hit test drops it); treated as visible`);
     for (const p of zoomUncertainProperties(this.map)) out.push(`visibility uncertain for layer ${p} — a zoom-and-data expression is drawn per tile zoom, and tile zooms vary across this view (pitch, terrain or globe); treated as visible where some tile zoom draws it`);
     // What THIS version of the map library cannot do (feature-detected). Said once, in diagnostics and the snapshot.
-    if (typeof this.map.redraw !== 'function') out.push('this map library version has no synchronous redraw(): the pixel probe renders through the frame loop instead (three real frames; the frame without the layer may be seen as a one-frame flicker)');
+    if (typeof this.map.redraw !== 'function') out.push('this map library version has no synchronous redraw(): the pixel probe renders through the frame loop instead (four real frames; the frame without the layer may be seen as a one-frame flicker)');
     if (typeof this.map.getLayersOrder !== 'function') out.push('this map library version has no getLayersOrder(): custom layers (a WebGL overlay such as deck.gl\'s) are missing from the layer order it reports, so an action does not check one drawn over its target, and layers() and this snapshot do not list them');
     if (this.geojsonWithoutData().length) out.push(`source(s) ${this.geojsonWithoutData().join(', ')}: this map library version has no GeoJSONSource.getData() and the source was given a URL — features outside the viewport and full geometries are unknowable (as for tiled sources)`);
     return out;
@@ -530,18 +545,21 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   /**
    * Pixel probe. A WebGL canvas without preserveDrawingBuffer reads back zeros — except in the
    * same task as the draw. `redraw()` (public, MapLibre >= 2) renders synchronously, so: draw, read, draw, read again
-   * (the CONTROL), hide the layer, draw, read, restore, draw. All in one task, so the intermediate frame is never
-   * composited (no flicker). Costs four renders (~50ms each on SwiftShader) and fires 'styledata' — a probe, not
-   * something to run per poll. The layer is hidden by its opacity; only where that is data-driven (or the type has
-   * none) by `visibility`, and then MapLibre reloads the layer's source afterwards (see hide below).
+   * (the CONTROL), hide the layer, draw, read, restore, draw (and read, where it was hidden by its opacity). All in one
+   * task, so the intermediate frame is never composited (no flicker). Costs four renders (~50ms each on SwiftShader)
+   * and fires 'styledata' — a probe, not something to run per poll. The layer is hidden by its opacity; only where
+   * that is data-driven (or the type has none) by `visibility`, and then MapLibre reloads the layer's source afterwards
+   * (see hide below).
    *
-   * The control read: the "with" and "without" reads are compared, and pixels that change BY THEMSELVES (a
-   * fade, an animation under the feature, a camera that never stops) would pass for the layer's contribution. So the
-   * layer-on pixels are read twice, and hiding the layer must change them by clearly more than they change by
-   * themselves (signal against noise); otherwise there is no verdict yet: inconclusive. Not a control after the
-   * restore: hidden by `visibility`, the layer is not drawn again until its source has reloaded. MapLibre 2–4 advance a paint transition only
-   * on a style change — the probe's own hide is one — so there a transition in progress under the feature can still
-   * pass for a contribution.
+   * The control reads: the "with" and "without" reads are compared, and pixels that change BY THEMSELVES (an overlay
+   * whose colour is in a paint transition, a fade, an animation under the feature, a camera that never stops) would
+   * pass for the layer's contribution. So the layer-on pixels are read twice before the hide and, where the layer was
+   * hidden by its opacity, once more after the restore; hiding the layer must change them by clearly more than they
+   * change by themselves (signal against noise: `verdict`); otherwise there is no verdict yet: inconclusive. Hidden by
+   * `visibility`, the layer is not drawn again until its source has reloaded, so there is no read after the restore:
+   * there a change of one colour level at most is no verdict either, and pixels that change faster only while the
+   * layer is hidden can still pass for a contribution — as a transition in progress under the feature can on MapLibre
+   * 2–4, which advance it only on a style change, such as the probe's own hide.
    *
    * Without redraw() (Mapbox GL JS v1) the same reads happen inside the public 'render' event, which
    * fires in the task that drew the frame: triggerRepaint(), read on 'render'. Four REAL frames — the one
@@ -573,26 +591,50 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       for (let i = 0; i < a.length; i++) diff += Math.abs(a[i] - b[i]);
       return diff;
     };
-    // Signal against noise: the reads with the layer drawn differ by `control` by themselves; hiding the layer must change
-    // the pixels by clearly more than that (twice: a steady drift over one more read gives about the same again).
-    const verdict = (control: number, diff: number): ProbeResult =>
-      control === 0 || diff > 2 * control
-        ? { diff }
-        : { inconclusive: `the pixels there changed by ${control} between two reads with the layer drawn, and hiding the layer changed them by ${diff}, not clearly more than that — something is animating or still fading in there` };
+    const largestStep = (a: Uint8Array, b: Uint8Array) => {
+      let step = 0;
+      for (let i = 0; i < a.length; i++) step = Math.max(step, Math.abs(a[i] - b[i]));
+      return step;
+    };
+    // Signal against noise. `noise`: how much the pixels changed by themselves between reads with the layer drawn — the
+    // two before the hide (the control) and, where the layer is drawn again in the frame that restores it (hidden by its
+    // opacity), the one before the hide against the one after the restore, which spans the hide. Hiding the layer must
+    // change the pixels by clearly more than that (twice: a steady drift over one more read gives about the same again).
+    // The span matters: pixels drift in whole 8-bit levels, so a level can move between the read with the layer and the
+    // read without it and not between the two reads before (a control of 0) — an overlay's own colour change taken for
+    // the layer showing through it. Across the span a drift moves the pixels at least as far as across the hide, which
+    // never counts. Without the span (hidden by `visibility`, or no frame after the restore in time) a change of at most
+    // one level everywhere, after a control of 0, is no verdict: a slow drift between two reads looks just like that.
+    const verdict = (first: Uint8Array, withLayer: Uint8Array, without: Uint8Array, after?: Uint8Array): ProbeResult => {
+      const diff = difference(withLayer, without);
+      const noise = Math.max(difference(first, withLayer), after ? difference(withLayer, after) : 0);
+      if (noise > 0 && diff <= 2 * noise) return { inconclusive: `the pixels there changed by ${noise} between two reads with the layer drawn, and hiding the layer changed them by ${diff}, not clearly more than that — something is animating or still fading in there` };
+      if (noise === 0 && !after && diff > 0 && largestStep(withLayer, without) <= 1) return { inconclusive: `hiding the layer changed the pixels there by one colour level at most (${diff} in all), which is also what pixels changing colour by themselves do between two reads — something may be fading there, or the layer draws next to nothing` };
+      return { diff };
+    };
     // Hide the layer by its opacity where that reloads nothing (reloadFreeOpacity): hidden by `visibility: none`, the
     // layer's source reloads, and the tiles that come back lack the layer, so right after the probe the feature is
     // missing from the rendering and the hit test until a second reload lands. Set with a zero transition, so the
     // hide and the restore are instant; the app's transitions go back only after a frame has drawn the restored value
     // (before that, the restore itself would fade in). An opacity transition the app had in progress ends at its target.
     const opacity = reloadFreeOpacity(this.map, layer);
+    // Hidden by `visibility`: what its reload must bring back before the layer counts as drawn again, and what the app had
+    // then (settleAfterProbe). Taken before the first read, never between reads: the hit test of a whole layer takes as long
+    // as several renders on a big one, and taken in the hide it put that time between the second read with the layer and
+    // the read without it. An overlay changing colour by itself moved further across the hide than between the two reads
+    // before it, and passed for the layer showing through.
+    const start = opacity ? undefined : this.reloadStart(layer);
     const saved: { name: string; value: unknown; transition: unknown }[] = [];
     // Put back what the app had: since MapLibre 5.16 visibility may be an EXPRESSION on global state, and writing back
-    // the constant "visible" replaced it (and turned on a layer the app had hidden). Read right before hiding, and put
-    // back only if it is still the probe's own value (the app may have set something else in between).
+    // the constant "visible" replaced it (and turned on a layer the app had hidden). A visibility the app never set is
+    // put back unset (undefined: every version takes it without validating and draws the layer; an explicit "visible"
+    // showed up in the app's getLayoutProperty() and getStyle()). Read right before hiding, and put back only if it is
+    // still the probe's own value (the app may have set something else in between).
     let restore: unknown;
     const hide = () => {
       if (!opacity) {
-        restore = this.map.getLayoutProperty(layer, 'visibility') ?? 'visible';
+        this.reloads.set(layer, start!);
+        restore = this.map.getLayoutProperty(layer, 'visibility');
         this.map.setLayoutProperty(layer, 'visibility', 'none');
         return;
       }
@@ -622,15 +664,17 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       const first = read();
       const withLayer = read();
       let without: Uint8Array;
+      let after: Uint8Array | undefined;
       try {
         hide();
         without = read();
       } finally {
         unhide();
         this.map.redraw();
+        if (opacity) after = grab(); // drawn again in this frame (by `visibility`, not until its source has reloaded)
         restoreTransitions();
       }
-      return reloading(verdict(difference(first, withLayer), difference(withLayer, without)));
+      return reloading(verdict(first, withLayer, without, after));
     }
     // (a browser's timer delay is a 32-bit number: beyond it, as for Infinity, the timer fires at once)
     const deadline = performance.now() + Math.min(Math.max(0, budgetMs), 2 ** 31 - 1);
@@ -656,7 +700,10 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         if (saved.length) this.map.once('render', restoreTransitions);
         this.map.triggerRepaint();
       }
-      return without ? reloading(verdict(difference(first, withLayer), difference(withLayer, without))) : late;
+      if (!without) return late;
+      // the frame that restores the layer: drawn again in it where it was hidden by its opacity (none in time: no span)
+      const after = opacity ? await frame() : undefined;
+      return reloading(verdict(first, withLayer, without, after));
     })();
   }
 
@@ -687,13 +734,68 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     return pixelOccluders(this.map, layer, at, this.layerIds(), (source) => counts.get(source) ?? 0);
   }
 
+  /** Per layer, set by a probe that hides it by `visibility`: what it was before the probe (settleAfterProbe). */
+  private reloads = new Map<string, ReloadStart>();
+
+  private reloadStart(layer: string): ReloadStart {
+    const source = this.map.getLayer(layer)?.source;
+    return {
+      had: this.queryFeatures({ layers: [layer] }).length > 0,
+      filter: JSON.stringify(this.map.getFilter(layer) ?? null),
+      data: source === undefined ? 0 : this.dataVersion(source),
+      ...this.drawnWith(),
+    };
+  }
+
+  /** What else decides which features the hit test finds, besides the layer's own filter and visibility and its source. */
+  private drawnWith(): { camera: string; global: string } {
+    const c = this.map.getCenter();
+    return {
+      camera: JSON.stringify([c.lng, c.lat, this.map.getZoom(), this.map.getBearing(), this.map.getPitch()]),
+      // global state: where the map has it (not MapLibre 2-4, Mapbox GL 1)
+      global: typeof this.map.getGlobalState === 'function' ? JSON.stringify(this.map.getGlobalState() ?? null) : '',
+    };
+  }
+
   /**
    * After a probe that hid the layer by `visibility` (its opacity is data-driven): MapLibre reloads the layer's source,
    * and the tiles that come back first lack the layer. On Mapbox GL v1 the reload starts only in the next frame.
-   * So: a frame, then the source loaded again — checked on every rendered frame, within the budget.
+   * So: a frame, then the source loaded again and, where the layer had features in the hit test before the probe, some
+   * again — checked on every rendered frame, within the budget. The source loaded is not enough for a symbol layer: its
+   * features are hit-tested again only once they have been placed again, and a read right after a matcher that waited
+   * for the source alone missed a symbol every time (MapLibre 6).
+   *
+   * The app may take the layer's features away meanwhile (a selected marker removed after a click: new data, a filter,
+   * the layer hidden). They never come back then, and the wait for them lasted the caller's whole budget: a matcher's
+   * `.not` then reported the "visible" of a feature that was gone. So that wait also ends at once when the layer has been
+   * hidden since the probe, and otherwise when the map goes idle: by then every symbol has been placed again too, however
+   * long the app's fade duration. A map seen never to go idle (repaint on, an animated canvas or video source, or so
+   * diagnosed by the last waitForIdle) gives up on them once its source has been loaded again for SETTLE_GRACE_MS and
+   * SETTLE_GRACE_FRAMES: there, too, the wait lasted the whole budget. Only such a map: on one that goes idle, a give-up
+   * after a fixed time ended the wait before a symbol placed after a longer fade (an app's `fadeDuration`) was back. A map
+   * the app animates otherwise (a paint property or the global state set on every frame) is not seen as one: there a
+   * change since the probe of the layer's filter, its source's data, the camera or the global state (which may have taken
+   * the features away, or not) starts that give-up too, and a change none of the checks see (the layer's zoom range)
+   * still waits out the budget. Such a change does not end the wait by itself: it need not take anything away (the same
+   * marker set again, a filter that keeps it, a camera moved by a hair, the global state of another layer set on every
+   * frame), and a symbol is hit-tested again only at the next placement, so a read right after the matcher missed it (18
+   * reads in 18; 4 in 6 after new data or a new filter). A live feed, a filter animation or a camera moved on to new
+   * tiles reloads the source at every step, and a frame with the source not loaded restarts the give-up's count:
+   * restarted at every step, a step every 250 or 500 ms kept it from completing, and `.not` failed with "visible" on a
+   * feature the app took away or out of view (8 in 8 each). After any change that starts the give-up it restarts only
+   * once, at the first reload after it: `.not` then passes in 1.9 to 2.2 s under a feed (1.4 to 2.1 s when the change
+   * ended the wait) and in 2.0 to 2.7 s under the camera's steps, on a map that never goes idle. The give-up still
+   * needs SETTLE_GRACE_FRAMES rendered frames with the source loaded after that reload (read from the code), so a
+   * source loaded in fewer within the budget still waits it out: a feed about as fast as the reload (3000 points set on
+   * every frame) did in 11 runs of 16 on a loaded machine, with the source loaded in 0 to 3 frames, and in none of 4
+   * alone.
    */
   settleAfterProbe(layer: string, budgetMs: number): Promise<boolean> {
     const source = this.map.getLayer(layer)?.source;
+    const start = this.reloads.get(layer);
+    this.reloads.delete(layer);
+    let idle = false;
+    const onIdle = () => void (idle = true);
     const loaded = () => {
       try {
         return !source || !this.map.getSource(source) || this.map.isSourceLoaded(source);
@@ -701,10 +803,65 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         return true;
       }
     };
+    // the layer hidden since the probe: its features are gone until the app shows it again, and the wait ends at once
+    const hidden = () => !layoutVisible(this.map, layer);
+    // the app's own change of the layer since the probe: a new filter, or new data in its source
+    const layerChanged = () => {
+      if (!start) return false;
+      try {
+        return JSON.stringify(this.map.getFilter(layer) ?? null) !== start.filter || (source !== undefined && this.dataVersion(source) !== start.data);
+      } catch {
+        return false;
+      }
+    };
+    // that, the camera or the global state changed since the probe: the features may be gone for good, or merely not
+    // placed again yet; the grace below decides, not the change itself
+    const drawnChanged = () => {
+      if (!start) return false;
+      try {
+        const now = this.drawnWith();
+        return now.camera !== start.camera || now.global !== start.global || layerChanged();
+      } catch {
+        return false;
+      }
+    };
+    // the grace below: only on a map seen never to go idle (its `repaint` is read on every frame)
+    let neverIdle = false;
+    try {
+      neverIdle = this.neverIdle() || animatedSources(this.map).length > 0;
+    } catch {
+      // no style to read: not seen
+    }
+    const back = () => {
+      try {
+        return !start?.had || !this.map.getLayer(layer) || idle || hidden() || this.queryFeatures({ layers: [layer] }).length > 0;
+      } catch {
+        return true;
+      }
+    };
+    // Since when, and for how many rendered frames, the source has been loaded again (it loads again after a camera move).
+    let loadedSince = 0;
+    let loadedFrames = 0;
+    // A frame with the source not loaded restarts that count, but after a change that starts the give-up (the layer's
+    // filter, its source's data, the camera or the global state) only once, at the first reload after it. A live feed,
+    // a filter animation or a camera moved on to new tiles reloads the source again at every step, and with the count
+    // restarted at each, a step every 250 or 500 ms kept it from completing: the wait lasted the whole budget. (Set
+    // after the app's new filter or new data alone, the camera's steps still restarted it.)
+    let restartedForChange = false;
     return new Promise((resolve) => {
-      const done = (ok: boolean) => (clearTimeout(timer), this.map.off('render', onRender), resolve(ok));
+      const done = (ok: boolean) => (clearTimeout(timer), this.map.off('render', onRender), this.map.off('idle', onIdle), resolve(ok));
       const timer = setTimeout(() => done(false), Math.min(Math.max(0, budgetMs), 2 ** 31 - 1));
-      const onRender = () => (loaded() ? done(true) : this.map.triggerRepaint());
+      const onRender = () => {
+        if (!loaded()) {
+          if (!restartedForChange) loadedFrames = 0;
+          if (drawnChanged()) restartedForChange = true;
+          return this.map.triggerRepaint();
+        }
+        if (loadedFrames++ === 0) loadedSince = performance.now();
+        const givenUp = loadedFrames >= SETTLE_GRACE_FRAMES && performance.now() - loadedSince >= SETTLE_GRACE_MS && (neverIdle || this.map.repaint || drawnChanged());
+        return back() || givenUp ? done(true) : this.map.triggerRepaint();
+      };
+      this.map.on('idle', onIdle);
       this.map.on('render', onRender);
       this.map.triggerRepaint();
     });
@@ -760,6 +917,18 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   async reveal(w: LngLat): Promise<void> {
     this.map.jumpTo({ center: [w.lng, w.lat] });
   }
+}
+
+/** A layer before a probe hid it by `visibility`: features in the hit test, its filter, its source's data version, the camera and the global state. */
+type ReloadStart = { had: boolean; filter: string; data: number; camera: string; global: string };
+
+/** The sources that repaint the map on every frame: a video source, a canvas source that animates. */
+function animatedSources(map: MlMap): string[] {
+  const sources = map.getStyle()?.sources ?? {};
+  return Object.keys(sources).filter((id) => {
+    const spec = sources[id] as { type?: string; animate?: boolean };
+    return spec.type === 'video' || (spec.type === 'canvas' && spec.animate !== false);
+  });
 }
 
 function toRendered(f: MapGeoJSONFeature): InternalRenderedFeature {

@@ -1,4 +1,5 @@
 import type {
+  ActionPointFailure,
   ActionPointOptions,
   ActionPointResult,
   ClickVerdict,
@@ -457,31 +458,52 @@ export class Engine<W = unknown> {
     const verdicts = this.verdictsOf(opts.action);
     // 6. a pixel-only layer drawn above the target at the chosen pixel (the gate, adapter.pixelOccluders): the hit test
     //    cannot see it, so hide the TARGET's layer there and look (the pixel probe). Nothing changes: the pixel is covered;
-    //    the next candidate is tried, at most MAX_PROBES per aim. Maps without such a layer never probe (the gate is < 0.1 ms).
+    //    the next candidate is tried, at most MAX_PROBES covered ones per aim. Maps without such a layer never probe (the
+    //    gate is < 0.1 ms).
     let next: Aimed | undefined;
     let probeMs = 0; // the slowest probe of this look: one that cannot finish in the time left is not started
-    for (let probes = 0; ; ) {
+    let covered = 0; // probes that found their pixel covered
+    let seen = 0; // probes that saw the target and hid it by visibility (its source reloads, then a new aim)
+    let kept: { still: string; again: boolean } | undefined; // the probe that just saw the target, until the aim after its reload
+    for (;;) {
       const r = next ?? (await this.aimStill(q, opts, verdicts));
       next = undefined;
+      const keep = kept;
+      kept = undefined;
       if (!r.ok) return r;
       const { pixels, ...aimed } = r;
+      // The aim right after the reload, at the pixel the probe saw the target through, with the overlays changed only by
+      // new data in their sources meanwhile. That data may cover the target now (an image the app animates frame by frame,
+      // a raster tile arriving): the verdict is checked once more (`again`), and holds only if that probe sees the target
+      // too. After it, new data again is no reason for a third probe: a heatmap the app re-set every 40 ms had new data at
+      // every aim, and three probes that each saw the target ended as "each is covered". (Where the probe needs no reload
+      // the action follows it at once, with no aim in between.)
+      const again = !!pixels?.unprobed && pixels.still === keep?.still;
+      if (again && keep!.again) {
+        verdicts.set(pixels!.key, 'visible');
+        this.aimedThrough.set(pixels!.target, new Set(pixels!.over.map((o) => o.layer)));
+        return { ...aimed, why: `${aimed.why}; seen through ${pixels!.over.map((o) => o.layer).join(', ')} (pixel probe, twice before "${aimed.feature.layer}" reloaded; new data in it since)` };
+      }
       if (!pixels?.unprobed) {
         if (pixels) this.aimedThrough.set(pixels.target, new Set(pixels.over.map((o) => o.layer)));
         return aimed;
       }
       const names = pixels.over.map((o) => `${o.type} layer "${o.layer}"`).join(', ');
-      if (probes === MAX_PROBES) {
-        return fail('occluded', `${MAX_PROBES} candidate points were checked and each is covered by a layer the hit test cannot see (now ${names}, drawn above "${aimed.feature.layer}"). If it is see-through there, pass { ignoreLayers: [${pixels.over.map((o) => `'${o.layer}'`).join(', ')}] }; { force: true } acts anyway.`);
-      }
+      const remedy = `If it is see-through there, pass { ignoreLayers: [${pixels.over.map((o) => `'${o.layer}'`).join(', ')}] }; { force: true } acts anyway.`;
+      // "Covered" only from probes that found it so: one that saw the target says so, even when no verdict held.
+      const refuse = (late: boolean): ActionPointResult =>
+        seen
+          ? fail('unstable', `${names} kept changing while "${aimed.feature.layer}" reloaded after each pixel check (its opacity is data-driven, so the check hides it by visibility): ${seen} check(s) saw the target through it, and each time the overlay — or the camera, or the target's pixel — had changed again by the time the target was back${covered ? `; ${covered} other candidate point(s) are covered` : ''}${late ? '; there was no time to check again' : ''}. ${remedy}`)
+          : late
+            ? fail('occluded', `the ${covered} candidate point(s) checked in the time there was are each covered by a layer the hit test cannot see (now ${names}, drawn above "${aimed.feature.layer}"). ${remedy}`)
+            : fail('occluded', `${MAX_PROBES} candidate points were checked and each is covered by a layer the hit test cannot see (now ${names}, drawn above "${aimed.feature.layer}"). ${remedy}`);
+      if (covered === MAX_PROBES || seen === MAX_PROBES) return refuse(false);
       // Out of time after a probe: say what is known, rather than be abandoned mid-way by a caller that then knows nothing.
       // The FIRST probe of an aim always runs (the caller leaves room for its answer): a last attempt that aimed with
       // little time left would otherwise end on "no time", burying the verdict the earlier attempts reached. A later one
       // starts only if it can end in time, at the pace of this look's slowest probe (four renders each: on a loaded
       // machine a probe took seconds, and the look that started one near its deadline was abandoned, knowing nothing).
-      if (probes && performance.now() + probeMs >= deadline) {
-        return fail('occluded', `the ${probes} candidate point(s) checked in the time there was are each covered by a layer the hit test cannot see (now ${names}, drawn above "${aimed.feature.layer}"). If it is see-through there, pass { ignoreLayers: [${pixels.over.map((o) => `'${o.layer}'`).join(', ')}] }; { force: true } acts anyway.`);
-      }
-      probes++;
+      if (covered + seen && performance.now() + probeMs >= deadline) return refuse(true);
       // (a renderer without redraw() needs real frames: at least a few of them)
       const probeStart = performance.now();
       const p = await this.adapter.probePixels!(aimed.feature.layer, aimed.surface, 2, Math.max(PROBE_MIN_MS, deadline - performance.now()));
@@ -494,6 +516,7 @@ export class Engine<W = unknown> {
       }
       verdicts.set(pixels.key, p.diff === 0 ? 'occluded' : 'visible');
       if (p.diff === 0) {
+        covered++;
         // the next candidate, from one more look: the map was still a moment ago (aimStill), and is now
         if (this.adapter.isMoving()) return fail('moving', 'map started moving');
         next = this.actionPointOnce(q, opts, true, verdicts);
@@ -506,10 +529,12 @@ export class Engine<W = unknown> {
       // The target's opacity is data-driven, so the probe hid it by `visibility` and its source reloads: until the second
       // reload lands the target is missing from the rendering and the hit test (measured: up to 2 frames; 787 ms at
       // load ~300). Wait for exactly that — a frame, the source loaded, the target hit-tested there again — then aim anew
-      // (the verdict is kept: no second probe).
+      // (the verdict is kept; where an overlay's source had new data meanwhile, it is checked once more: `kept`).
+      seen++;
       const settled = (await this.adapter.settleAfterProbe?.(aimed.feature.layer, Math.max(0, deadline - performance.now()))) ?? true;
       while (settled && performance.now() < deadline && !this.hitsAgain(q, aimed.surface)) await oneFrame();
       if (performance.now() >= deadline || !settled) return fail('unstable', `the target's layer "${aimed.feature.layer}" is still reloading after the pixel check (its opacity is data-driven, so the check hid it by visibility)`);
+      kept = { still: pixels.still, again };
     }
   }
 
@@ -627,9 +652,46 @@ export class Engine<W = unknown> {
    * surface pixels that no mouse can touch. Playwright scrolls a locator into view before acting; so do we.
    */
   scrollIntoView(): void {
+    if (this.outsideWindow()) this.adapter.surface().scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+  }
+
+  /** Is any part of the map outside the browser window (so that scrollIntoView() would scroll)? */
+  private outsideWindow(): boolean {
+    const r = this.adapter.surface().getBoundingClientRect();
+    return r.top < 0 || r.left < 0 || r.bottom > window.innerHeight || r.right > window.innerWidth;
+  }
+
+  /**
+   * Before a look that would scroll (a part of the map is outside the window): is the page standing still? The scroll
+   * positions of the page and of every element around the map are read twice, a frame apart. Moved, the app's own smooth
+   * scroll is under way (a "show on map" button that scrolls to the map): the look's instant scroll would end it, and the
+   * put-back would leave the page frozen mid-way, with the map still out of the window. The look then takes the page as
+   * it is. No wait for a map wholly in the window, nor in a hidden tab, which renders no frames (and animates no scroll).
+   */
+  private async scrollStill(deadline: number): Promise<boolean> {
     const el = this.adapter.surface();
-    const r = el.getBoundingClientRect();
-    if (r.top < 0 || r.left < 0 || r.bottom > window.innerHeight || r.right > window.innerWidth) el.scrollIntoView({ block: 'nearest', inline: 'nearest', behavior: 'instant' });
+    if (el.isConnected === false || document.visibilityState === 'hidden' || !this.outsideWindow()) return true;
+    const at = () => scrollers(el).map((s) => `${s.scrollLeft},${s.scrollTop}`).join(' ');
+    const before = at();
+    const framed = await new Promise<boolean>((resolve) => {
+      const timer = setTimeout(() => resolve(false), Math.max(0, deadline - performance.now()));
+      requestAnimationFrame(() => (clearTimeout(timer), resolve(true)));
+    });
+    return !framed || at() === before;
+  }
+
+  /**
+   * scrollIntoView() for a LOOK, not for input (a matcher's pixel probe, a failure screenshot): it also returns what it
+   * scrolled (the window, a scrolling panel) for putBackScroll(). Only an action may leave the page scrolled (README, "What
+   * an action waits for", item 0): an assertion that did would change an app with scroll-driven state (a header that
+   * hides on scroll, lazy loading, the next screenshot) depending on whether it ran. Playwright's assertions do not scroll.
+   */
+  scrollForLook(): Scrolled {
+    const el = this.adapter.surface();
+    if (el.isConnected === false) return [];
+    const before = scrollers(el).map((s) => ({ s, left: s.scrollLeft, top: s.scrollTop }));
+    this.scrollIntoView();
+    return before.filter((b) => b.s.scrollLeft !== b.left || b.s.scrollTop !== b.top).map((b) => ({ ...b, now: { left: b.s.scrollLeft, top: b.s.scrollTop } }));
   }
 
   /**
@@ -669,8 +731,9 @@ export class Engine<W = unknown> {
     const frame = this.frame();
     let occluder: RenderedFeature | undefined;
     let domCover: Element | undefined;
+    let clip: Element | undefined;
     let pixelCover: { over: PixelOccluder[]; at: PixelPoint } | undefined;
-    const skipped = { miss: 0, occluded: 0, dom: 0, offview: 0, pixels: 0 };
+    const skipped = { miss: 0, occluded: 0, dom: 0, offview: 0, clipped: 0, pixels: 0 };
 
     // WHOLE client pixels only. Real input arrives with fractional coordinates (pointerdown at 339.6, 641.4), but the
     // map library handles `click` / `mousedown` MouseEvents, whose coordinates the browser truncates (339, 641) — so a
@@ -703,6 +766,15 @@ export class Engine<W = unknown> {
       }
       const el = topElementAt(client.x, client.y);
       if (el !== this.adapter.surface()) {
+        // Not drawn on the page there, rather than covered: a scrolling panel around the map clips that part of it (what is
+        // at the point is the panel, or whatever is beyond it). A user scrolls the panel to see it: no verdict, as for a
+        // part of the map outside the window.
+        const by = clippedBy(this.adapter.surface(), client);
+        if (by) {
+          clip ??= by;
+          skipped.clipped++;
+          continue;
+        }
         domCover ??= el ?? undefined;
         skipped.dom++;
         continue;
@@ -718,8 +790,9 @@ export class Engine<W = unknown> {
             skipped.pixels++;
             continue;
           }
-          px = { target: this.key(pieces[0]), over, key, unprobed: !verdict };
-        } else px = { target: this.key(pieces[0]), over, key: '', unprobed: false };
+          const still = this.pixelKey(pieces, c, over.map(({ data: _, ...o }) => o));
+          px = { target: this.key(pieces[0]), over, key, still, unprobed: !verdict };
+        } else px = { target: this.key(pieces[0]), over, key: '', still: '', unprobed: false };
       }
       const why =
         `candidate ${i + 1} of ${whole.length} (${pieces[0].geometry.type.includes('Polygon') ? `interior points, farthest from the edge first${this.adapter.lift?.(pieces[0], c) ? '; extruded: roof, then walls, then footprint' : ''}` : pieces[0].geometry.type.includes('Line') ? 'middle of the line first' : 'centre first, then a ring around it'})` +
@@ -745,6 +818,7 @@ export class Engine<W = unknown> {
           `Use { force: true } to click anyway, or { ignoreLayers: ['${occluder.layer}'] }.`,
       );
     }
+    if (skipped.clipped) return fail('offscreen', `the feature is on the map, but that part of the map is clipped by ${describeEl(clip!)}: scrolled out of view inside it${skipped.offview ? ', or outside the browser window' : ''}`);
     if (skipped.offview) return fail('offscreen', 'the feature is on the map, but that part of the map is outside the browser window (the map is larger than the viewport and cannot be scrolled fully into it)');
     // Found on a dense 3D city: a building whose footprint is below the viewport edge with a sliver of wall in view.
     // "not found" sent the reader looking for a missing feature; what is true is that it is (almost) off screen.
@@ -824,12 +898,29 @@ export class Engine<W = unknown> {
    * not drawn? Catches what paint evaluation cannot (transparent icon image, colour identical to
    * what is underneath). Layer-level differential at a pixel that hit-tests to the feature.
    */
-  async pixelProbe(q: FeatureQuery, opts: Pick<ActionPointOptions, 'ignoreLayers'> & { budgetMs?: number } = {}): Promise<{ ok: true; diff: number | undefined; inconclusive?: string; surface: PixelPoint; layer: string } | { ok: false; message: string }> {
+  async pixelProbe(q: FeatureQuery, opts: Pick<ActionPointOptions, 'ignoreLayers'> & { budgetMs?: number } = {}): Promise<{ ok: true; diff: number | undefined; inconclusive?: string; surface: PixelPoint; layer: string } | { ok: false; reason: ActionPointFailure; message: string }> {
     const budgetMs = opts.budgetMs ?? 2000;
-    const r = this.actionPointOnce(q, { ignoreLayers: opts.ignoreLayers }); // layers the caller says never occlude do not here either
-    if (!r.ok) return { ok: false, message: `${r.reason}: ${r.message}` };
+    const deadline = performance.now() + budgetMs;
+    // The look needs the map in the window (elementFromPoint sees nothing outside it), and an assertion must not leave the
+    // page scrolled: scroll, look and scroll back in this one task. No frame shows the page scrolled; the app's scroll
+    // listeners still get a 'scroll' (and 'scrollend') event, with nothing moved. Not while the page is scrolling by itself
+    // (scrollStill): a part of the map outside the window is then no verdict, and the matcher looks again.
+    const still = await this.scrollStill(deadline);
+    const scrolled = still ? this.scrollForLook() : [];
+    let r: Aimed;
+    try {
+      r = this.actionPointOnce(q, { ignoreLayers: opts.ignoreLayers }, false); // layers the caller says never occlude do not here either
+    } finally {
+      putBackScroll(scrolled);
+    }
+    // `reason`: covered (a verdict for toBeVisibleOnMap) is not "could not look" (no candidate hit-tests back, outside the window)
+    if (!r.ok) return { ok: false, reason: r.reason, message: `${r.reason}: ${r.message}` };
     // the full answer when the adapter has it — "no verdict YET" (pixels changing by themselves, no frame in time) is not "cannot probe"
     const p = this.adapter.probePixels ? await this.adapter.probePixels(r.feature.layer, r.surface, 2, budgetMs) : { diff: await this.adapter.pixelContribution?.(r.feature.layer, r.surface) };
+    // Hidden by `visibility` (its opacity is data-driven), the layer is missing from the rendering and the hit test until
+    // its source has reloaded, and a read right after the matcher (a snapshot, a count) missed what the matcher had just
+    // seen: the matcher returns once it is back, as an action waits before it aims again. Out of time, the verdict stands.
+    if ('reloads' in p && p.reloads) await this.adapter.settleAfterProbe?.(r.feature.layer, Math.max(0, deadline - performance.now()));
     return { ok: true, diff: 'diff' in p ? p.diff : undefined, inconclusive: 'inconclusive' in p ? p.inconclusive : undefined, surface: r.surface, layer: r.feature.layer };
   }
 
@@ -2005,6 +2096,93 @@ export function topElementAt(x: number, y: number, skip?: (e: Element) => boolea
   }
 }
 
+/**
+ * The ancestor that clips `surface` away at this client pixel, if one does: an ancestor whose overflow clips (a scrolling
+ * panel) and whose box does not contain the pixel. The document's own overflow is the window's: outside the window is
+ * checked apart. Only such an ancestor: the page itself (<html>, <body>) found at the pixel is no sign of clipping. It is
+ * what the hit test finds over a map hidden with `visibility: hidden` and over a backdrop drawn as the body's ::after,
+ * which a user does not see through (covered, not clipped).
+ *
+ * And only an ancestor that clips the surface at all: one on its containing-block chain, as CSS clips (an overflow clips
+ * the boxes whose containing block is it or inside it, not one positioned out of it). Not one between an absolutely
+ * positioned box and the positioned ancestor that holds it, nor one above a fixed box (MapLibre's usual full-page CSS,
+ * `position: absolute`, inside a static wrapper with `overflow: hidden`, 0 px tall since its only child is out of flow; a
+ * `position: fixed` map in a scrolling panel): under a modal, such a map read as clipped, no verdict instead of "not
+ * visible", and `autoPan` moved the camera. Where the hit test finds the surface at the pixel, under anything, nothing
+ * clips it there: a clip takes it out of the hit test, a cover does not. Its absence alone is no sign of a clip: the map
+ * is out of the hit test everywhere with `pointer-events: none` (on the page, as a modal dialog library sets it while
+ * its dialog is open, or on the map) or `visibility: hidden`.
+ */
+function clippedBy(surface: Element, client: PixelPoint): Element | undefined {
+  const root = surface.getRootNode();
+  if ((root instanceof Document || root instanceof ShadowRoot) && root.elementsFromPoint(client.x, client.y).includes(surface)) return undefined;
+  const up = (n: Element): Element | null => n.assignedSlot ?? n.parentElement ?? ((n.parentNode as ShadowRoot | null)?.host ?? null);
+  // the position of the last box on the chain: whose containing block is looked for next
+  let position = getComputedStyle(surface).position;
+  for (let n = up(surface); n; n = up(n)) {
+    const style = getComputedStyle(n);
+    if (!holds(style, position)) continue;
+    position = style.position;
+    if (n === document.documentElement || n === document.body) continue;
+    const x = style.overflowX !== 'visible', y = style.overflowY !== 'visible';
+    if (!x && !y) continue;
+    const r = n.getBoundingClientRect();
+    if ((x && (client.x < r.left || client.x >= r.right)) || (y && (client.y < r.top || client.y >= r.bottom))) return n;
+  }
+  return undefined;
+}
+
+/**
+ * Is an ancestor with this style the containing block of a box with this `position`, from below? One with no box of its
+ * own (`display: contents`, as a slot has) never is. A box in flow: its parent is (the nearest block container, near
+ * enough: an inline box does not clip). An absolutely positioned one: a positioned ancestor, one with
+ * `will-change: position`, or one that holds fixed boxes too. A fixed one: only an ancestor with a transform (`translate`,
+ * `rotate`, `scale`, `offset-path`, `offset-position` and `transform-style: preserve-3d` included), a perspective, a filter
+ * or a backdrop filter, layout or paint containment (`content-visibility` too), or a `will-change` of one of those
+ * properties or of `contain`; else the viewport, beyond every ancestor. Not a size container (`container-type`,
+ * Tailwind's `@container`): Chromium makes none of it. tests/offwindow.spec.ts compares this with Chromium's layout,
+ * property by property, on a block ancestor. Not read: that an inline box or a table row holds less (a transform there
+ * makes nothing). A containing block made by a property not read here makes its overflow clip read as a cover; one read
+ * here that Chromium does not make, a clip of a map that ancestor does not contain.
+ */
+export function holds(style: CSSStyleDeclaration, position: string): boolean {
+  if (style.display === 'contents') return false;
+  if (position !== 'absolute' && position !== 'fixed') return true;
+  if (position === 'absolute' && style.position !== 'static') return true;
+  const set = (p: string) => !['', 'none'].includes(style.getPropertyValue(p));
+  const transforms = ['transform', 'translate', 'rotate', 'scale', 'offset-path', 'perspective', 'filter', 'backdrop-filter'];
+  const willChange = style.getPropertyValue('will-change').split(/\s*,\s*/);
+  return (
+    transforms.some(set) ||
+    !['', 'normal', 'auto'].includes(style.getPropertyValue('offset-position')) ||
+    style.getPropertyValue('transform-style') === 'preserve-3d' ||
+    /\b(layout|paint|strict|content)\b/.test(style.getPropertyValue('contain')) ||
+    /^(auto|hidden)$/.test(style.getPropertyValue('content-visibility')) ||
+    willChange.some((p) => [...transforms, 'transform-style', 'offset', 'offset-position', 'contain'].includes(p) || (p === 'position' && position === 'absolute'))
+  );
+}
+
+/** What Engine.scrollForLook() scrolled: each element, where it was and where the look left it. */
+export type Scrolled = { s: Element; left: number; top: number; now: { left: number; top: number } }[];
+
+/**
+ * The elements whose scrolling moves `el` in the window: its ancestors in the flat tree (through a slot, out of a shadow
+ * root to its host), which include the document's scrolling element.
+ */
+function scrollers(el: Element): Element[] {
+  const up = (n: Element): Element | null => n.assignedSlot ?? n.parentElement ?? ((n.parentNode as ShadowRoot | null)?.host ?? null);
+  const out: Element[] = [];
+  for (let n = up(el); n; n = up(n)) out.push(n);
+  const root = document.scrollingElement;
+  if (root && !out.includes(root)) out.push(root);
+  return out;
+}
+
+/** Puts back what scrollForLook() scrolled: each element only if it is still where the look left it (the app may have scrolled it since). */
+export function putBackScroll(scrolled: Scrolled): void {
+  for (const { s, left, top, now } of scrolled) if (s.scrollLeft === now.left && s.scrollTop === now.top) s.scrollTo({ left, top, behavior: 'instant' });
+}
+
 /** Where an event really happened: a listener on `window` sees an event from inside a shadow root retargeted to its host. */
 const eventTarget = (e: Event): EventTarget | null => e.composedPath?.()[0] ?? e.target;
 
@@ -2147,12 +2325,12 @@ type Verdicts = Map<string, 'visible' | 'occluded'>;
 
 /**
  * The key of a pixel verdict within one action: the target (its key), the pixel, the camera (the view state and the
- * surface size), and the pixel-only layers over the pixel with their stamps. A retry after the camera moved, or after an
- * overlay changed in a way its stamp sees, probes again.
+ * surface size), and the pixel-only layers over the pixel with their stamps and data. A retry after the camera moved, or
+ * after an overlay changed in a way its stamp or data sees, probes again.
  */
-export function verdictKey(target: string, c: PixelPoint, view: unknown, size: { w: number; h: number }, over: { layer: string; stamp: string }[]): string {
+export function verdictKey(target: string, c: PixelPoint, view: unknown, size: { w: number; h: number }, over: { layer: string; stamp: string; data?: string }[]): string {
   const v = (view ?? {}) as { center?: unknown; zoom?: unknown; bearing?: unknown; pitch?: unknown };
-  return JSON.stringify([target, Math.round(c.x), Math.round(c.y), v.center, v.zoom, v.bearing, v.pitch, size.w, size.h, over.map((o) => [o.layer, o.stamp])]);
+  return JSON.stringify([target, Math.round(c.x), Math.round(c.y), v.center, v.zoom, v.bearing, v.pitch, size.w, size.h, over.map((o) => [o.layer, o.stamp, o.data ?? null])]);
 }
 /** The least time a probe is given, even at the deadline: four frames of a renderer without redraw() (Mapbox GL v1). */
 const PROBE_MIN_MS = 250;
@@ -2164,6 +2342,8 @@ interface PixelCheck {
   over: PixelOccluder[];
   /** pixelKey() */
   key: string;
+  /** pixelKey() without the overlays' `data`: the same pixel after new data in an overlay (actionPoint's kept verdict) */
+  still: string;
   /** no verdict for this pixel yet: actionPoint probes it */
   unprobed: boolean;
 }

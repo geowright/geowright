@@ -124,7 +124,10 @@ The map's hit test returns features only (a heatmap on MapLibre >= 5 comes back 
 not count as cover), so for a raster, image, video, canvas, heatmap, hillshade, color-relief, background or custom layer
 drawn ABOVE a feature an action looks at pixels: it probes the feature's own layer at the pixel it is about to press, and if
 hiding that layer changes nothing there, the pixel is covered. An opaque veil or overlay then fails the action with
-`occluded`, naming the layer. A translucent layer (a radar), or a transparent gap in an opaque one, lets it through.
+`occluded`, naming the layer. A translucent layer (a radar), or a transparent gap in an opaque one, lets it through,
+unless the feature itself draws nothing at that pixel: a ring marker with a transparent fill, or a polygon drawn only
+by its outline, is probed in its empty middle and reads as covered even under a translucent layer (README, Limits).
+`ignoreLayers` below lets such an action through.
 
 If your overlay is see-through where it matters and you do not want to pay for the probe, say so:
 
@@ -138,9 +141,12 @@ or for every action of that handle: `geowright(page, { ignoreLayers: ['radar'] }
 What it costs and what it does not see: a probe is four renders (measured medians: 15–45 ms across
 the tested versions; actual cost varies with rendering conditions)
 and runs only when such a layer is drawn above the target at that pixel; where the target's opacity is data-driven the
-probe reloads its source, and the action waits for it. Each action probes anew; only its own retries reuse a verdict.
-`moving: 'allow'` is not checked. Pixels that change inside an overlay that was already there between the aim and the
-press (the next radar frame filling a gap) are not re-checked; an overlay that appears in that time is. The snapshot
+probe reloads its source, and the action waits for it (and there an overlay that changes colour by itself can still,
+rarely, pass for the target showing through). Each action probes anew; only its own retries reuse a verdict.
+`moving: 'allow'` is not checked. Pixels that change inside an overlay that was already there between the last probe and
+the press (the next radar frame filling a gap) are not re-checked; an overlay that appears in that time is. Where the
+probe reloads the target's source, that time includes the reload; an overlay given new data during the first one is
+probed once more, and the action goes ahead only if it still sees the target. The snapshot
 does not probe: a feature under such a layer is listed with `under-pixel-layer:<ids>`.
 
 ## An offline basemap

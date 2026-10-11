@@ -106,6 +106,126 @@ for (const lib of LIBS) {
       expect(e, 'toBeVisibleOnMap passed for a feature that changes no pixel, because the pixels under it change by themselves').not.toBeNull();
     });
 
+    // An opaque overlay that changes colour by itself is no evidence either, when it changes only while the layer is hidden:
+    // a custom layer above everything paints the map one opaque grey, a level darker after each style change ('styledata').
+    // The probe's hide is a style change and its two reads with the layer drawn are not, so the grey moves by exactly one
+    // level across the hide, never between the reads before it. The read after the restore spans the hide and sees it.
+    test('pixel probe: an overlay that changes only while the layer is hidden is no evidence (the read after the restore)', async ({ map, page }) => {
+      await page.evaluate(() => {
+        const w = window as any;
+        const m = w.__geowright_maps.main;
+        w.__styleChanges = 0;
+        m.on('styledata', () => w.__styleChanges++);
+        m.addLayer({
+          id: 'tint',
+          type: 'custom',
+          renderingMode: '2d',
+          onAdd() {},
+          render(gl: WebGLRenderingContext) {
+            const clear = gl.getParameter(gl.COLOR_CLEAR_VALUE);
+            const grey = Math.max(0, 250 - w.__styleChanges) / 255;
+            gl.clearColor(grey, grey, grey, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.clearColor(clear[0], clear[1], clear[2], clear[3]);
+          },
+        });
+      });
+      await map.waitForIdle();
+      const p = await page.evaluate(() => (window as any).__geowright.pixelProbe('main', { layer: 'places', id: 2 }));
+      baseExpect({ ok: p.ok, diff: p.diff, inconclusive: p.inconclusive }, 'a probe of Bravo under the opaque tint').toEqual({ ok: true, diff: undefined, inconclusive: expect.stringMatching(/changed by \d+ between two reads/) });
+    });
+
+    // The same tint over a layer the probe hides by `visibility` (its opacity is data-driven), moving 3 levels more at each
+    // viewport-wide hit test, as an overlay in a colour transition moves while a hit test of a big layer runs. The probe's
+    // hit test of the layer (what its reload must bring back) was taken between its second read with the layer and its
+    // read without it, and the tint moved 4 levels across the hide: the layer "showed through". It is taken before the
+    // first read now; across the hide the tint moves 1 level, which is no verdict.
+    test('pixel probe: an overlay that moves while the probe hit-tests the layer is no evidence', async ({ map, page }) => {
+      await page.evaluate(() => {
+        const w = window as any;
+        const m = w.__geowright_maps.main;
+        m.addSource('dd', { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 9, properties: { o: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.03] } }] } });
+        m.addLayer({ id: 'dd', type: 'circle', source: 'dd', paint: { 'circle-radius': 12, 'circle-color': '#c0f', 'circle-opacity': ['get', 'o'] } });
+        w.__styleChanges = w.__hitTests = 0;
+        m.on('styledata', () => w.__styleChanges++);
+        const query = m.queryRenderedFeatures.bind(m);
+        m.queryRenderedFeatures = (...args: unknown[]) => {
+          if (args[1] === undefined && !Array.isArray(args[0])) w.__hitTests++;
+          return query(...args);
+        };
+        m.addLayer({
+          id: 'tint',
+          type: 'custom',
+          renderingMode: '2d',
+          onAdd() {},
+          render(gl: WebGLRenderingContext) {
+            const clear = gl.getParameter(gl.COLOR_CLEAR_VALUE);
+            const grey = Math.max(0, 250 - w.__styleChanges - 3 * w.__hitTests) / 255;
+            gl.clearColor(grey, grey, grey, 1);
+            gl.clear(gl.COLOR_BUFFER_BIT);
+            gl.clearColor(clear[0], clear[1], clear[2], clear[3]);
+          },
+        });
+      });
+      await map.waitForIdle();
+      await page.evaluate(() => ((window as any).__styleChanges = (window as any).__hitTests = 0));
+      const p = await page.evaluate(() => (window as any).__geowright.pixelProbe('main', { layer: 'dd', id: 9 }));
+      baseExpect({ ok: p.ok, diff: p.diff, inconclusive: p.inconclusive }, 'a probe of the circle under the opaque tint').toEqual({ ok: true, diff: undefined, inconclusive: expect.stringMatching(/one colour level at most|changed by \d+ between two reads/) });
+    });
+
+    // After a probe that hid the layer by `visibility`, a matcher waits for the layer to be back. The app may take its
+    // features away meanwhile; then the wait ends with that change (here a filter, on a map that repaints every frame, so
+    // never idle), and `.not.toBeVisibleOnMap()` passes. It used to wait out its whole timeout and report "visible".
+    test("pixel probe: a feature the app filters out while the probe's reload runs: .not.toBeVisibleOnMap passes", async ({ map, page }) => {
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.addSource('picked', { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 7, properties: { o: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.03] } }] } });
+        m.addLayer({ id: 'picked', type: 'circle', source: 'picked', paint: { 'circle-radius': 12, 'circle-color': '#c0f', 'circle-opacity': ['get', 'o'] } });
+      });
+      await map.waitForIdle();
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.repaint = true;
+        let done = false;
+        m.on('styledata', () => {
+          if (done || m.getLayoutProperty('picked', 'visibility') !== 'none') return;
+          done = true; // the probe has hidden the layer: the app's filter lands while its source reloads
+          setTimeout(() => m.setFilter('picked', ['==', ['get', 'o'], 2]));
+        });
+      });
+      await expect(map.feature({ layer: 'picked', id: 7 })).not.toBeVisibleOnMap({ timeout: PROBE_FAIL_FAST_MS });
+      baseExpect(await page.evaluate(() => (window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['picked'] }).length), 'the premise: filtered out').toBe(0);
+    });
+
+    // The same with a change no check sees: the camera moves the feature out of view as the first tile of the reload
+    // arrives, on a map that never goes idle. The wait gives up a while after the source has loaded again; it used to wait
+    // out the matcher's whole timeout and report "visible".
+    test("pixel probe: a feature the camera leaves while the probe's reload runs, on a map never idle: .not.toBeVisibleOnMap passes", async ({ map, page }) => {
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.addSource('picked', { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 7, properties: { o: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.03] } }] } });
+        m.addLayer({ id: 'picked', type: 'circle', source: 'picked', paint: { 'circle-radius': 12, 'circle-color': '#c0f', 'circle-opacity': ['get', 'o'] } });
+      });
+      await map.waitForIdle();
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        m.repaint = true;
+        let done = false;
+        m.on('styledata', () => {
+          if (done || m.getLayoutProperty('picked', 'visibility') !== 'none') return;
+          done = true; // the probe has hidden the layer: its source reloads
+          const onTile = (e: { sourceId?: string; tile?: unknown }) => {
+            if (e.sourceId !== 'picked' || !e.tile) return;
+            m.off('sourcedata', onTile);
+            m.jumpTo({ center: [10, 50] });
+          };
+          m.on('sourcedata', onTile);
+        });
+      });
+      await expect(map.feature({ layer: 'picked', id: 7 })).not.toBeVisibleOnMap({ timeout: 2 * PROBE_FAIL_FAST_MS });
+      baseExpect(await page.evaluate(() => (window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['picked'] }).length), 'the premise: out of view').toBe(0);
+    });
+
     // Hidden by `visibility`, the probed layer's source reloaded and the feature left the hit test for a while. Hidden
     // by its opacity (with a zero transition, the app's own put back after) nothing reloads, on every version.
     test('pixel probe: hides by opacity — no source reload, the feature is still in the hit test right after', async ({ map, page }) => {
@@ -135,6 +255,58 @@ for (const lib of LIBS) {
       // put back: MapLibre right after its synchronous redraw(), Mapbox GL 1 after the next frame
       const paint = () => page.evaluate(() => ['fill-opacity', 'fill-opacity-transition'].map((p) => (window as any).__geowright_maps.main.getPaintProperty('zones', p)));
       await baseExpect.poll(paint).toEqual([0.8, { duration: 5000, delay: 0 }]);
+    });
+
+    // Hidden by `visibility` (a layer whose opacity is data-driven, a layer without an opacity), the layer is put back as
+    // the app defined it: a visibility the app never set stays unset on every version (writing back "visible" put a
+    // `layout: { visibility: 'visible' }` into the app's getStyle()).
+    test('pixel probe: hidden by visibility, a visibility the app never set stays unset', async ({ map, page }) => {
+      await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('places', 'circle-opacity', ['case', ['==', ['get', 'kind'], 'none'], 0.5, 1]));
+      await map.waitForIdle();
+      const read = () =>
+        page.evaluate(() => {
+          const m = (window as any).__geowright_maps.main;
+          return { places: m.getLayoutProperty('places', 'visibility') ?? 'unset', bg: m.getLayoutProperty('bg', 'visibility') ?? 'unset', layers: JSON.stringify(m.getStyle().layers) };
+        });
+      const before = await read();
+      baseExpect([before.places, before.bg], 'the premise: neither layer sets a visibility').toEqual(['unset', 'unset']);
+      await expect(map.feature({ layer: 'places', where: { name: 'Bravo' } })).toBeVisibleOnMap();
+      await expect(map).toHaveLayerPixels('bg', { at: { lng: 34.82, lat: 32.09 } });
+      baseExpect(await read()).toEqual(before);
+      await expect(map).toHaveFeature({ layer: 'places', where: { name: 'Bravo' } }); // and drawn again
+    });
+
+    // Hidden by `visibility`, the layer's source reloads, and until it has the layer is missing from the hit test. A
+    // matcher's probe returns once it is back, as an action waits before it aims again: a one-shot read right after the
+    // matcher sees what it saw. The source is big enough that its
+    // reload takes a while (50,000 points the layer's filter leaves out, read again by the worker on every reload).
+    test('pixel probe: a read right after a matcher whose probe reloaded the source sees the feature', async ({ map, page }) => {
+      await page.evaluate(() => {
+        const m = (window as any).__geowright_maps.main;
+        const point = (properties: object, lng: number, id?: number) => ({ type: 'Feature', id, properties, geometry: { type: 'Point', coordinates: [lng, 32.03] } });
+        const source = (id: number, o: number, lng: number) => ({ type: 'geojson', data: { type: 'FeatureCollection', features: [point({ o }, lng, id), ...Array.from({ length: 50000 }, () => point({ bulk: 1 }, lng))] } });
+        const layer = (id: string) => ({ id, type: 'circle', source: id, filter: ['!', ['has', 'bulk']], paint: { 'circle-radius': 12, 'circle-color': '#c0f', 'circle-opacity': ['get', 'o'], 'circle-stroke-width': 0 } });
+        m.addSource('q', source(7, 1, 34.79)); // drawn
+        m.addLayer(layer('q'));
+        m.addSource('q0', source(8, 0, 34.82)); // drawn invisibly: opacity 0, still in the hit test
+        m.addLayer(layer('q0'));
+      });
+      await map.waitForIdle();
+      const checks = [
+        { layer: 'q', run: () => expect(map.feature({ layer: 'q', id: 7 })).toBeVisibleOnMap(), what: 'toBeVisibleOnMap' },
+        { layer: 'q', run: () => expect(map).toHaveLayerPixels('q', { at: { lng: 34.79, lat: 32.03 }, radiusPx: 4 }), what: 'toHaveLayerPixels' },
+        { layer: 'q0', run: () => expect(map).not.toHaveLayerPixels('q0', { at: { lng: 34.82, lat: 32.03 }, radiusPx: 4 }), what: '.not.toHaveLayerPixels' },
+      ];
+      const missed: string[] = [];
+      for (let i = 0; i < 3; i++) {
+        for (const c of checks) {
+          await c.run();
+          const n = await map.features({ layer: c.layer, visible: 'any' }).count(); // one-shot: no waiting
+          if (n !== 1) missed.push(`${c.what} #${i + 1}: ${n} feature(s) of layer "${c.layer}" right after it`);
+          await map.waitForIdle();
+        }
+      }
+      baseExpect(missed).toEqual([]);
     });
 
     // Decision 0022 on every version: an image layer drawn above a feature. (A 64px image: an 8px one with 'raster-resampling': 'nearest'
@@ -181,22 +353,28 @@ for (const lib of LIBS) {
     // Decision 0022 on every version: a heatmap's hit (MapLibre >= 5 hit-tests its whole radius, drawn or not) is never an
     // occluder; the gate and the probe decide. Drawing nothing (opacity 0) it hides nothing; translucent, the probe sees
     // the target through it. On its target's OWN source, with the target's opacity data-driven (the probe reloads that
-    // source), the verdict still holds for the retry.
+    // source), the verdict still holds for the retry; on another source that the app re-sets with new data every 40 ms (a
+    // live feed), it still holds for the aim after that reload.
     test('pixel-only layers: a heatmap over a feature hides it only by its pixels, on any source', async ({ map, page }) => {
-      const heat = (o: { opacity: number; shared?: boolean }) =>
+      const heat = (o: { opacity: number; shared?: boolean; live?: boolean }) =>
         page.evaluate((o) => {
-          const m = (window as any).__geowright_maps.main;
+          const w = window as any;
+          const m = w.__geowright_maps.main;
+          clearInterval(w.__feed);
           if (m.getLayer('heat')) m.removeLayer('heat');
           if (m.getSource('heat')) m.removeSource('heat');
-          if (o.shared) m.setPaintProperty('places', 'circle-opacity', ['case', ['==', ['get', 'kind'], 'none'], 0.5, 1]);
-          else m.addSource('heat', { type: 'geojson', data: { type: 'FeatureCollection', features: [{ type: 'Feature', id: 900, properties: { w: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.08] } }] } });
+          if (o.shared || o.live) m.setPaintProperty('places', 'circle-opacity', ['case', ['==', ['get', 'kind'], 'none'], 0.5, 1]);
+          const data = { type: 'FeatureCollection', features: [{ type: 'Feature', id: 900, properties: { w: 1 }, geometry: { type: 'Point', coordinates: [34.8, 32.08] } }] };
+          if (!o.shared) m.addSource('heat', { type: 'geojson', data });
           m.addLayer({ id: 'heat', type: 'heatmap', source: o.shared ? 'places' : 'heat', paint: { 'heatmap-radius': 30, 'heatmap-opacity': o.opacity } });
+          w.__startFeed = () => (w.__feed = setInterval(() => m.getSource('heat').setData(data), 40));
           document.getElementById('clicked')!.textContent = '-';
         }, o);
       const bravo = map.feature({ layer: 'places', where: { name: 'Bravo' } });
-      for (const o of [{ opacity: 0 }, { opacity: 0.3 }, { opacity: 0.4, shared: true }]) {
+      for (const o of [{ opacity: 0 }, { opacity: 0.3 }, { opacity: 0.4, shared: true }, { opacity: 0.3, live: true }]) {
         await heat(o);
         await map.waitForIdle();
+        if (o.live) await page.evaluate(() => (window as any).__startFeed());
         const e = await bravo.click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e.message.split('\n\n')[0]);
         baseExpect({ ...o, error: e }).toEqual({ ...o, error: null });
         await baseExpect(page.getByTestId('clicked')).toHaveText('places:Bravo');

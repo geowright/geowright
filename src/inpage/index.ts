@@ -1,4 +1,4 @@
-import { Engine, clientFrame, toClient, toSurface, topElementAt, type ArmedCheck } from './engine';
+import { Engine, clientFrame, putBackScroll, toClient, toSurface, topElementAt, type ArmedCheck, type Scrolled } from './engine';
 import { MapLibreAdapter } from './maplibre-adapter';
 import { startMirror } from './mirror';
 import type { CanvasAdapter, ClickVerdict, FeatureSummary, Overlay } from './types';
@@ -66,6 +66,9 @@ function missingLayer(e: Engine<any>, q: any): string | undefined {
   const list = ids.length > 40 ? `${ids.slice(0, 40).join(', ')}, … (${ids.length - 40} more)` : ids.join(', ') || '(none: is the style loaded?)';
   return `${missing.length > 1 ? 'layers' : 'layer'} ${missing.map((id) => `"${id}"`).join(', ')} ${missing.length > 1 ? 'do' : 'does'} not exist. Layers: ${list}`;
 }
+
+/** What a failure screenshot scrolled to show the map, by the screenshot's token: put back after the picture. */
+const shots = new Map<string, Scrolled>();
 
 const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
@@ -136,6 +139,7 @@ const api = {
    * is a verdict — 0.
    */
   layerPixels: async (mapId: string, layer: string, world: any, radiusPx = 24, budgetMs = 2000) => {
+    const deadline = performance.now() + budgetMs;
     const a = engine(mapId).adapter;
     const info = a.listLayers().find((l) => l.id === layer);
     if (!info) return { ok: false as const, message: `layer "${layer}" does not exist. Layers: ${a.listLayers().map((l) => l.id).join(', ')}` };
@@ -149,6 +153,8 @@ const api = {
     if (!info.visible) return { ok: true as const, diff: 0, surface: p, hidden: true };
     // an AREA: imagery is often transparent at any one pixel
     const r = a.probePixels ? await a.probePixels(layer, p, radiusPx, budgetMs) : { diff: await a.pixelContribution?.(layer, p, radiusPx) };
+    // back once the layer is drawn again, as in Engine.pixelProbe
+    if ('reloads' in r && r.reloads) await a.settleAfterProbe?.(layer, Math.max(0, deadline - performance.now()));
     if ('diff' in r && r.diff !== undefined) return { ok: true as const, diff: r.diff, surface: p };
     const why = 'inconclusive' in r ? r.inconclusive : 'unavailable' in r ? r.unavailable : 'no WebGL context to read from, or no frame was rendered — a hidden tab?';
     return { ok: false as const, message: `this map could not be probed: ${why}` };
@@ -196,8 +202,8 @@ const api = {
    * world -> client pixel, plus whether that pixel is inside the surface, inside the browser WINDOW (`offview`: on the
    * map, but the map is bigger than the window there — no pointer can reach it, as in actionPoint) and not DOM-covered.
    */
-  clientPoint: (mapId: string, world: any) => {
-    engine(mapId).scrollIntoView();
+  clientPoint: (mapId: string, world: any, scroll = true) => {
+    if (scroll) engine(mapId).scrollIntoView(); // `false`: where a failure screenshot draws its mark, on a map it has scrolled into view
     const a = engine(mapId).adapter;
     const near = engine(mapId).nearestWorld(world); // just across the antimeridian: the copy in view
     const p = a.project(near);
@@ -208,6 +214,16 @@ const api = {
     const top = inside && !offview ? topElementAt(client.x, client.y) : null;
     const hidden = inside && a.isOnSurface ? !a.isOnSurface(near) : false;
     return { client, surface: p, inside, offview, hidden, covered: inside && !offview && top !== el, moving: a.isMoving() };
+  },
+  /**
+   * A failure screenshot of a map outside the window: scroll it into view for the picture (a screenshot cannot clip outside
+   * the window), and back after it with putBackScroll under the same token. An assertion leaves the page where it was.
+   */
+  scrollForShot: (mapId: string, token: string) => void shots.set(token, engine(mapId).scrollForLook()),
+  putBackScroll: (_mapId: string, token: string) => {
+    const s = shots.get(token);
+    shots.delete(token);
+    if (s) putBackScroll(s);
   },
   /** lng/lat under a client pixel, as REPORTED to the user: lng in [-180, 180] (aiming with it picks the copy in view). */
   worldAt: (mapId: string, client: { x: number; y: number }) => {
