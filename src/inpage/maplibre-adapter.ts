@@ -1,6 +1,6 @@
 import type { Map as MlMap, GeoJSONSource, MapGeoJSONFeature } from 'maplibre-gl';
 import { clientFrame, toSurface } from './engine';
-import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, isPixelOnlyType, layoutVisible, missingIcon, nullUncertainProperties, paintColour, paintVisibility, pixelOccluders, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
+import { explainLayerHidden, explainPaint, extrusionBase, extrusionHeight, filterAdmits, isPixelOnlyType, layerFilterReadsId, layoutVisible, missingIcon, nullUncertainProperties, paintColour, paintVisibility, pixelOccluders, projectionOf, reloadFreeOpacity, unparseableReasons, zoomUncertainProperties } from './maplibre-paint';
 import type { Geometry, LayerInfo, LngLat, Overlay, PixelPoint, RenderedFeature, Visibility } from './types';
 import type { InternalCanvasAdapter, InternalRenderedFeature, PixelOccluder, ProbeResult, StyleCause } from './types-internal';
 
@@ -246,6 +246,12 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
         properties: (f.properties ?? {}) as Record<string, unknown>,
         geometry: f.geometry as Geometry,
       }));
+  }
+
+  /** Does this layer draw a `generateId` GeoJSON source? Then even an id-less feature is rendered with its index as its id. */
+  private layerGeneratesIds(layerId: string): boolean {
+    const source = this.map.getSource(this.map.getLayer(layerId)?.source ?? '') as { type?: string; serialize?: () => unknown } | undefined;
+    return !!source && source.type === 'geojson' && this.generatesIds(source);
   }
 
   /** A GeoJSON source with `generateId` (a public option, echoed by the source's serialize()): ids are indexes. */
@@ -504,6 +510,9 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
   }
 
   filterAdmits(f: RenderedFeature): boolean | undefined {
+    // A filter on the feature id is judged by the renderer on the id it draws with: the data's id stands in for it only if it
+    // round-trips. Otherwise it cannot be told, and "undrawn" must never be a guess ( B-18).
+    if (layerFilterReadsId(this.map, f.layer) && !(f.id === undefined ? !this.layerGeneratesIds(f.layer) : this.idRoundTrips(f.layer, f.id) === true)) return undefined;
     return filterAdmits(this.map, f);
   }
 

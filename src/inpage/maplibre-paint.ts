@@ -855,6 +855,26 @@ export function explainLayerHidden(map: MlMap, layerId: string): StyleCause[] {
 
 const filters = new Map<string, ReturnType<typeof featureFilter> | null>();
 
+/** Does this filter read the feature id: the expression `['id']`, or the legacy `'$id'` key? */
+function readsFeatureId(filter: unknown): boolean {
+  if (filter === '$id') return true;
+  if (!Array.isArray(filter)) return false;
+  if (filter.length === 1 && filter[0] === 'id') return true;
+  return filter.some(readsFeatureId);
+}
+
+/**
+ * Does the layer's filter read the feature id? MapLibre judges such a filter on the id it RENDERS, which is not the app's id
+ * unless that id round-trips (see the adapter's idRoundTrips), so the data's id cannot stand in for it ( B-18).
+ */
+export function layerFilterReadsId(map: MlMap, layerId: string): boolean {
+  try {
+    return readsFeatureId(map.getFilter(layerId));
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Does the layer's `filter` let this DATA feature (from queryData) through? MapLibre applies it per tile, at the tile's
  * zoom, so that is where it is evaluated here too (see tileZoom); where tile zooms vary across the view, it is "no" only

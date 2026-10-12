@@ -144,6 +144,62 @@ test.describe('vector tiles: ids are unique per source-layer only', () => {
   });
 });
 
+/**
+ * A layer filter on the feature id (`['id']`, legacy `$id`) is judged by MapLibre on the id it RENDERS, which is not the app's
+ * id when the app's does not round-trip (a string id, or any id with `generateId`). So geowright cannot tell whether the
+ * filter admits the feature, and must not answer "not drawn": a negative assertion by that id would pass on a drawn feature
+ * ( B-18).
+ */
+test.describe('a layer filter on the feature id', () => {
+  const addFiltered = (page: Page, filter: unknown, extra: Record<string, unknown> = {}) =>
+    page.evaluate(
+      ([filter, extra]) => {
+        const m = (window as any).__geowright_maps.main;
+        const c = m.getCenter();
+        const feature = (id: string | number, dx: number) => ({ type: 'Feature', id, properties: { kind: 'gate' }, geometry: { type: 'Point', coordinates: [c.lng + dx, c.lat] } });
+        m.addSource('fgates', { type: 'geojson', ...(extra as object), data: { type: 'FeatureCollection', features: [feature('north-gate', -0.01), feature('south-gate', 0.01)] } });
+        m.addLayer({ id: 'fgates', type: 'circle', source: 'fgates', filter, paint: { 'circle-radius': 8, 'circle-color': '#0a0' } });
+      },
+      [filter, extra] as const,
+    );
+
+  for (const [name, filter] of [
+    ['expression', ['!=', ['id'], 'north-gate']],
+    ['legacy $id', ['!=', '$id', 'north-gate']],
+  ] as const) {
+    test(`a string id behind a ${name} filter: the feature MapLibre draws is not reported undrawn`, async ({ map, page }) => {
+      await addFiltered(page, filter);
+      await map.waitForIdle();
+      await expect(map.features({ layer: 'fgates' })).toHaveFeatureCount(2); // MapLibre draws both: it sees no usable id
+      await expect(map).toHaveFeature({ layer: 'fgates', id: 'north-gate' });
+      const e = await expect(map).not.toHaveFeature({ layer: 'fgates', id: 'north-gate' }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      expect(e, '.not.toHaveFeature by the id of a feature that is drawn').not.toBeNull();
+    });
+  }
+
+  test('a numeric id round-trips, so a filter that really excludes it still reports it undrawn', async ({ map, page }) => {
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const c = m.getCenter();
+      const feature = (id: number, dx: number) => ({ type: 'Feature', id, properties: { kind: 'gate' }, geometry: { type: 'Point', coordinates: [c.lng + dx, c.lat] } });
+      m.addSource('ngates', { type: 'geojson', data: { type: 'FeatureCollection', features: [feature(1, -0.01), feature(2, 0.01)] } });
+      m.addLayer({ id: 'ngates', type: 'circle', source: 'ngates', filter: ['!=', ['id'], 1], paint: { 'circle-radius': 8, 'circle-color': '#0a0' } });
+    });
+    await map.waitForIdle();
+    await expect(map).toHaveFeature({ layer: 'ngates', id: 2 });
+    await expect(map).not.toHaveFeature({ layer: 'ngates', id: 1 }); // the filter excludes id 1: truly not drawn
+  });
+
+  test('with generateId the filter sees the feature index, so the data id does not decide', async ({ map, page }) => {
+    await addFiltered(page, ['==', ['id'], 0], { generateId: true });
+    await map.waitForIdle();
+    // index 0 is north-gate, but a data id (even a string one) is not what the renderer filters on
+    await expect(map).toHaveFeature({ layer: 'fgates', id: 'north-gate' });
+    const e = await expect(map).not.toHaveFeature({ layer: 'fgates', id: 'north-gate' }, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    expect(e, '.not.toHaveFeature by the data id of a feature that is drawn').not.toBeNull();
+  });
+});
+
 /** `generateId: true`: MapLibre replaces every GeoJSON id with the feature's index. A query by the data's id is by the data. */
 test.describe('a GeoJSON source with generateId', () => {
   const add = (page: Page) =>
