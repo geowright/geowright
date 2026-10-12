@@ -133,7 +133,12 @@ export interface GeowrightOptions {
 export interface OverlayWhere {
   at?: LngLat;
   feature?: FeatureQuery;
-  /** How far (px) the overlay's anchor may be from `at`. Default 8. */
+  /**
+   * How far (px) the overlay's anchor may be from `at`. Default 8.
+   * A popup's anchor is its TIP, not the lng/lat it points at: a default Marker's popup tip sits about 38 px above the
+   * Marker's lng/lat, so `{ at }` of the Marker's own lng/lat misses it at the default (and `.not.toHavePopup({ at })`
+   * passes with the popup open). Use a larger `tolerancePx` (about 45) or match by `text` or `feature`.
+   */
   tolerancePx?: number;
 }
 

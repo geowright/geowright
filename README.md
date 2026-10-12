@@ -271,7 +271,7 @@ Queries: `layer` · `layerType` · `source` · `id` · `where` · `at` · `visib
 | `expect(map.feature(q)).toBeVisibleOnMap({ pixels? })` | one feature, painted by the style and contributing pixels to a patch of about 5×5 px at its action point (a ring or an outline can read as not visible: [Limits](#limits)). To assert absence: `.not.toHaveFeature` |
 | `expect(map).toHaveLayerPixels(layerId, { at, radiusPx? = 24 })` | `radiusPx` in CSS pixels. A layer without features (raster, image, canvas, video, heatmap, hillshade) contributes pixels around a location |
 | `expect(map.feature(q)).toHaveGeometry(expected, { tolerancePx? = 2 })` | GeoJSON geometry · vertex list · `{ circle: { center, edge } }` |
-| `expect(map).toHavePopup({ at?, feature?, text?, tolerancePx? })` | a popup is open and anchored there |
+| `expect(map).toHavePopup({ at?, feature?, text?, tolerancePx? })` | a popup is open and anchored there. `at` is the popup's **tip** within `tolerancePx` (default 8): a default Marker's tip sits about 38 px above its lng/lat, so pass a larger `tolerancePx` or match by `text` / `feature` |
 | `expect(map).toHaveView({ center?, zoom?, bearing?, pitch? }, { zoomTolerance? = 0.01, degreesTolerance? = 0.0005 })` | camera, with the map at rest. `degreesTolerance` is for the centre; bearing and pitch match within 0.1°, a bearing as an angle (270 = -90) |
 
 A matcher that cannot reach a verdict fails **whichever way it is written**, and says why: the map is not registered or
@@ -367,6 +367,12 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   `toBeVisibleOnMap({ pixels: false })` (its paint) and `toHaveLayerPixels` where it is drawn (its pixels). An action
   reads the same patch for a pixel-only layer above its target: under a raster, even a translucent one, an action on such
   a feature fails with `occluded`; pass `{ ignoreLayers: [...] }` for that layer.
+- **An opaque overlay whose colour changes by itself** (a playing video, a paint transition) can read as the target showing
+  through, so a click goes through to the layer below and `toBeVisibleOnMap` passes: the pixel probe cannot tell an overlay's
+  own colour drift from a target. Over such a map, assert on the feature (`toHaveFeature`) or pause the
+  overlay first.
+- **A location just past a globe's horizon** is clicked at the limb, and a query `at` it can match the near-side feature:
+  the hit test and `getBounds` both stop at the horizon. On a globe, keep the locations of an action well inside the visible disc.
 - **`hover` on a moving target** is only dependable when frames are short; `click` holds up.
 - **A feature whose source the app replaces on every frame is never "at rest"**, even one that stands still: "at rest"
   is the same pixel two frames running *and* no data replacement of its source in between (a starved renderer draws a
