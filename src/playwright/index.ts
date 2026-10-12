@@ -762,7 +762,7 @@ export class MapHandle {
     refuseMovingAt('hoverAt', opts);
     await step(`map.hoverAt(${fmt(at)})`, async () => {
       const p = await this._pointAt(at, opts, 'map.hoverAt');
-      await this.page.mouse.move(p.x, p.y, { steps: 4 });
+      await withModifiers(this.page, opts.modifiers, () => this.page.mouse.move(p.x, p.y, { steps: 4 }));
     });
   }
 
@@ -849,7 +849,7 @@ export class MapHandle {
     refuseMovingAt('tapAt', opts);
     await step(`map.tapAt(${fmt(at)})`, async () => {
       const p = await this._pointAt(at, opts, 'map.tapAt');
-      await this.page.touchscreen.tap(p.x, p.y);
+      await withModifiers(this.page, opts.modifiers, () => this.page.touchscreen.tap(p.x, p.y));
     });
   }
 
@@ -868,7 +868,7 @@ export class MapHandle {
       await this._twoFingers(o.steps ?? 12, (t) => {
         const d = d0 * (1 + (o.scale - 1) * t);
         return [{ x: c.x - d, y: c.y }, { x: c.x + d, y: c.y }];
-      });
+      }, o.modifiers);
     });
   }
 
@@ -881,7 +881,7 @@ export class MapHandle {
       await this._twoFingers(o.steps ?? 16, (t) => {
         const a = (o.degrees * t * Math.PI) / 180;
         return [{ x: c.x - r * Math.cos(a), y: c.y - r * Math.sin(a) }, { x: c.x + r * Math.cos(a), y: c.y + r * Math.sin(a) }];
-      });
+      }, o.modifiers);
     });
   }
 
@@ -897,7 +897,7 @@ export class MapHandle {
       const deadline = deadlineOf(o.timeout ?? this.timeout); // one timeout for the whole gesture
       const a = await this._pointAt(from, o, 'map.touchDragAt(from)', deadline);
       const b = await this._pointAt(to, { ...o, autoPan: false }, 'map.touchDragAt(to)', deadline);
-      await this._twoFingers(o.steps ?? 12, (t) => [{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }]);
+      await this._twoFingers(o.steps ?? 12, (t) => [{ x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }], o.modifiers);
     });
   }
 
@@ -906,13 +906,14 @@ export class MapHandle {
     refuseMovingAt('doubleTapAt', o);
     await step(`map.doubleTapAt(${fmt(at)})`, async () => {
       const p = await this._pointAt(at, o, 'map.doubleTapAt');
-      for (let i = 0; i < 2; i++) await this._twoFingers(0, () => [p]);
+      // both taps inside ONE hold: the keys are not released and re-pressed between them, inside the double-tap window
+      await withModifiers(this.page, o.modifiers, async () => { for (let i = 0; i < 2; i++) await this._twoFingers(0, () => [p], o.modifiers, false); });
     });
   }
 
   private cdp?: Promise<CDPSession>;
   /** Touch points over time (one finger or several), sent as real browser-level touch input. */
-  private async _twoFingers(steps: number, at: (t: number) => { x: number; y: number }[]): Promise<void> {
+  private async _twoFingers(steps: number, at: (t: number) => { x: number; y: number }[], modifiers?: Modifier[], holdKeys = true): Promise<void> {
     const browser = this.page.context().browser();
     if (browser && browser.browserType().name() !== 'chromium') {
       throw new GeowrightError('touch gestures need Chromium: Playwright has no touch-move or multi-touch API (touchscreen.tap only), this uses CDP Input.dispatchTouchEvent');
@@ -923,9 +924,13 @@ export class MapHandle {
       throw e;
     }));
     const points = (t: number) => at(t).map((p, id) => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10, id }));
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0) });
-    for (let i = 1; i <= steps; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(i / steps) });
-    await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    // Keys are held as real key events AND passed as the CDP modifier mask, which is what the page reads from a touch event.
+    const mask = modifierMask(modifiers);
+    await withModifiers(this.page, holdKeys ? modifiers : undefined, async () => {
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: points(0), modifiers: mask });
+      for (let i = 1; i <= steps; i++) await cdp.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: points(i / steps), modifiers: mask });
+      await cdp.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [], modifiers: mask });
+    });
   }
 
   /* ---- keyboard ---- */
@@ -1134,7 +1139,7 @@ export class FeatureHandle {
           const token = await this.map._armBy(deadline, 'armHover', this.map._call<string>('armHover', this.wire(opts), this.pointOpts(opts)));
           let verdict: ClickVerdict | undefined | typeof LATE;
           try {
-            await sendInput(() => this.map.page.mouse.move(p.x, p.y, { steps: 4 }));
+            await sendInput(() => withModifiers(this.map.page, opts.modifiers, () => this.map.page.mouse.move(p.x, p.y, { steps: 4 })));
           } finally {
             verdict = await this.map._disarm(token, deadline);
           }
@@ -1151,7 +1156,7 @@ export class FeatureHandle {
         const token = armed!;
         let verdict: ClickVerdict | undefined | typeof LATE;
         try {
-          await sendInput(() => this.map.page.mouse.move(p.x, p.y));
+          await sendInput(() => withModifiers(this.map.page, opts.modifiers, () => this.map.page.mouse.move(p.x, p.y)));
         } finally {
           verdict = await this.map._disarm(token, deadline);
         }
@@ -1171,7 +1176,7 @@ export class FeatureHandle {
         const token = await this.map._armBy(deadline, 'armClick', this.map._call<string>('armClick', this.wire(opts), this.pointOpts(opts)));
         let verdict: ClickVerdict | undefined | typeof LATE;
         try {
-          await sendInput(() => this.map.page.touchscreen.tap(p.x, p.y));
+          await sendInput(() => withModifiers(this.map.page, opts.modifiers, () => this.map.page.touchscreen.tap(p.x, p.y)));
         } finally {
           verdict = await this.map._disarm(token, deadline);
         }
@@ -1773,12 +1778,20 @@ export function geowright(page: Page, opts?: GeowrightOptions): MapHandle {
 
 /** Hold modifier keys (real keyboard input) around `body`. */
 async function withModifiers<T>(page: Page, modifiers: Modifier[] | undefined, body: () => Promise<T>): Promise<T> {
-  for (const m of modifiers ?? []) await page.keyboard.down(m);
+  const down: Modifier[] = [];
   try {
+    // Pressed INSIDE the try: if a later key throws (an invalid name from untyped JS), the keys already down are released.
+    for (const m of modifiers ?? []) { await page.keyboard.down(m); down.push(m); }
     return await body();
   } finally {
-    for (const m of [...(modifiers ?? [])].reverse()) await page.keyboard.up(m);
+    // a release that fails (the page is gone) must not replace the body's own result or error
+    for (const m of down.reverse()) await page.keyboard.up(m).catch(() => undefined);
   }
+}
+
+/** The CDP `modifiers` bit mask of Input.dispatch*Event: Alt = 1, Ctrl = 2, Meta/Command = 4, Shift = 8. */
+function modifierMask(modifiers: Modifier[] | undefined): number {
+  return (modifiers ?? []).reduce((mask, m) => mask | ({ Alt: 1, Control: 2, Meta: 4, Shift: 8 } as const)[m], 0);
 }
 
 /** Show up as one boxed step in traces/reports when running under @playwright/test. */
