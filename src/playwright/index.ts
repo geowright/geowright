@@ -826,9 +826,10 @@ export class MapHandle {
    * `deadline`: the look is abandoned then (it has no side effects).
    */
   async _pointNow(at: LngLat, opts: ActionOptions, seen?: (client: { x: number; y: number }) => void, deadline = Infinity): Promise<{ value: { x: number; y: number } } | { retry: string; outside?: true }> {
-    const r = await this._callBy<{ client: { x: number; y: number }; inside: boolean; offview?: boolean; hidden: boolean; covered: boolean; moving: boolean }>(deadline, 'clientPoint', at);
+    const r = await this._callBy<{ client: { x: number; y: number }; inside: boolean; offview?: boolean; hidden: boolean; covered: boolean; moving: boolean; stable?: boolean }>(deadline, 'clientPoint', at);
     seen?.(r.client);
     if (r.moving) return { retry: 'map is moving' };
+    if (r.stable === false) return { retry: 'the map is moving on the page (its container is animating or the layout shifted)' };
     if (!r.inside) return { retry: `location is outside the viewport${!opts.autoPan ? ' (pass { autoPan: true } to move the camera)' : ''}`, outside: true };
     // Not reachable by any pointer, `force` or not (force skips the cover check, not this): the input would land outside
     // the page and the app would never get it. autoPan may bring it into the window, as for a feature action.
@@ -1195,7 +1196,7 @@ export class FeatureHandle {
       const deadline = deadlineOf(opts.timeout ?? this.map.timeout); // one timeout for both
       await this.map._pointAt(to, dest, `${what} destination`, deadline);
       await this._withActionPoint(what, opts, async (a, _aim, _token, attempt) => {
-        // one round trip, no waiting: the camera may have moved since, so the destination pixel is read afresh
+        // one look (one round trip plus the >= 50 ms the page-position check holds still): the camera may have moved since, so the destination pixel is read afresh
         const b = await this.map._pointNow(to, dest, undefined, attempt);
         if ('retry' in b) return { retry: `destination: ${b.retry}` };
         await sendInput(() => this.map._drag(a, b.value, opts.steps, opts.modifiers));
@@ -1215,7 +1216,7 @@ export class FeatureHandle {
     await step(what, () =>
       this._withActionPoint(what, opts, async (a, _aim, _token, deadline) => {
         const from = await this.map._callBy<LngLat>(deadline, 'worldAt', a);
-        // no waiting between the verified source and the press: a destination that is not reachable NOW is a retry
+        // nothing is retried between the verified source and the press (the destination look holds still >= 50 ms): a destination that is not reachable NOW is a retry
         const b = await this.map._pointNow({ lng: from.lng + delta.dLng, lat: from.lat + delta.dLat }, { ...opts, autoPan: false, force: true }, undefined, deadline);
         if ('retry' in b) return { retry: `destination: ${b.retry}` };
         await sendInput(() => this.map._drag(a, b.value, opts.steps, opts.modifiers));

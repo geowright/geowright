@@ -1,4 +1,4 @@
-import { Engine, clientFrame, putBackScroll, toClient, toSurface, topElementAt, type ArmedCheck, type Scrolled } from './engine';
+import { Engine, clientFrame, putBackScroll, toClient, toSurface, topElementAt, holdStill, type ArmedCheck, type Scrolled } from './engine';
 import { MapLibreAdapter } from './maplibre-adapter';
 import { startMirror } from './mirror';
 import type { CanvasAdapter, ClickVerdict, FeatureSummary, Overlay } from './types';
@@ -202,18 +202,27 @@ const api = {
    * world -> client pixel, plus whether that pixel is inside the surface, inside the browser WINDOW (`offview`: on the
    * map, but the map is bigger than the window there — no pointer can reach it, as in actionPoint) and not DOM-covered.
    */
-  clientPoint: (mapId: string, world: any, scroll = true) => {
+  clientPoint: async (mapId: string, world: any, scroll = true) => {
     if (scroll) engine(mapId).scrollIntoView(); // `false`: where a failure screenshot draws its mark, on a map it has scrolled into view
     const a = engine(mapId).adapter;
-    const near = engine(mapId).nearestWorld(world); // just across the antimeridian: the copy in view
-    const p = a.project(near);
-    const el = a.surface();
-    const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
-    const client = toClient(clientFrame(el), p); // a CSS-scaled map is not just offset
-    const offview = inside && (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight);
-    const top = inside && !offview ? topElementAt(client.x, client.y) : null;
-    const hidden = inside && a.isOnSurface ? !a.isOnSurface(near) : false;
-    return { client, surface: p, inside, offview, hidden, covered: inside && !offview && top !== el, moving: a.isMoving() };
+    const look = () => {
+      const near = engine(mapId).nearestWorld(world); // just across the antimeridian: the copy in view
+      const p = a.project(near);
+      const el = a.surface();
+      const inside = p.x >= 0 && p.y >= 0 && p.x <= el.clientWidth && p.y <= el.clientHeight;
+      const client = toClient(clientFrame(el), p); // a CSS-scaled map is not just offset
+      const offview = inside && (client.x < 0 || client.y < 0 || client.x > window.innerWidth || client.y > window.innerHeight);
+      const top = inside && !offview ? topElementAt(client.x, client.y) : null;
+      const hidden = inside && a.isOnSurface ? !a.isOnSurface(near) : false;
+      return { client, surface: p, inside, offview, hidden, covered: inside && !offview && top !== el, moving: a.isMoving() };
+    };
+    const first = look();
+    // A location that can be used is looked at twice, a frame apart: a map CONTAINER that moves on the page (a CSS transition, a
+    // sidebar collapsing) leaves the camera at rest while every client pixel moves, and the input would land where the pixel WAS.
+    if (!first.inside || first.offview || first.moving) return { ...first, stable: true };
+    await holdStill();
+    const second = look();
+    return { ...second, stable: Math.hypot(second.client.x - first.client.x, second.client.y - first.client.y) <= 1 };
   },
   /**
    * A failure screenshot of a map outside the window: scroll it into view for the picture (a screenshot cannot clip outside

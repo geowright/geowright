@@ -131,7 +131,7 @@ Actions refuse an invisible feature unless `{ force: true }`. How it works: [DES
 
 0. the map is scrolled into the browser viewport if it is not (a map further down a page cannot be reached by any pointer)
 1. the query resolves to exactly one feature, and the style actually paints it (not opacity 0 / transparent)
-2. the map is not moving, and the target pixel is stable across two frames
+2. the map is not moving, the target pixel is stable across two frames, and the map's own place on the page holds still (a CSS transition or animation of its container, or a collapsing sidebar, makes the action wait; location actions and drags check this too)
 3. the pixel is **on** the feature — for polygons an interior point far from the edge, never the centroid
 4. the feature is the **topmost visible hit** at that pixel (its own label on top does not count as an occluder; neither does anything the style paints invisibly, e.g. a transparent hit area)
 5. no DOM element (popup, control, overlay) covers the pixel
@@ -337,6 +337,11 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
 - **Tested on Chromium** with software WebGL (the flag set MapLibre uses in its own CI; `npx geowright init` writes it).
   Touch gestures beyond `tap` go through CDP — Chromium only.
 - **One line in the app is required.** Auto-discovery is not possible for bundled ESM apps (`tests/discovery.spec.ts` proves it).
+- **A map container that STARTS moving on the page after an action's last check is not caught for location actions
+  (`clickAt`, `hoverAt`, `dragAt`…) and drags**: they wait while the container is already moving, but cannot re-verify at the
+  instant of the input. Multi-point actions (`dragAt`, `draw.*`) look at each point once, at least 50 ms apart, so an earlier
+  point can go stale if the container starts moving during a later look. Feature `click()`, `tap()` and `hover()` do
+  re-verify at the real event.
 - **`waitForIdle()` cannot see app-level async** (a fetch that adds a layer later) — use the retrying assertions for that.
 - **Mapbox GL JS 1.13: GeoJSON set again while its last data is still loading** ("clear, then load": `setData(empty)`,
   then `setData(url)`) is not waited for. 1.13 calls the source loaded, and the map idle, as soon as the first load ends,

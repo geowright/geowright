@@ -581,12 +581,21 @@ export class Engine<W = unknown> {
     // real event arrives), since nothing else can tell it from one that is moving.
     const source = this.adapter.listLayers().find((l) => l.id === first.feature.layer)?.source;
     const version = source !== undefined ? this.adapter.dataVersion?.(source) : undefined;
+    const frame = this.frame();
+    const framedAt = performance.now();
     await twoFrames();
     if (this.adapter.isMoving()) return fail('moving', 'map started moving');
     const second = await once();
     if (!second.ok) return second;
     if (Math.hypot(first.surface.x - second.surface.x, first.surface.y - second.surface.y) > 1) {
       return fail('unstable', 'feature position changed between two animation frames');
+    }
+    // The camera and the feature's pixel on the canvas can be still while the map's element moves on the PAGE (a CSS transition of
+    // its container, a sidebar collapsing): the client pixel the input will press then moves with it.
+    const elapsed = performance.now() - framedAt;
+    if (elapsed < 50) await sleepMs(50 - elapsed); // the page-position check needs real time, not only frames (see holdStill)
+    if (clientFrameMoved(frame, this.frame())) {
+      return fail('unstable', 'the map is moving on the page (its container is animating or the layout shifted)');
     }
     if (version !== undefined && this.adapter.dataVersion!(source!) !== version) {
       return fail('unstable', `the data of source "${source}" was replaced between two animation frames (setData in a requestAnimationFrame loop or a timer?): the feature is not at rest, even where it is drawn at the same pixel`);
@@ -1888,6 +1897,11 @@ export function clientFrame(el: HTMLElement): ClientFrame {
   return { left: r.left + (el.clientLeft || 0) * sx, top: r.top + (el.clientTop || 0) * sy, sx, sy };
 }
 
+/** Did the map's element move or scale on the PAGE between two looks (a CSS transition of its container, a collapsing sidebar, a layout shift)? */
+export function clientFrameMoved(a: ClientFrame, b: ClientFrame): boolean {
+  return Math.abs(a.left - b.left) > 1 || Math.abs(a.top - b.top) > 1 || Math.abs(a.sx - b.sx) > 0.002 || Math.abs(a.sy - b.sy) > 0.002;
+}
+
 export function toClient(f: ClientFrame, p: PixelPoint): PixelPoint {
   return { x: f.left + p.x * f.sx, y: f.top + p.y * f.sy };
 }
@@ -2306,7 +2320,14 @@ const parsedJson = (v: string): unknown => {
 const idKey = (layer: string, id: string | number) => `${layer}\u0000${String(id)}`;
 const only = <T>(list: T[]): T | undefined => (list.length === 1 ? list[0] : undefined);
 const round = (p: PixelPoint): PixelPoint => ({ x: Math.round(p.x * 10) / 10, y: Math.round(p.y * 10) / 10 });
-const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+export const twoFrames = () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+const sleepMs = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/**
+ * Two animation frames AND at least 50 ms: two frames can land so close together under load that a container sliding across the
+ * page reads the same position in both (measured 2026-10-12), while 50 ms shows any real transition. Bounded at 300 ms so a page
+ * that does not paint (a hidden tab) cannot hold an action up.
+ */
+export const holdStill = () => Promise.race([Promise.all([twoFrames(), sleepMs(50)]).then(() => undefined), sleepMs(300)]);
 const oneFrame = () => new Promise<void>((r) => requestAnimationFrame(() => r()));
 
 /** Where the snapshot's notes go in its footer: filled in when the text is rendered (see snapshot). */
