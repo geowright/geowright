@@ -28,7 +28,7 @@ export default defineConfig({
   // A reused preview server (outside CI) is checked against this checkout's demo build: tests/stale-preview.ts.
   globalSetup: './tests/global-setup.ts',
   fullyParallel: true,
-  // CI runs on a machine it shares (a dedicated runner, or a hosted one with few cores): Playwright's default of half
+  // CI runs on a machine it shares (a busy runner, or a hosted one with few cores): Playwright's default of half
   // the cores puts five software-GL browsers on it, which with the machine's own load starves the pages and every
   // timeout reads as "the page did not answer". Two workers on CI; a developer's machine keeps the default.
   workers: process.env.CI ? 2 : undefined,
