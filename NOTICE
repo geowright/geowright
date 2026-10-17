@@ -23,4 +23,5 @@ MapLibre GL JS itself is NOT bundled: geowright talks to the map instance of the
 under test. Runtime dependencies installed next to the package (@maplibre/geojson-vt,
 @maplibre/vt-pbf, @types/geojson) carry their own license files in node_modules.
 A full inventory, including development-only and test-fixture material, is in
-docs/THIRD_PARTY_NOTICES.md.
+docs/THIRD_PARTY_NOTICES.md in the repository:
+https://github.com/geowright/geowright/blob/main/docs/THIRD_PARTY_NOTICES.md

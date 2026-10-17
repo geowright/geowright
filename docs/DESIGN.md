@@ -1112,7 +1112,7 @@ installed side by side under npm aliases. It has its own Playwright config and C
 slow down the flake bar of the main suite.
 
 The initial 54-test matrix passed 50 tests on first contact; the README describes the expanded
-matrix as 96 tests. What the four initial failures taught:
+matrix as 189 tests. What the four initial failures taught:
 
 - **Feature-detect, never version-sniff.** `getLayersOrder()` (MapLibre 3+) falls back to the layer list
   of `getStyle()`; `GeoJSONSource.getData()` (4+) falls back to `serialize()`, which echoes what the

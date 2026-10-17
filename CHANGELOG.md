@@ -7,10 +7,6 @@ are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.
 
 The first published version.
 
-- `geowright init` checks software-WebGL flags in every Chromium project’s effective launch options,
-  including project overrides; unused objects do not count. Escaped config strings are reported as
-  unreadable rather than used to guess a test directory or collection match.
-
 **Assert and act on a WebGL map from Playwright**: MapLibre GL JS 2, 3, 4, 5, 6 and Mapbox GL JS 1.13 (the support
 table in the README says what is checked on which version). The app needs one line to register the map. It imports
 nothing, and nothing ships with it. In TypeScript, `/// <reference types="geowright/app" />` makes that line compile
@@ -122,6 +118,9 @@ as written (it adds types only).
   says where it cannot tell (a `testDir` from a variable, a config that spreads another). A `maplibre-gl` or `mapbox-gl`
   range outside the tested versions gets a warning.
   `--dir` and `--url` take `--dir e2e` or `--dir=e2e`; a flag without its value is an error, not a guess.
+  It checks the flags in every Chromium project’s effective launch options, including project overrides; unused
+  objects do not count. Escaped config strings are reported as unreadable rather than used to guess a test directory
+  or collection match.
 - Every runnable example in the README and `docs/RECIPES.md` is type-checked and runs in the test suite.
 - Tested against 33 apps its authors did not write: 23 MapLibre examples, plus 10 apps built on react-map-gl,
   svelte-maplibre-gl, vue-maplibre-gl, deck.gl's `MapboxOverlay` and PMTiles (`wild/`). If geowright does not work on

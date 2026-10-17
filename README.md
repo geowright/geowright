@@ -395,7 +395,7 @@ The full list, with costs measured on a dense map: [DESIGN — Costs and known l
 ## Supported map library versions
 
 Developed against MapLibre GL JS 6. The same small page and the same core specs run against every major below
-(`npm run test:compat`, `tests/compat/`, its own CI job; 96 tests). "✓" means asserted by that matrix, not assumed.
+(`npm run test:compat`, `tests/compat/`, its own CI job; 189 tests). "✓" means asserted by that matrix, not assumed.
 Newer public methods are feature-detected, never version-sniffed; what an old version cannot do is said in failure
 diagnostics and in the snapshot (`note: …`) instead of being answered wrongly, with one known exception on Mapbox GL
 JS 1.13 ([Limits](#limits)): a GeoJSON source set again while it loads.

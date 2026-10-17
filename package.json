@@ -92,6 +92,7 @@
     "dist/THIRD_PARTY_LICENSES.txt",
     "LICENSE",
     "NOTICE",
+    "CHANGELOG.md",
     "README.md",
     "agent/MAP_SKILL.md"
   ],
