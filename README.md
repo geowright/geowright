@@ -1,17 +1,72 @@
-# geowright
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/banner-dark.png">
+  <img src="docs/assets/banner-light.png" alt="geowright: grey-box testing for canvas maps in Playwright" width="880">
+</picture>
+
+**Grey-box testing for canvas maps in Playwright.**
+Assert on what a WebGL map shows. Act on it with real input.
 
 [![License: Apache-2.0](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+[![Playwright: 1.49+](https://img.shields.io/badge/playwright-1.49%2B-45ba4b.svg)](#supported-map-library-versions)
+[![MapLibre GL JS 2-6](https://img.shields.io/badge/MapLibre%20GL%20JS-2%E2%80%936-396CB2.svg)](#supported-map-library-versions)
+[![Node: 22.12+](https://img.shields.io/badge/node-22.12%2B-5fa04e.svg)](package.json)
 
-Grey-box testing for canvas maps in Playwright. First adapter: MapLibre GL JS 2–6 and Mapbox GL JS 1.13 ([support table](#supported-map-library-versions)).
+[Start](#start) · [Test side](#test-side) · [API reference](#api-reference) · [Recipes](docs/RECIPES.md) · [Design](docs/DESIGN.md) · [Changelog](CHANGELOG.md) · [Contributing](CONTRIBUTING.md)
+
+</div>
+
+First adapter: MapLibre GL JS 2–6 and Mapbox GL JS 1.13 ([support table](#supported-map-library-versions)).
 Early (0.x): the API may still change. Design decisions, the evidence behind them and honest caveats: [docs/DESIGN.md](docs/DESIGN.md).
 Tested against third-party MapLibre examples and react-map-gl / Vue / Svelte wrapper apps in [`wild/`](wild/README.md); the scoreboard is in [docs/DESIGN.md](docs/DESIGN.md).
 
-Closes two gaps a DOM-only Playwright suite has on a WebGL map:
+<h2 id="why">Why geowright</h2>
+
+A map is one `<canvas>`. A Playwright suite that only sees the DOM can click the buttons around it but cannot tell what is drawn on it, and cannot press anything inside it. geowright closes two gaps a DOM-only suite has on a WebGL map:
 
 - **ASSERT** — after an action in the normal UI, verify something was added to / changed on / removed from the map.
 - **ACT** — perform actions that start on the map: click a feature, right-click a location, draw, drag a vertex.
 
 Actions are **real input** (`page.mouse` at projected pixels), never `map.fire()`. The adapter uses MapLibre's **public API only**.
+
+- **Visible means visible.** `queryRenderedFeatures` also returns features painted with opacity 0; geowright evaluates the layer's paint for the feature, so queries match only what a user can see ([Visible by default](#visible-by-default)).
+- **Actions are verified, not hoped for.** Before a click the pixel must be on the feature, topmost, uncovered by DOM, and still across frames; at the real `pointerdown` the hit test runs again ([What an action waits for](#what-an-action-waits-for-actionability)).
+- **Failures say what WAS on the map.** The message lists the layers, features and properties in view, and an annotated screenshot shows every candidate pixel ([When something fails](#when-something-fails-it-says-what-was-on-the-map)).
+
+<!-- example: skip (two lines excerpted from the full, running example in "Test side" below) -->
+```ts
+await expect(map).toHaveFeature({ layer: 'alerts', where: { severity: 'high' } });   // retrying, like a web-first assertion
+await map.feature({ layer: 'alerts', id: 4 }).click();                               // real mouse input at a verified pixel
+```
+
+<h2 id="how-it-works">How it works</h2>
+
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/how-it-works-dark.svg">
+    <img src="docs/assets/how-it-works.svg" alt="A Playwright test calls geowright; the test-side API talks to an in-page engine injected at test time, which reads the registered map through MapLibre's public API; real pointer input goes separately through page.mouse to the map canvas" width="880">
+  </picture>
+</p>
+
+1. Your app registers its map with [one line](#app-side-one-line-no-dependency) in test and development builds. Nothing is imported and nothing ships.
+2. geowright injects its in-page adapter at test time. It reads the map through MapLibre's **public API only**.
+3. Queries and matchers run through `page.evaluate` and **retry**, like web-first assertions.
+4. Actions do not call into the map: they move the real mouse (or touch, through CDP) to a pixel the engine has verified.
+
+<h2 id="features">What is in the box</h2>
+
+| | |
+|---|---|
+| [Feature queries](#queries) | by layer, id, property (`where`), location (`at`), source or layer type; strict single feature or a set |
+| [Retrying matchers](#test-side) | `toHaveFeature` · `toHaveFeatureCount` · `toBeVisibleOnMap` · `toHaveLayerPixels` · `toHaveGeometry` · `toHavePopup` · `toHaveView` |
+| [Verified actions](#what-an-action-waits-for-actionability) | `click` `rightClick` `dblclick` `tap` `hover` `dragTo` `dragBy` on features; `clickAt` `wheelAt` `dragAt`… at locations |
+| [Touch and keyboard](#touch-and-keyboard) | tap, pinch, two-finger rotate, touch pan, double-tap (CDP, Chromium); real key presses |
+| [DOM markers and popups](#dom-markers-and-popups) | returned as normal Playwright Locators |
+| [Geometry and drawing](#geometry-and-drawing) | compare full geometry; draw polygons, lines, rectangles, circles; tested with terra-draw and mapbox-gl-draw |
+| [Vector tiles without a tile server](#vector-tiles-without-a-tile-server) | real MVT tiles cut from a GeoJSON fixture inside `page.route` |
+| [Agents (Playwright MCP)](#agents-playwright-mcp) | a text snapshot and an accessibility mirror for browser agents |
+| [Rotated, pitched, globe and terrain maps](#what-an-action-waits-for-actionability) | actions work unchanged; far-side and hidden locations are errors, never wrong clicks |
 
 ## Start
 
@@ -443,7 +498,7 @@ npx @playwright/mcp install-browser chromium   # once: MCP launches its own Play
 npx @playwright/mcp --config agent/playwright-mcp.config.json --init-page agent/init-page.ts \
     --init-script dist/inpage.js --caps=vision        # or dist/inpage-agent.js, no caps needed
 ```
-Ground rules, the flake bar and the sign-off: [CONTRIBUTING.md](CONTRIBUTING.md).
+**Contributing:** ground rules, the flake bar and the sign-off are in [CONTRIBUTING.md](CONTRIBUTING.md); security reports: [SECURITY.md](SECURITY.md).
 
 ## Open source, and staying that way
 
@@ -461,3 +516,12 @@ small libraries; their license texts ship in the package as `dist/THIRD_PARTY_LI
 bundler's own input list. Everything else this repo uses or vendors: [docs/THIRD_PARTY_NOTICES.md](docs/THIRD_PARTY_NOTICES.md)
 and [`wild/README.md`](wild/README.md). Contributions: inbound = outbound, with a DCO sign-off — see
 [CONTRIBUTING.md](CONTRIBUTING.md).
+
+<p align="center">
+  <a href="#start">Start</a> ·
+  <a href="docs/RECIPES.md">Recipes</a> ·
+  <a href="docs/DESIGN.md">Design</a> ·
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="LICENSE">Apache-2.0</a>
+</p>
