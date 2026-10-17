@@ -17,9 +17,10 @@ They are not repeated here, so there is one copy to keep true.
   wrong, draft a new record that supersedes it (status `Proposed`) and say so in the issue. The one exception:
   an Accepted record may be amended only to replace a reference its readers cannot follow; the decision never
   changes, and the record says so.
-- **Issues are cited by full URL** (`https://github.com/<owner>/<repo>/issues/N`), never as a bare `#N`, in code,
-  comments, docs and tests: a bare `#N` means a different issue wherever the file is read. Describe the evidence in
-  the file, or in `docs/DESIGN.md`, rather than pointing at a thread.
+- **Only public issues are cited, by full URL** (`https://github.com/<owner>/<repo>/issues/N`), never as a bare `#N`,
+  in code, comments, docs and tests: a bare `#N` means a different issue wherever the file is read. A private issue is
+  never linked: describe its finding instead. Describe the evidence in the file, or in `docs/DESIGN.md`, rather than
+  pointing at a thread.
 - **Questions only the maintainer can answer** (API shape, scope, licensing, anything outward-facing): ask
   in the issue and label it `owner-decision`. Keep working on whatever the question does not block.
 - **Direction** is in [ROADMAP.md](ROADMAP.md). Work that is not on it needs an issue that says why.

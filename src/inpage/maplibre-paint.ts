@@ -865,7 +865,7 @@ function readsFeatureId(filter: unknown): boolean {
 
 /**
  * Does the layer's filter read the feature id? MapLibre judges such a filter on the id it RENDERS, which is not the app's id
- * unless that id round-trips (see the adapter's idRoundTrips), so the data's id cannot stand in for it ( B-18).
+ * unless that id round-trips (see the adapter's idRoundTrips), so the data's id cannot stand in for it (review finding B-18).
  */
 export function layerFilterReadsId(map: MlMap, layerId: string): boolean {
   try {

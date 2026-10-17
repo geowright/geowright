@@ -921,7 +921,7 @@ test.describe('a negative verdict waits for the map to settle', () => {
         });
       },
     };
-    // replacements outpace the server, for all three source kinds.
+    // A sustained burst of re-points: replacements outpace the server, for all three source kinds.
     for (const kind of ['image', 'vector', 'geojson'] as const) {
       loops[`the app re-points a ${kind} source every 200 ms while each load takes 400 ms`] = async (page) => {
         const png = await page.evaluate(() => {

@@ -777,7 +777,8 @@ store a URL's previous response as inline data while a queued URL loads.
 The trade-off: a sustained but finite burst can be called never idle during that wait, and a `.not` or a true count
 then takes its verdict from the current map, even if the newest replacement has not arrived. A single slow load,
 two replacements, and loads completed one after another remain loads. Re-pointing every 200 ms while each load takes
-400 ms counts consistently as never idle for all three source kinds. This preserves the behavior: `waitForIdle()` still times out and explains the loop.
+400 ms counts consistently as never idle for all three source kinds. This restores the owner decision
+on a sustained burst of re-points; `waitForIdle()` still times out and explains the loop.
 
 Nor is a map "never idle" while its style itself is loading. A basemap switch (`setStyle(url, { diff: false })`)
 throws the old style away at once, and until the new one is in, `getStyle()` has no sources to call pending. MapLibre

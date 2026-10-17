@@ -476,7 +476,8 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
   const detection = detect(pkgJson);
   const ext = detection.typescript || existsSync(join(o.cwd, 'tsconfig.json')) ? 'ts' : 'js';
   // An existing config decides where Playwright looks: a spec that no project collects (outside its testDir, or one its
-  // testMatch does not match) is never run, and step 3 says "No tests found". Each project takes its own testDir and testMatch, else the config's, else Playwright's defaults (the config's
+  // testMatch does not match) is never run, and step 3 says "No tests found" (review finding
+  // E-11). Each project takes its own testDir and testMatch, else the config's, else Playwright's defaults (the config's
   // directory, DEFAULT_TEST_MATCH): takeFirst in Playwright's config loader. A config without `projects` is one project.
   // So a testMatch that only a setup project sets says nothing about the Chromium project beside it.
   const existing = CONFIG_NAMES.find((n) => existsSync(join(o.cwd, n)));
@@ -607,7 +608,7 @@ export function init(o: InitOptions): { written: string[]; skipped: string[]; de
       if (split.projects !== undefined) {
         // A config with `projects` (`npm init playwright` writes chromium, firefox and webkit) takes the flags in its Chromium
         // projects. A second `projects` key pasted after the first replaces them all, firefox and webkit vanish without an
-        // error; pasted before it, it is ignored.
+        // error; pasted before it, it is ignored (review finding E-12).
         log(`   ${and}in the \`use\` of each Chromium project in its \`projects\` (a second \`projects\` key would replace them all):`);
         log(`     ${LAUNCH_OPTIONS},`);
         if (projectLaunch) {

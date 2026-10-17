@@ -5,7 +5,7 @@ import { test, expect } from './fixtures';
  * ActionOptions.modifiers is documented as "keys held down during the action (real key events)" for click, dblclick,
  * rightClick, tap and hover, and SteadyActionOptions (hoverAt, tapAt, the touch gestures…) carry it too. hover(), tap(),
  * hoverAt(), tapAt() and the CDP touch gestures used to accept the option and drop it: the input went out with no key
- * held ( A-2). The page sees a held key as `keydown` and as `shiftKey` on the mouse/touch event.
+ * held (review finding A-2). The page sees a held key as `keydown` and as `shiftKey` on the mouse/touch event.
  */
 
 const record = (page: Page) =>

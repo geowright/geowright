@@ -106,6 +106,7 @@ test('detect: plain MapLibre, Mapbox v1 (supported), Mapbox v3 (proprietary: war
 
 test('detect: a maplibre-gl major outside the tested 2–6 is warned about, and a range with no version is not read as one', () => {
   // Every maplibre-gl range was "supported", 1.x and 7 included, while mapbox-gl@latest was told it is "v2+"
+  // (review finding E-7).
   const lib = (deps: Record<string, string>) => detect({ dependencies: deps }).mapLibrary!;
   for (const range of ['2.4.0', '^3.6.2', '~4.7.1', '>=5.0.0 <6', '6.x', '^6.10.0']) {
     expect.soft(lib({ 'maplibre-gl': range }).supported, range).toBe(true);
@@ -243,7 +244,7 @@ export default defineConfig({
 
 test('the CLI: with an existing config, init says the fixture\'s URL is relative to use.baseURL, and how to give it a full one', async () => {
   // Without a baseURL in the user's config the fixture's page.goto('/') fails with "Cannot navigate to invalid URL",
-  // and step 2 used to print only the two WebGL lines.
+  // and step 2 used to print only the two WebGL lines (review finding E-2).
   const cwd = project('scaffold-config', { dependencies: { 'maplibre-gl': '^6.0.0' }, devDependencies: { vite: '^7.0.0' } }, { 'playwright.config.js': SCAFFOLD_CONFIG });
   const { code, out } = await cli(cwd, 'init');
   expect(code, out).toBe(0);
@@ -304,7 +305,7 @@ function playwrightSelects(arg: string, file: string): boolean {
 test('the CLI: a quote in --url and --dir, and regex characters in --dir, give files that parse and a step-3 command that finds the spec', async () => {
   // init pasted both values raw into single-quoted literals (a SyntaxError when Playwright loads the fixture or the
   // config), and step 3 printed the spec's path shell-quoted only, which Playwright reads as a regular expression:
-  // `e2e (map)/map.spec.ts` gave "No tests found".
+  // `e2e (map)/map.spec.ts` gave "No tests found" (review finding E-4).
   const url = "/?name=o'brien&re=\\d";
   // the second directory holds what means something to a regex (+ [ ] * $), to String.replace ($&), and to the
   // /** */ comment of geowright.webgl, whose import line ends `…*/geowright.webgl.js'`
@@ -347,7 +348,7 @@ test('the CLI: with an existing config, the import line step 2 prints for a --di
 
 test('the CLI: a second run, and a config that already has the flags, are not told to add them again', async () => {
   // A second run told the user to add to "YOUR playwright.config" the two lines the first run had written there;
-  // pasting them duplicates the import and the projects key.
+  // pasting them duplicates the import and the projects key (review finding E-7).
   const cwd = project('second-run', { dependencies: { 'maplibre-gl': '^6.0.0' } });
   const first = await cli(cwd, 'init');
   expect(first.code, first.out).toBe(0);
@@ -386,7 +387,7 @@ function configured(name: string, configLines: string, dirs: string[] = []): str
 
 test('the CLI: with an existing config, init writes into its testDir, and step 2 and step 3 name that directory', async () => {
   // init took --dir, else e2e/ if it existed, else tests/, and never read the config: with testDir './tests/e2e' it wrote
-  // tests/map.spec.ts, outside it, and step 3 as printed gave "No tests found".
+  // tests/map.spec.ts, outside it, and step 3 as printed gave "No tests found" (review finding E-11).
   for (const [name, lines, dirs, expected] of [
     ['testdir-nested', `  testDir: './tests/e2e',`, ['tests/unit', 'tests/e2e'], 'tests/e2e'], // the Vue CLI layout
     ['testdir-not-e2e', `  testDir: './tests',`, ['e2e'], 'tests'], // an old Cypress e2e/ folder beside it
@@ -542,6 +543,7 @@ test('the CLI: a testDir or testMatch init cannot see (a variable, a spread of t
   // init read only `testDir: <literal>`, and took the config object as built from nothing else. `defineConfig({ testDir })`
   // (the shape playwright-bdd documents), `defineConfig({ ...base })` and `defineConfig(base, { … })` read as configs with
   // no testDir: init wrote tests/map.spec.ts without a word, and step 3 found no tests
+  // (review finding E-11).
   const BASE = `export default { testDir: './e2e' };\n`;
   const step3 = (out: string) => out.slice(out.indexOf('\n3. '));
   const at = (name: string, body: string) =>
@@ -591,7 +593,7 @@ test('the CLI: a testDir or testMatch init cannot see (a variable, a spread of t
 test('the CLI: a spec under a dot directory is found where Playwright finds it, and not warned about', async () => {
   // init matched globs with Node's path.matchesGlob, whose `*` and `**` never match a segment that starts with a dot;
   // Playwright's createFileMatcher passes minimatch `dot: true`. A spec in .e2e/ got a false "No tests found" WARNING, and
-  // a testDir './.e2e' was never written into.
+  // a testDir './.e2e' was never written into (review finding E-11).
   const step3 = (out: string) => out.slice(out.indexOf('\n3. '));
   const dotDir = configured('dot-testdir', `  testDir: './.e2e',`);
   const d = await cli(dotDir, 'init');
@@ -684,7 +686,7 @@ function launchOf(config: string, dir = 'tests'): { name: string; launchOptions?
 test('the CLI: a config with projects is told to add the flags to its Chromium project, not a second projects key', async () => {
   // Step 2 printed a whole `projects: [{ name: 'chromium', … }],` to add. Pasted after the config's own `projects`, it
   // replaced them: firefox and webkit stopped running, with no error. Pasted before, it was ignored: no project got the
-  // flags.
+  // flags (review finding E-12).
   expect(projectsOf(THREE_PROJECTS_CONFIG)).toEqual([{ name: 'chromium' }, { name: 'firefox' }, { name: 'webkit' }]);
   const cwd = project('three-projects', { dependencies: { 'maplibre-gl': '^6.0.0' } }, { 'playwright.config.js': THREE_PROJECTS_CONFIG });
   const { code, out } = await cli(cwd, 'init');
@@ -722,7 +724,7 @@ test('the CLI: a config with projects is told to add the flags to its Chromium p
 test('the CLI: a config that imports the flags, or names them in a comment, but launches nothing with them is told what is missing', async () => {
   // "already has the headless-WebGL launch flags: nothing to add" was said wherever the config's TEXT named
   // WEBGL_SOFTWARE_FLAGS: the import alone (step 2 half done), or a comment. Headless Chromium then had no SwiftShader and
-  // the map did not render.
+  // the map did not render (review finding E-7).
   const IMPORT = `import { WEBGL_SOFTWARE_FLAGS } from './tests/geowright.webgl.js';`;
   const step2Of = async (name: string, config: string) => {
     const cwd = project(name, { dependencies: { 'maplibre-gl': '^6.0.0' } }, { 'playwright.config.js': config });
@@ -765,6 +767,7 @@ test('the CLI: a config without projects gets the projects line, whatever its st
   // Step 2 looked for the word `projects` anywhere in the config's code, strings included: a testDir under an Angular
   // workspace's projects/, or a report folder named projects, got the advice for a config WITH projects ("in the `use` of
   // each Chromium project"), which this one cannot follow, and not the `projects` line it needs
+  // (review finding E-12).
   const config = `import { defineConfig, devices } from '@playwright/test';\nexport default defineConfig({\n  testDir: './projects/map-app/e2e',\n  reporter: [['html', { outputFolder: 'reports/projects' }]],\n  use: { baseURL: 'http://localhost:4200', ...devices['Desktop Chrome'] },\n});\n`;
   const cwd = project('workspace-projects', { dependencies: { 'maplibre-gl': '^6.0.0' } }, { 'playwright.config.js': config });
   const { code, out } = await cli(cwd, 'init');
@@ -782,6 +785,7 @@ test('the CLI: where a `use` has launchOptions already, init says to put the fla
   // gave a second launchOptions where that `use` had one: the later key wins, so the flags or the project's own args were
   // dropped, with no error. And Playwright merges `use` one level deep: a project's launchOptions replaces the config's
   // whole, so the `projects` line given to a config without projects dropped the launchOptions of its `use`
+  // (review finding E-12).
   const IMPORT = `import { WEBGL_SOFTWARE_FLAGS } from './tests/geowright.webgl.js';`;
   const CHROME_USE = `use: { ...devices['Desktop Chrome'] },`;
   const step2Of = async (name: string, config: string) => {

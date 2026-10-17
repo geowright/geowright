@@ -148,7 +148,7 @@ test.describe('vector tiles: ids are unique per source-layer only', () => {
  * A layer filter on the feature id (`['id']`, legacy `$id`) is judged by MapLibre on the id it RENDERS, which is not the app's
  * id when the app's does not round-trip (a string id, or any id with `generateId`). So geowright cannot tell whether the
  * filter admits the feature, and must not answer "not drawn": a negative assertion by that id would pass on a drawn feature
- * ( B-18).
+ * (review finding B-18).
  */
 test.describe('a layer filter on the feature id', () => {
   const addFiltered = (page: Page, filter: unknown, extra: Record<string, unknown> = {}) =>

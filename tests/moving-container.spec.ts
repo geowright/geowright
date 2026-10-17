@@ -6,7 +6,7 @@ import { test, expect } from './fixtures';
  * sidebar). The camera is at rest and the feature's pixel on the canvas is the same two frames running, but its position
  * in the PAGE moves, so an action that presses a page pixel computed a moment earlier lands off target. README item 2
  * promises the target pixel is stable: a location action waits until the map holds still on the page, or fails; it never
- * reports success for an input that landed elsewhere ( A-14, I-11).
+ * reports success for an input that landed elsewhere (review findings A-14, I-11).
  *
  * The app's own click/mousemove handler records where MapLibre got the input (e.point) and where the asked location IS at
  * that instant (map.project): their distance is the error.

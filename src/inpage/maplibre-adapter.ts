@@ -511,7 +511,7 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
 
   filterAdmits(f: RenderedFeature): boolean | undefined {
     // A filter on the feature id is judged by the renderer on the id it draws with: the data's id stands in for it only if it
-    // round-trips. Otherwise it cannot be told, and "undrawn" must never be a guess ( B-18).
+    // round-trips. Otherwise it cannot be told, and "undrawn" must never be a guess (review finding B-18).
     if (layerFilterReadsId(this.map, f.layer) && !(f.id === undefined ? !this.layerGeneratesIds(f.layer) : this.idRoundTrips(f.layer, f.id) === true)) return undefined;
     return filterAdmits(this.map, f);
   }
