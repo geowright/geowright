@@ -3,7 +3,7 @@
 Notable changes to geowright, newest first. While the version is 0.x a minor version may change the API; such changes
 are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.md`.
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-10-18
 
 The first published version.
 
