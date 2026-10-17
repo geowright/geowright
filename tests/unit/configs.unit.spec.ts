@@ -57,3 +57,29 @@ test('git ignores the archive scripts/failed-test-results.mjs writes by default'
   expect(existsSync(`${dir}/test-results-failed.tgz`)).toBe(true);
   expect(git('status', '--porcelain', '--untracked-files=all').trim()).toBe('?? .gitignore');
 });
+
+// CI shares its machine, so both configs pin two workers there; a developer's machine keeps Playwright's default (half the
+// cores). Read back the way Playwright resolves them: `--list` loads a config and reports the worker count it settled on
+// (no browser, no web server). The default is whatever `--workers=50%` resolves to, so no CPU arithmetic is repeated here.
+const PLAYWRIGHT_CLI = fileURLToPath(new URL('../../node_modules/@playwright/test/cli.js', import.meta.url));
+
+function resolvedWorkers(config: string, ci: boolean, extra: string[] = []): number {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (!/^(CI|PW_|PLAYWRIGHT_|TEST_)/.test(k)) env[k] = v; // a nested run starts clean
+  if (ci) env.CI = 'true';
+  const out = execFileSync(process.execPath, [PLAYWRIGHT_CLI, 'test', '--list', '--reporter=json', '-c', config, ...extra], {
+    cwd: fileURLToPath(new URL('../..', import.meta.url)),
+    env,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  return JSON.parse(out).config.workers;
+}
+
+for (const config of ['playwright.config.ts', 'playwright.compat.config.ts']) {
+  test(`${config} runs two workers on CI and Playwright's default workers elsewhere`, () => {
+    test.setTimeout(90_000); // three nested Playwright starts, on a machine that may be the loaded one this test is about
+    expect(resolvedWorkers(config, true), 'CI set').toBe(2);
+    expect(resolvedWorkers(config, false), 'CI unset').toBe(resolvedWorkers(config, false, ['--workers=50%']));
+  });
+}

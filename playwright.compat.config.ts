@@ -12,6 +12,7 @@ const PORT = Number(process.env.GEOWRIGHT_COMPAT_PORT ?? Number(process.env.GEOW
 export default defineConfig({
   testDir: 'tests/compat',
   fullyParallel: true,
+  workers: process.env.CI ? 2 : undefined, // as playwright.config.ts: CI shares its machine
   retries: 0,
   reporter: [['list']],
   forbidOnly: !!process.env.CI, // a stray test.only would make CI and the 20x run only it, and pass
