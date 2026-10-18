@@ -625,6 +625,11 @@ export class MapHandle {
    */
   async waitForIdle(opts: { timeout?: number } = {}): Promise<void> {
     const timeout = opts.timeout ?? this.idleTimeout;
+    // The verdict "never idle", once observed, is what the failure says. Each attempt's in-page wait is half the time
+    // left, so the last ones are the shortest: on a page that draws 2-3 frames a second a 100 ms look sees fewer than two
+    // setData calls, and its weaker diagnosis replaced the verdict a 2 s look had made (the animate-a-point spec
+    // failed 2 runs in ~9,000 with a quiet machine). The map stayed not idle throughout, so the verdict stands.
+    let never: string | undefined;
     await step(`map.waitForIdle()`, () =>
       this._retry('map.waitForIdle()', timeout, async (deadline) => {
         // Abandoned at the deadline like every other wait: the in-page wait bounds itself (<= 2s), but a page whose main
@@ -635,7 +640,9 @@ export class MapHandle {
         // sized before that could not end before the deadline (an animated canvas page: 1250 ms sent with 1211 ms left).
         const ok = await this._callBy<boolean>(deadline, 'waitForIdle', idleWait(deadline, 2000));
         if (!ok) {
-          const why = await this._callBy<string | undefined>(Date.now() + DIAGNOSTIC_GRACE_MS, 'idleDiagnosis').catch(() => undefined);
+          const d = await this._callBy<{ why?: string; never: boolean }>(Date.now() + DIAGNOSTIC_GRACE_MS, 'idleDiagnosis').catch(() => undefined);
+          if (d?.never) never = d.why;
+          const why = never ?? d?.why;
           return { retry: `map did not become idle (still moving, loading tiles, or repainting)${why ? ` — ${why}` : ''}` };
         }
         // The mirror is (re)started here: after a navigation the page is new and it is gone.

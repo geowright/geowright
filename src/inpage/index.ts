@@ -72,7 +72,11 @@ const shots = new Map<string, Scrolled>();
 
 const api = {
   waitForIdle: (mapId: string, timeoutMs: number) => engine(mapId).adapter.waitForIdle(timeoutMs),
-  idleDiagnosis: (mapId: string) => engine(mapId).adapter.idleDiagnosis?.(),
+  /** Why the last bounded wait timed out, and whether that is the verdict "never idle" (see `settle`). */
+  idleDiagnosis: (mapId: string): { why?: string; never: boolean } => {
+    const a = engine(mapId).adapter;
+    return { why: a.idleDiagnosis?.(), never: a.neverIdle?.() ?? false };
+  },
   find: async (mapId: string, q: any) => (await engine(mapId).learnIdentity(q), engine(mapId).find(q)),
   /** For the retrying matchers: `find`, plus whether the query names a layer the style does not have. */
   findChecked: async (mapId: string, q: any): Promise<{ found: FeatureSummary[]; missingLayer?: string }> => {
