@@ -33,6 +33,11 @@ export const DEAD_WORKER_AFTER_MS = 5000;
  */
 const SETTLE_GRACE_MS = 600;
 const SETTLE_GRACE_FRAMES = 8;
+/**
+ * resizePending: how long after the map's container last changed size a canvas of another size is a resize MapLibre has
+ * not applied yet (its ResizeObserver callback is throttled, and late on a starved machine) rather than the app's own CSS.
+ */
+const RESIZE_LATE_MS = 1500;
 
 /** Starts during one settle wait: inline data and the current uninterrupted sequence of overlapping loads. */
 interface Starts {
@@ -755,10 +760,32 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     return this.dataVersions.get(source) ?? 0;
   }
 
+  /**
+   * For resizePending: the container's size and since when it has had it, and the difference between container and canvas
+   * that is the map's own (0 x 0 unless the app's CSS sizes the canvas otherwise), taken at each resize the map applies.
+   */
+  private resizeSeen?: { w: number; h: number; since: number; dw: number; dh: number };
+
   resizePending(): boolean {
     // what Map.resize() sizes the canvas to (its _containerDimensions), against the CSS size the last resize gave the canvas
     const container = this.map.getContainer(), canvas = this.map.getCanvas();
-    return (container.clientWidth || 400) !== canvas.clientWidth || (container.clientHeight || 300) !== canvas.clientHeight;
+    const w = container.clientWidth || 400, h = container.clientHeight || 300;
+    const dw = w - canvas.clientWidth, dh = h - canvas.clientHeight, now = performance.now();
+    let s = this.resizeSeen;
+    if (!s) {
+      const seen = (s = this.resizeSeen = { w, h, since: now, dw: 0, dh: 0 });
+      this.map.on('resize', () => {
+        seen.dw = (container.clientWidth || 400) - canvas.clientWidth;
+        seen.dh = (container.clientHeight || 300) - canvas.clientHeight;
+      });
+    }
+    if (w !== s.w || h !== s.h) Object.assign(s, { w, h, since: now });
+    if (dw === s.dw && dh === s.dh) return false;
+    // An app whose CSS sizes the canvas (a !important width, a calc()) keeps the two apart with no resize to come: pending
+    // only for a while after the container last changed size, then that difference is the map's own.
+    if (now - s.since < RESIZE_LATE_MS) return true;
+    Object.assign(s, { dw, dh });
+    return false;
   }
 
   pixelOnly(layer: string): boolean {

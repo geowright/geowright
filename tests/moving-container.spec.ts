@@ -122,6 +122,23 @@ test.describe('a map container that moves on the page', () => {
     expect(clicks[0]).toBeLessThanOrEqual(1);
   });
 
+  test('clickAt does not wait for a resize when the app styles the canvas to another size than the container', async ({ map, page }) => {
+    await watchClicks(page);
+    // The app's CSS wins over the size MapLibre gives the canvas: container and canvas never agree, and no resize is coming.
+    await page.evaluate(() => {
+      const style = document.createElement('style');
+      style.textContent = '#map canvas.maplibregl-canvas { width: calc(100% - 40px) !important; height: calc(100% - 30px) !important; }';
+      document.head.append(style);
+    });
+    for (let i = 0; i < 2; i++) {
+      const started = Date.now();
+      await map.clickAt(at, { timeout: 8000 });
+      // the first may wait as long as a late resize is given (RESIZE_LATE_MS), never the action timeout
+      expect(Date.now() - started, 'no wait for a resize that never comes').toBeLessThan(i ? 3000 : 5000);
+    }
+    expect(await page.evaluate(() => (window as any).__clicks)).toHaveLength(2);
+  });
+
   test('control: a map that does not move is clicked at once', async ({ map, page }) => {
     await watchClicks(page);
     const started = Date.now();
