@@ -755,6 +755,12 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
     return this.dataVersions.get(source) ?? 0;
   }
 
+  resizePending(): boolean {
+    // what Map.resize() sizes the canvas to (its _containerDimensions), against the CSS size the last resize gave the canvas
+    const container = this.map.getContainer(), canvas = this.map.getCanvas();
+    return (container.clientWidth || 400) !== canvas.clientWidth || (container.clientHeight || 300) !== canvas.clientHeight;
+  }
+
   pixelOnly(layer: string): boolean {
     return isPixelOnlyType(this.map.getLayer(layer)?.type);
   }

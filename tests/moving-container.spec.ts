@@ -89,6 +89,39 @@ test.describe('a map container that moves on the page', () => {
     expect(clicks[0]).toBeLessThanOrEqual(1);
   });
 
+  test('clickAt waits for a resize MapLibre has not applied yet instead of clicking a pixel the resize will move', async ({ map, page }) => {
+    await watchClicks(page);
+    // The container has grown and holds still on the page, but MapLibre applies it late (its ResizeObserver callback is
+    // throttled, and a starved main thread — software GL on Linux — delays it further): canvas and camera still have the old
+    // size, so every look agrees on a pixel that moves by half the growth when the resize lands. Here the resize is held
+    // back until the first press reaches the page, or 600 ms, so that it lands between the look and the click.
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      const resize = m.resize.bind(m);
+      let held: unknown[] | undefined;
+      const release = () => {
+        if (!held) return;
+        const args = held;
+        held = undefined;
+        m.resize = resize;
+        resize(...args);
+      };
+      m.resize = (...args: unknown[]) => {
+        if (!held) setTimeout(release, 600);
+        held = args;
+        return m;
+      };
+      window.addEventListener('mousedown', release, { capture: true, once: true });
+      document.getElementById('sidebar')!.style.display = 'none';
+      document.getElementById('map')!.style.left = '0px';
+      return new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())));
+    });
+    await map.clickAt(at, { timeout: 8000 });
+    const clicks: number[] = await page.evaluate(() => (window as any).__clicks);
+    expect(clicks).toHaveLength(1);
+    expect(clicks[0]).toBeLessThanOrEqual(1);
+  });
+
   test('control: a map that does not move is clicked at once', async ({ map, page }) => {
     await watchClicks(page);
     const started = Date.now();

@@ -136,6 +136,12 @@ export interface InternalCanvasAdapter<W = unknown> extends CanvasAdapter<W> {
    */
   dataVersion?(source: string): number;
   /**
+   * Optional: has the map's container changed size without the surface following yet (a resize the library applies late,
+   * as MapLibre's throttled ResizeObserver does)? Every pixel then moves when it lands, while the container holds still on
+   * the page: an action waits for it as for a container that moves. Cheap: two sizes read.
+   */
+  resizePending?(): boolean;
+  /**
    * Optional, with `pixelOccluders`: does `layer` draw pixels rather than features (a type `pixelOccluders` reports)? Such
    * a layer may still come back from `queryFeatures` (a heatmap does on MapLibre >= 5, over its whole radius, drawn or
    * not): that hit is never an occluder. Whether it hides the target is for the gate and the probe.

@@ -594,7 +594,7 @@ export class Engine<W = unknown> {
     // its container, a sidebar collapsing): the client pixel the input will press then moves with it.
     const elapsed = performance.now() - framedAt;
     if (elapsed < 50) await sleepMs(50 - elapsed); // the page-position check needs real time, not only frames (see holdStill)
-    if (clientFrameMoved(frame, this.frame())) {
+    if (clientFrameMoved(frame, this.frame()) || this.adapter.resizePending?.()) {
       return fail('unstable', 'the map is moving on the page (its container is animating or the layout shifted)');
     }
     if (version !== undefined && this.adapter.dataVersion!(source!) !== version) {

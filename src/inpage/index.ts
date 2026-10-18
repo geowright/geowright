@@ -226,7 +226,8 @@ const api = {
     if (!first.inside || first.offview || first.moving) return { ...first, stable: true };
     await holdStill();
     const second = look();
-    return { ...second, stable: Math.hypot(second.client.x - first.client.x, second.client.y - first.client.y) <= 1 };
+    // A container that has stopped growing but whose resize the map has not applied yet: both looks agree on a pixel that moves when it lands.
+    return { ...second, stable: Math.hypot(second.client.x - first.client.x, second.client.y - first.client.y) <= 1 && !a.resizePending?.() };
   },
   /**
    * A failure screenshot of a map outside the window: scroll it into view for the picture (a screenshot cannot clip outside
