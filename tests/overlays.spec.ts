@@ -35,8 +35,14 @@ test.describe('DOM markers and popups', () => {
   test('.not.toHavePopup does not pass while the map is moving and the popup is open', async ({ map, page }) => {
     await map.feature({ layer: 'alerts', id: 1 }).click();
     await expect(map).toHavePopup({ feature: { layer: 'alerts', id: 1 } });
-    // the ease outlasts the matcher's budget three times over, so the matcher only ever sees a moving map
-    await page.evaluate((ms) => (window as any).__geowright_maps.main.easeTo({ bearing: 60, duration: ms }), 3 * FAIL_FAST_MS); // the app never closes the popup
+    // Keep the premise true until teardown, including when a busy renderer answers after one ease has ended.
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      let turn = 0;
+      const move = () => m.easeTo({ bearing: ++turn % 2 ? 60 : 0, duration: 1000 });
+      m.on('moveend', move);
+      move(); // the app never closes the popup
+    });
     const e = await expect(map).not.toHavePopup({}, { timeout: FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     await expect(page.getByTestId('popup')).toBeVisible(); // it really is still open
     expect(e, '.not.toHavePopup passed while the popup was open (map moving)').not.toBeNull();

@@ -1367,7 +1367,9 @@ class Settle {
     const cap = this.never || !grow ? 500 : [500, 1000, 2000][Math.min(i, 2)];
     // The in-page wait is bounded by itself; the round trip to it is abandoned at the deadline (a page that cannot answer).
     const r = await map._callBy<{ idle: boolean; never: boolean; why?: string }>(deadline, 'settle', () => Math.max(50, Math.min(cap, deadline - Date.now())));
-    if (r.never) this.never = true;
+    // A short recheck may no longer see enough rendered frames on a slow page. Let the next look
+    // grow again instead of keeping every later sample too short to establish a settled verdict.
+    this.never = r.never;
     return { settled: r.idle || r.never, why: r.why };
   }
 }

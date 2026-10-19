@@ -163,7 +163,10 @@ test.describe("moving: 'allow'", () => {
   // race test above catches a missing check only when the prediction happens to miss: 1 run in 20.)
   test("a look-alike moved under the pointer as it arrives is not clicked (moving: 'allow')", async ({ page }) => {
     const map = geowright(page);
-    await page.getByTestId('speed').fill('150');
+    // The app still replaces the source every frame, so this needs moving: 'allow'. Hold its coordinates
+    // steady between events: this test isolates the look-alike moved on pointer arrival, not travel
+    // between the real press and click (which must honestly refuse an input whose target moved away).
+    await page.getByTestId('speed').fill('0');
     await page.evaluate(() => {
       const w = window as any;
       const m = w.__geowright_maps.main;

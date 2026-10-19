@@ -482,3 +482,122 @@ test("holds() finds Chromium's containing blocks", async ({ page }) => {
   );
   expect(rows).toEqual([]);
 });
+
+test('holds() isolates will-change probes from page styles and transformed roots', async ({ page }) => {
+  await page.setContent(`<!doctype html><html><head><style>
+    html { transform: translate(31px, 23px) rotate(17deg) scale(.8); transform-origin: 0 0; }
+    body { margin: 0; }
+    body div { position: fixed !important; left: 9000px !important; top: 9000px !important; transform: scale(3) !important; filter: blur(2px) !important; contain: layout !important; }
+  </style></head><body></body></html>`);
+  const rows = await page.evaluate((src) => {
+    const holdsInPage = new Function(`return (${src})`)() as (style: CSSStyleDeclaration, position: string) => boolean;
+    const reference = document.createElement('div');
+    reference.style.cssText = 'all:initial!important;display:block!important;position:fixed!important;left:0!important;top:0!important;width:10px!important;height:10px!important;margin:0!important;padding:0!important;border:0!important;';
+    document.body.appendChild(reference);
+
+    const cases = [
+      ['will-change:offset', 'absolute'],
+      ['will-change:offset', 'fixed'],
+      ['will-change:position', 'absolute'],
+    ] as const;
+    const out: string[] = [];
+    let cacheRecords = { added: 0, removed: 0, second: 0 };
+    for (const [i, [hint, position]] of cases.entries()) {
+      const ancestor = document.createElement('div');
+      ancestor.style.cssText = `all:initial!important;display:block!important;position:static!important;margin:100px 0 0 200px!important;width:10px!important;height:10px!important;${hint}!important;`;
+      const box = document.createElement('div');
+      box.style.cssText = `all:initial!important;display:block!important;position:${position}!important;left:0!important;top:0!important;width:10px!important;height:10px!important;`;
+      ancestor.appendChild(box);
+      document.body.appendChild(ancestor);
+
+      const origin = reference.getBoundingClientRect();
+      const parent = ancestor.getBoundingClientRect();
+      const child = box.getBoundingClientRect();
+      const atAncestor = Math.abs(child.left - parent.left) < 1 && Math.abs(child.top - parent.top) < 1;
+      const atOrigin = Math.abs(child.left - origin.left) < 1 && Math.abs(child.top - origin.top) < 1;
+      const actual = atAncestor !== atOrigin && atAncestor;
+      const read = holdsInPage(getComputedStyle(ancestor), position);
+      if (actual !== read) out.push(`${hint}, ${position}: layout ${actual}, holds() ${read}`);
+
+      if (i === 0) {
+        const holdsCached = new Function(`return (${src})`)() as (style: CSSStyleDeclaration, position: string) => boolean;
+        const observer = new MutationObserver(() => {});
+        observer.observe(document.body, { childList: true });
+        holdsCached(getComputedStyle(ancestor), position);
+        const first = observer.takeRecords();
+        cacheRecords.added = first.reduce((n, record) => n + record.addedNodes.length, 0);
+        cacheRecords.removed = first.reduce((n, record) => n + record.removedNodes.length, 0);
+        holdsCached(getComputedStyle(ancestor), position);
+        cacheRecords.second = observer.takeRecords().length;
+        observer.disconnect();
+      }
+      ancestor.remove();
+    }
+    reference.remove();
+    return { out, cacheRecords };
+  }, holds.toString());
+  expect(rows.out).toEqual([]);
+  expect(rows.cacheRecords.added).toBeGreaterThan(0);
+  expect(rows.cacheRecords.removed).toBe(rows.cacheRecords.added); // the hidden fixture is cleaned up
+  expect(rows.cacheRecords.second).toBe(0); // the same token and position use the cached layout result
+});
+
+test('holds() retries an ambiguous probe and measures a small root scale', async ({ page }) => {
+  await page.setContent('<!doctype html><html style="transform-origin:0 0;transform:scale(0)"><head></head><body style="margin:0"></body></html>');
+  const result = await page.evaluate((src) => {
+    const holdsInPage = new Function(`return (${src})`)() as (style: CSSStyleDeclaration, position: string) => boolean;
+    const reference = document.createElement('div');
+    reference.style.cssText = 'all:initial!important;display:block!important;position:fixed!important;left:0!important;top:0!important;width:10px!important;height:10px!important;margin:0!important;padding:0!important;border:0!important;';
+    const ancestor = document.createElement('div');
+    ancestor.style.cssText = 'all:initial!important;display:block!important;position:static!important;margin:100px 0 0 200px!important;width:10px!important;height:10px!important;will-change:offset!important;';
+    const box = document.createElement('div');
+    box.style.cssText = 'all:initial!important;display:block!important;position:absolute!important;left:0!important;top:0!important;width:10px!important;height:10px!important;';
+    ancestor.appendChild(box);
+    document.body.append(reference, ancestor);
+
+    const observer = new MutationObserver(() => {});
+    observer.observe(document.body, { childList: true });
+    const hiddenResult = holdsInPage(getComputedStyle(ancestor), 'absolute');
+    const hiddenRecords = observer.takeRecords();
+
+    document.documentElement.style.transform = 'translate(31px, 23px) rotate(17deg) scale(.001)';
+    const origin = reference.getBoundingClientRect();
+    const parent = ancestor.getBoundingClientRect();
+    const child = box.getBoundingClientRect();
+    const separation = Math.hypot(parent.left - origin.left, parent.top - origin.top);
+    const fromOrigin = Math.hypot(child.left - origin.left, child.top - origin.top);
+    const fromAncestor = Math.hypot(child.left - parent.left, child.top - parent.top);
+    const actual = fromAncestor < fromOrigin;
+    const placedAtReference = Math.min(fromAncestor, fromOrigin) < separation / 4;
+    const visibleResult = holdsInPage(getComputedStyle(ancestor), 'absolute');
+    const visibleRecords = observer.takeRecords();
+    const cachedResult = holdsInPage(getComputedStyle(ancestor), 'absolute');
+    const cachedRecords = observer.takeRecords();
+    observer.disconnect();
+
+    return {
+      hiddenResult,
+      hiddenAdded: hiddenRecords.reduce((n, record) => n + record.addedNodes.length, 0),
+      hiddenRemoved: hiddenRecords.reduce((n, record) => n + record.removedNodes.length, 0),
+      separation,
+      placedAtReference,
+      actual,
+      visibleResult,
+      visibleAdded: visibleRecords.reduce((n, record) => n + record.addedNodes.length, 0),
+      visibleRemoved: visibleRecords.reduce((n, record) => n + record.removedNodes.length, 0),
+      cachedResult,
+      cachedMutations: cachedRecords.length,
+    };
+  }, holds.toString());
+
+  expect(result.hiddenResult).toBe(false);
+  expect(result.hiddenAdded).toBeGreaterThan(0);
+  expect(result.hiddenRemoved).toBe(result.hiddenAdded);
+  expect(result.separation).toBeGreaterThan(0.1);
+  expect(result.placedAtReference).toBe(true);
+  expect(result.visibleResult).toBe(result.actual);
+  expect(result.visibleAdded).toBeGreaterThan(0); // the ambiguous result was not cached
+  expect(result.visibleRemoved).toBe(result.visibleAdded);
+  expect(result.cachedResult).toBe(result.actual);
+  expect(result.cachedMutations).toBe(0);
+});

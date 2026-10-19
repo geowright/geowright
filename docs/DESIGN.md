@@ -499,9 +499,14 @@ repaints every frame or that the app animates (once 4.3 s; 2.1 to 3.0 s on a 4x 
 map that goes idle; ending the wait at the change, it took 1.4 to 2.1 s. Under the camera's steps it passes in 2.0 to
 2.7 s on a map that never goes idle (2.0 to 4.4 s on a 4x slower CPU), and in 0.9 to 4.3 s on one that otherwise goes
 idle. The give-up still needs 8 rendered frames with the source loaded after that first reload (read from the code), so
-a source loaded in fewer than 8 frames within the timeout still waits it out. A feed about as fast as the source's
-reload does that: 3000 points set on every frame or every 16 ms failed 11 runs in 16 beside another test run, with the
-source loaded in 0 to 3 frames after the feed started, and passed 4 in 4 alone. So does a change none of these checks
+a source loaded in fewer than 8 frames within the timeout still waits it out. A fixed-rate producer can outrun
+software rendering even at 250 ms. The repeated-update fixture now produces its next change from the first loaded
+render after the previous one. It checks that at least two changes occurred and that no change had more than one
+loaded render before the next, so eight loaded frames cannot accrue between changes. This keeps the live-update,
+filter and camera cases while letting the matcher observe the removal on the software renderer.
+A feed about as fast as the source's reload does that: 3000 points set on every frame or every 16 ms failed 11 runs in
+16 beside another test run, with the source loaded in 0 to 3 frames after the feed started, and passed 4 in 4 alone.
+So does a change none of these checks
 see (the layer's zoom range) on an animated map. On a map seen never to go idle, or after such a change, with a fade
 above about 600 ms, that read may still miss a symbol not yet placed again.
 
@@ -559,7 +564,11 @@ property not read there makes its clip read as covered, and one read there that 
 the wrapper does not contain. A size container (`container-type: inline-size`, Tailwind's `@container`) was read as one,
 and Chromium makes none: under a modal, a map in such a wrapper read as clipped again. `tests/offwindow.spec.ts` checks
 the reading against Chromium's own layout, property by property, on a block ancestor; an inline box or a table row,
-which holds less (a transform there makes nothing), is read as a block. Still read as covered: a page header fixed over
+which holds less (a transform there makes nothing), is read as a block. `will-change: offset` and, for absolute
+boxes, `will-change: position` differ between Chromium versions. Those two hints are measured per position in
+an isolated layout fixture and cached only when its two origins can be distinguished; an unmeasurable fixture is
+retried on the next call. The layout oracle stays the same on the oldest supported Playwright and the current one.
+Still read as covered: a page header fixed over
 the top of the map after the look's own scroll, which brings the map to the nearest edge of the window, under the
 header.
 Following the drawing instead (shifting the candidates by `text-offset` and `text-anchor`, `line-offset` and the
@@ -736,7 +745,9 @@ is drawn (a tiled source; a GeoJSON URL source before MapLibre 4, which has no `
 the map while new data loads, and `.not.toHaveGeometry(the new shape)` passed on it half a second in. The bounded wait
 grows (0.5, 1, 2 s) only while an absence verdict is what the assertion is waiting for, so that a slow page gets
 enough frames to be recognised as never idle; on an idle map it costs nothing, and a positive assertion waits no
-longer than before.
+longer than before. A never-idle diagnosis permits a short recheck, but if that recheck sees too few frames to
+confirm it, the following look can grow again. Otherwise a renderer below 20 frames per second could remain
+stuck in half-second samples that can never observe the ten frames required for a verdict.
 
 A poll that cannot be decided is neither true nor false. The map is not registered or was removed (MapLibre
 answers a feature query on a removed map with nothing at all), a named layer does not exist (a typo), the

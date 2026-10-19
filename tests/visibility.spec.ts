@@ -676,15 +676,15 @@ test.describe('the pixel probe hides a layer by its opacity', () => {
     }
   });
 
-  test('hiding by opacity and hiding by visibility give the same verdict, for every layer type', async ({ map, page }) => {
-    await addOwnLayers(page);
-    // not fill-extrusion: its opacity cannot be data-driven, so it is always hidden by opacity — and at 0 MapLibre 2–6 and
-    // Mapbox GL 1 return from drawing it before drawing anything, as for a hidden layer
-    const cases = [
-      ...TARGETS.filter((t) => t.what !== 'fill-extrusion').map((t) => ({ ...t, drawn: true })),
-      { q: { layer: 'sensors-ghost', id: 504 }, source: 'sensors', opacity: 'icon-opacity', what: 'a transparent icon', drawn: false },
-    ];
-    for (const t of cases) {
+  // One independently budgeted test per layer: software rendering can spend several seconds per probe.
+  // Keep every opacity/visibility comparison without putting all source reloads in one 30-second budget.
+  for (const t of [
+    // fill-extrusion cannot have data-driven opacity: at 0 the renderer already skips it.
+    ...TARGETS.filter((t) => t.what !== 'fill-extrusion').map((t) => ({ ...t, drawn: true })),
+    { q: { layer: 'sensors-ghost', id: 504 }, source: 'sensors', opacity: 'icon-opacity', what: 'a transparent icon', drawn: false },
+  ]) {
+    test(`hiding by opacity and hiding by visibility give the same verdict: ${t.what}`, async ({ map, page }) => {
+      await addOwnLayers(page);
       await map.waitForIdle();
       const byOpacity = await probe(page, t.q, t.source);
       // the same value, made data-driven: now only `visibility` can hide the layer, and the source reloads
@@ -695,8 +695,8 @@ test.describe('the pixel probe hides a layer by its opacity', () => {
       await map.waitForIdle();
       const byVisibility = await probe(page, t.q, t.source);
       expect({ target: t.what, byOpacity: byOpacity.drawn, byVisibility: byVisibility.drawn, visibilityReloaded: byVisibility.reloads > 0 }).toEqual({ target: t.what, byOpacity: t.drawn, byVisibility: t.drawn, visibilityReloaded: true });
-    }
-  });
+    });
+  }
 
   // Where the opacity is data-driven the probe hides the layer by `visibility`, and until its source has reloaded (and a
   // symbol has been placed again) the feature is missing from the rendering and the hit test. An action waits for that; a
@@ -787,6 +787,7 @@ test.describe('the pixel probe hides a layer by its opacity', () => {
   // (global state: 18 reads in 18; the camera: 15 in 18; the data and the filter: 4 in 6 each).
   for (const how of ['global state set on every frame', 'the camera nudged during the reload', 'the same data set again during the reload', 'a filter that keeps it set during the reload'] as const) {
     test(`a read right after a matcher whose probe reloaded a symbol layer sees it: ${how}`, async ({ map, page }) => {
+      test.slow(); // six complete probe/reload/read cycles, including symbol placement, under software rendering
       await page.evaluate(() => {
         const m = (window as any).__geowright_maps.main;
         const c = m.getCenter();
@@ -907,23 +908,23 @@ test.describe('the pixel probe hides a layer by its opacity', () => {
   }
 
   // The same where the app keeps changing the layer or the camera, on a map that never goes idle: a live feed that sets
-  // the source's data every 250 ms (feature 7 gone, 3000 other points out of view), a filter animation (a time slider
-  // playing) that sets a new filter every 250 ms (one that matches none of feature 7 and the 3000 points in view beside
-  // it), or a camera tour that takes feature 7 out of view and moves on to new tiles every 250 ms (a pan, or a zoom
-  // step). Each step reloads the source again. The give-up's count restarted on every frame with the source not
-  // loaded, and a step every 250 ms kept it from completing: the wait lasted the matcher's whole timeout, and `.not`
-  // failed with "visible" on a feature the app had taken away (in every run measured, with a 5, 12 or 15 s timeout).
+  // the source's data (feature 7 gone, 3000 other points out of view), a filter animation (a time slider playing) that
+  // keeps setting a filter matching none of feature 7 and the 3000 points beside it, or a camera tour taking feature 7
+  // out of view (a pan or zoom step). Each step changes the layer or camera again. The give-up's count restarted on
+  // every frame with the source not loaded, and a step every 250 ms kept it from completing: the wait lasted the
+  // matcher's whole timeout, and `.not` failed with "visible" on a feature the app had taken away (in every run
+  // measured, with a 5, 12 or 15 s timeout).
   // Any change that starts the give-up now restarts the count once, at the first reload after it, and the later
   // reloads do not.
   for (const c of [
-    { how: 'a live feed (new data every 250 ms)', step: 'data', repaint: true },
-    { how: 'a live feed (new data every 250 ms)', step: 'data', repaint: 'animated' },
-    { how: 'a filter animation (a new filter every 250 ms)', step: 'filter', repaint: true },
-    { how: 'a filter animation (a new filter every 250 ms)', step: 'filter', repaint: 'animated' },
-    { how: 'a camera tour away from it (a pan to new tiles every 250 ms)', step: 'pan', repaint: true },
-    { how: 'a camera tour away from it (a pan to new tiles every 250 ms)', step: 'pan', repaint: 'animated' },
-    { how: 'a camera tour away from it (a zoom step to new tiles every 250 ms)', step: 'zoom', repaint: true },
-    { how: 'a camera tour away from it (a zoom step to new tiles every 250 ms)', step: 'zoom', repaint: 'animated' },
+    { how: 'a live feed (new data after each loaded render)', step: 'data', repaint: true },
+    { how: 'a live feed (new data after each loaded render)', step: 'data', repaint: 'animated' },
+    { how: 'a filter animation (a new filter after each loaded render)', step: 'filter', repaint: true },
+    { how: 'a filter animation (a new filter after each loaded render)', step: 'filter', repaint: 'animated' },
+    { how: 'a camera tour away from it (a pan after each loaded render)', step: 'pan', repaint: true },
+    { how: 'a camera tour away from it (a pan after each loaded render)', step: 'pan', repaint: 'animated' },
+    { how: 'a camera tour away from it (a zoom step after each loaded render)', step: 'zoom', repaint: true },
+    { how: 'a camera tour away from it (a zoom step after each loaded render)', step: 'zoom', repaint: 'animated' },
   ] as const) {
     const where = c.repaint === 'animated' ? ', on a map the app animates (repaint off)' : ', on a map that repaints every frame';
     test(`.not.toBeVisibleOnMap on a feature the app keeps taking away while its probe's reload runs: ${c.how}${where}`, async ({ map, page }) => {
@@ -970,17 +971,48 @@ test.describe('the pixel probe hides a layer by its opacity', () => {
           pan: () => m.jumpTo({ center: [(lng += 0.35), 45] }),
           zoom: () => m.jumpTo({ center: [20, 45], zoom: (z = z >= 16 ? 9 : z + 1) }),
         };
-        const step = steps[c.step];
+        // Advance only after the renderer has produced four loaded frames for the preceding update.
+        // A fixed-rate producer can outrun software rendering and leave no frame in which to observe absence.
+        // Four is deliberately below the matcher's eight-frame grace: a second update must happen while it
+        // waits, yet software rendering gets a condition-based chance to finish each reload.
+        let updates = 0;
+        let loadedRendersSinceUpdate = 0;
+        let maxLoadedRendersSinceUpdate = 0;
+        let waitingForLoadedRender = false;
+        const advance = () => {
+          // Two app changes prove that the wait survives a subsequent reload. Stop then: the assertion must
+          // still be able to establish absence after the probe, rather than perpetually racing a test fixture.
+          if (updates >= 2) return;
+          updates++;
+          loadedRendersSinceUpdate = 0;
+          waitingForLoadedRender = true;
+          steps[c.step]();
+        };
+        m.on('render', () => {
+          if (!updates || !m.isSourceLoaded('picked')) return;
+          loadedRendersSinceUpdate++;
+          maxLoadedRendersSinceUpdate = Math.max(maxLoadedRendersSinceUpdate, loadedRendersSinceUpdate);
+          if (!waitingForLoadedRender || loadedRendersSinceUpdate < 4) return;
+          waitingForLoadedRender = false;
+          // Render listeners run synchronously in the frame callback; advance in its microtask, before another frame.
+          queueMicrotask(advance);
+        });
+        (window as any).__feedStats = () => ({ updates, maxLoadedRendersSinceUpdate });
         let started = false;
         m.on('styledata', () => {
           if (started || m.getLayoutProperty('picked', 'visibility') !== 'none') return;
           started = true; // the probe has hidden the layer: the app's first step lands while its source reloads
-          setTimeout(step);
-          setInterval(step, 250);
+          advance();
         });
       }, c);
       await expect(map.feature({ layer: 'picked', id: 7 })).not.toBeVisibleOnMap({ timeout: 2 * PROBE_FAIL_FAST_MS });
-      expect(await page.evaluate(() => (window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['picked'] }).length), 'the premise: the app took it away (or out of view)').toBe(0);
+      await expect.poll(
+        () => page.evaluate(() => (window as any).__geowright_maps.main.queryRenderedFeatures({ layers: ['picked'] }).length),
+        { timeout: PROBE_FAIL_FAST_MS },
+      ).toBe(0);
+      const feed = await page.evaluate(() => (window as any).__feedStats());
+      expect(feed.updates, 'the app kept changing after the first removal').toBeGreaterThanOrEqual(2);
+      expect(feed.maxLoadedRendersSinceUpdate, 'each change was followed by four loaded renders before the next').toBeGreaterThanOrEqual(4);
     });
   }
 

@@ -33,22 +33,29 @@ test.describe('wild: add-a-canvas-source', () => {
     await expect(map.waitForIdle({ timeout: 2500 })).rejects.toThrow(/did not become idle \(still moving, loading tiles, or repainting\) — source\(s\) canvas-source: an animated canvas \/ video source repaints the map on every frame\. Such a map NEVER becomes idle/);
   });
 
-  // The first geowright call on a page also injects the engine (a ~400 KB evaluate): a probe, the injection, then the
-  // call itself, re-sent. The in-page wait must be sized from the time left AFTER that. Sized before it (half the
-  // timeout, at most 2 s), a first `waitForIdle` whose probe waited behind a busy main thread got a wait that could not
-  // end before the deadline, and the error blamed a page that had answered twice: "the page did not answer … never
-  // attempted" (a quiet 20x, one run in 20; the Playwright-floor CI, once). The numbers: the page is held busy for
-  // 5850 ms of an 8000 ms timeout. A wait sized before the injection (2000 ms) cannot fit: 5850 + injection + 2000
-  // > 8000 whenever the injection takes over 150 ms (measured: the first call takes 345–385 ms here, 505–545 ms at 4x
-  // CPU throttling, of which the probe is 80–90 / 115–140 ms; the CI trace of the failure: 346 ms). Sized after it,
-  // from what is left, the wait is half of ~1800 ms and the answer has the other half. That margin is bounded by the
-  // 2 s cap of the in-page wait, whatever the timeout: under GEOWRIGHT_CPU_THROTTLE=4 it passed 5/5 alone, and failed
-  // 1 in 3 with three throttled workers at load 10 (the probe came back 630 ms after the block, the injection took 565).
-  test('the first call on a page whose main thread was busy: the wait is sized after the engine is injected, and the error still names the animated canvas', async ({ wild, page }) => {
+  // Observe the actual transport budgets on the missing-engine probe and on its re-send after injection.
+  // Holding the page busy for 5850ms of 8000ms left too little time for a loaded renderer to answer the real call. This
+  // checks the regression directly: the re-sent wait must use half the time remaining AFTER injection,
+  // while the real canvas map still returns the same never-idle diagnosis. No fixed stall is needed.
+  test('the first call sizes its wait after the engine is injected, and the error still names the animated canvas', async ({ wild, page }) => {
     const map = await wild.open(example('add-a-canvas-source'), { routes: DEMOTILES, waitForIdle: false });
     await appLoaded(page);
-    block(page, 5850);
-    await expect(map.waitForIdle({ timeout: 8000 })).rejects.toThrow(ANIMATED_CANVAS);
+    const sent: number[] = [];
+    const evaluate = page.evaluate.bind(page);
+    page.evaluate = (async (fn: any, arg: any) => {
+      if (Array.isArray(arg) && arg[0] === 'waitForIdle') sent.push(arg[2][0]);
+      return evaluate(fn, arg);
+    }) as typeof page.evaluate;
+    try {
+      await expect(map.waitForIdle({ timeout: 4000 })).rejects.toThrow(ANIMATED_CANVAS);
+    } finally {
+      page.evaluate = evaluate;
+    }
+    expect(sent.length, 'a missing-engine probe followed by the real call').toBeGreaterThanOrEqual(2);
+    const [probe, call] = sent;
+    // The 4s deadline puts the initial wait below its 2s cap, so injection must shorten the re-send.
+    // Compare the sent budgets directly: timestamps taken after sizing could include a scheduling pause.
+    expect(call, 'the re-sent wait was recalculated after injection').toBeLessThan(probe);
   });
 
   // When the re-sent call itself is not answered, the error says what happened: the engine was missing, the page

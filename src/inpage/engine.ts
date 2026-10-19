@@ -2156,8 +2156,10 @@ function clippedBy(surface: Element, client: PixelPoint): Element | undefined {
  * properties or of `contain`; else the viewport, beyond every ancestor. Not a size container (`container-type`,
  * Tailwind's `@container`): Chromium makes none of it. tests/offwindow.spec.ts compares this with Chromium's layout,
  * property by property, on a block ancestor. Not read: that an inline box or a table row holds less (a transform there
- * makes nothing). A containing block made by a property not read here makes its overflow clip read as a cover; one read
- * here that Chromium does not make, a clip of a map that ancestor does not contain.
+ * makes nothing). The `will-change: offset` and `will-change: position` hints are checked against layout and cached because
+ * engines differ in whether they establish a containing block for them. A containing block made by a property not read
+ * here makes its overflow clip read as a cover; one read here that the browser does not make, a clip of a map that
+ * ancestor does not contain.
  */
 export function holds(style: CSSStyleDeclaration, position: string): boolean {
   if (style.display === 'contents') return false;
@@ -2166,13 +2168,67 @@ export function holds(style: CSSStyleDeclaration, position: string): boolean {
   const set = (p: string) => !['', 'none'].includes(style.getPropertyValue(p));
   const transforms = ['transform', 'translate', 'rotate', 'scale', 'offset-path', 'perspective', 'filter', 'backdrop-filter'];
   const willChange = style.getPropertyValue('will-change').split(/\s*,\s*/);
+  const hasWillChangeContainingBlock = (token: 'offset' | 'position') => {
+    const cacheOwner = holds as typeof holds & { willChangeProbeCache?: Map<string, boolean> };
+    const cache = cacheOwner.willChangeProbeCache ??= new Map<string, boolean>();
+    const key = `${token}:${position}`;
+    const cached = cache.get(key);
+    if (cached !== undefined) return cached;
+
+    let result: boolean | undefined;
+    let reference: HTMLDivElement | undefined;
+    let ancestor: HTMLDivElement | undefined;
+    try {
+      // Inline !important resets keep author CSS out without changing the containing-block chain:
+      // a shadow host is itself a positioned ancestor for absolute descendants, and older Chromium
+      // gives will-change hints different layout behaviour across that boundary.
+      reference = document.createElement('div');
+      reference.setAttribute('aria-hidden', 'true');
+      reference.style.cssText = 'all:initial!important;display:block!important;position:fixed!important;left:0!important;top:0!important;width:10px!important;height:10px!important;margin:0!important;padding:0!important;border:0!important;visibility:hidden!important;pointer-events:none!important;';
+      ancestor = document.createElement('div');
+      ancestor.style.cssText = `all:initial!important;display:block!important;position:static!important;margin:100px 0 0 200px!important;width:10px!important;height:10px!important;will-change:${token}!important;`;
+      const box = document.createElement('div');
+      box.style.cssText = `all:initial!important;display:block!important;position:${position}!important;left:0!important;top:0!important;width:10px!important;height:10px!important;`;
+      ancestor.appendChild(box);
+      (document.body ?? document.documentElement).append(reference, ancestor);
+
+      const origin = reference.getBoundingClientRect();
+      const parent = ancestor.getBoundingClientRect();
+      const child = box.getBoundingClientRect();
+      const separation = Math.hypot(parent.left - origin.left, parent.top - origin.top);
+      const coordinateScale = Math.max(1, Math.abs(parent.left), Math.abs(parent.top), Math.abs(origin.left), Math.abs(origin.top));
+      const precision = Number.EPSILON * coordinateScale * 16;
+      if (Number.isFinite(separation) && separation > precision) {
+        // Scale tolerance with the measured separation: a fixed CSS-pixel threshold loses the
+        // distinction under a small page-root transform. Leave a result uncached unless the child
+        // is near exactly one of the two measured origins.
+        const tolerance = separation / 10;
+        const fromAncestor = Math.hypot(child.left - parent.left, child.top - parent.top);
+        const fromOrigin = Math.hypot(child.left - origin.left, child.top - origin.top);
+        const atAncestor = fromAncestor <= tolerance;
+        const atOrigin = fromOrigin <= tolerance;
+        if (atAncestor !== atOrigin) result = atAncestor;
+      }
+    } catch {
+      // If layout cannot be measured, do not guess that an overflow ancestor contains the box.
+    } finally {
+      reference?.remove();
+      ancestor?.remove();
+    }
+    if (result !== undefined) cache.set(key, result);
+    return result ?? false;
+  };
   return (
     transforms.some(set) ||
     !['', 'normal', 'auto'].includes(style.getPropertyValue('offset-position')) ||
     style.getPropertyValue('transform-style') === 'preserve-3d' ||
     /\b(layout|paint|strict|content)\b/.test(style.getPropertyValue('contain')) ||
     /^(auto|hidden)$/.test(style.getPropertyValue('content-visibility')) ||
-    willChange.some((p) => [...transforms, 'transform-style', 'offset', 'offset-position', 'contain'].includes(p) || (p === 'position' && position === 'absolute'))
+    willChange.some((p) =>
+      [...transforms, 'transform-style', 'offset-position', 'contain'].includes(p) ||
+      (p === 'offset' && hasWillChangeContainingBlock('offset')) ||
+      (p === 'position' && position === 'absolute' && hasWillChangeContainingBlock('position'))
+    )
   );
 }
 
