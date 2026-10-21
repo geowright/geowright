@@ -632,9 +632,12 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   });
 
   test('a verdict serves one action: an overlay faded in by a paint transition refuses a click after the fade', async ({ map, page }) => {
-    test.setTimeout(90_000);
+    test.setTimeout(120_000);
     await addVeil(page, { opacity: 0 });
-    await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('veil', 'raster-opacity-transition', { duration: 8000, delay: 0 }));
+    // The click must land while the veil is still faint, so the fade has to outlast the click. On the oldest supported
+    // Playwright (2 CPUs, software GL) the click lands 2-4 s in, and an 8 s fade was opaque by then: the click was refused
+    // (3 runs of 3 there; one hosted run). A fast machine pays the rest of the fade in the idle wait below.
+    await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('veil', 'raster-opacity-transition', { duration: 30_000, delay: 0 }));
     await map.waitForIdle();
     await watch(page, 'alerts');
     await page.evaluate(() => (window as any).__geowright_maps.main.setPaintProperty('veil', 'raster-opacity', 1)); // the app fades its overlay in
@@ -906,8 +909,12 @@ test.describe('pixel-only layers above the target (decision 0022)', () => {
   // but a refusal must not say the target is covered when every probe saw it through the overlay. (Which "unstable" the
   // last look ends on depends on where the timeout falls: the overlay kept changing, or the sensor is still reloading.)
   test('a translucent heatmap whose opacity the app nudges on a timer: a refusal never says the target is covered', async ({ map, page }) => {
+    // The page changes the heatmap's paint every 10 ms and answers late on a shared 2-CPU runner: with PROBE_FAIL_FAST_MS the
+    // click ended as "the page did not answer" (hosted, oldest supported Playwright). Twice that, and room in the test for it.
+    test.setTimeout(60_000);
+    allowForThrottle(2 * PROBE_FAIL_FAST_MS); // the refused click waits out its timeout
     await liveHeatOverSensor(map, page, 'opacity');
-    const e = await map.feature({ layer: 'sensors', id: 501 }).click({ timeout: PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+    const e = await map.feature({ layer: 'sensors', id: 501 }).click({ timeout: 2 * PROBE_FAIL_FAST_MS }).then(() => null, (e: Error) => e);
     expect(refusal(e) ?? '', 'every probe saw the sensor through the heatmap').not.toMatch(/covered/);
     if (e) expect(refusal(e), 'the refusal says why').toMatch(/unstable: (heatmap layer "heat" kept changing|the target's layer "sensors" is still reloading)/);
     else expect((await counts(page)).clicks).toEqual([501]);

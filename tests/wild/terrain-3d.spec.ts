@@ -9,10 +9,10 @@ const CENTER: [number, number] = [11.39085, 47.27574];
 const routes: Routes = [rasterTiles(/^https:\/\/a\.tile\.openstreetmap\.org\//), ...syntheticTerrain('https://tiles.mapterhorn.com/tilejson.json', CENTER)];
 
 // Dozens of DEM + hillshade tiles at pitch 70 in software GL: the first idle can take >10 s on a busy machine.
-const SLOW = { timeout: 45_000 }; // hosted Linux (2 workers, software GL) needed more than 30 s even to reach the first idle
+const SLOW = { timeout: 60_000 }; // hosted Linux (2 workers, software GL) needed more than 30 s even to reach the first idle, and one hosted run on the oldest supported Playwright did not reach it in 45 s
 
 test.describe('wild: 3d-terrain', () => {
-  test.slow(); // terrain + hillshade at pitch 70 in software GL
+  test.setTimeout(150_000); // terrain + hillshade at pitch 70 in software GL: SLOW to open, then the test
 
   const north = (km: number) => ({ lng: CENTER[0], lat: CENTER[1] + km / 111.32 });
 
