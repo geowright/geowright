@@ -1150,6 +1150,56 @@ subset); the reverse case is the unsupported-expression caveat described under v
 drawing tools and the fill-extrusion lift and third-party applications are exercised on MapLibre 6 only; the support table in the README says
 "not in the matrix" for them rather than "✓".
 
+## Drivers and map libraries
+
+Decision 0026 (Proposed) splits geowright into map-library adapters, a runner-neutral core and thin driver adapters.
+The rule in one line: **the core knows how maps work and never how a browser command is executed; a driver knows how
+to execute browser commands and never how maps work.**
+
+**What the code already is.** The in-page bundle (`src/inpage/`, about 5,400 lines) is the core: it has to run in the
+page, because the hit test, the two-frames-still check and the press-time check need synchronous access to the map
+and to the event as it arrives. It imports nothing from a map library or from Playwright. Of about 1,200 code lines in
+`src/playwright/index.ts`, about 73 touch Playwright (48 the driver, 12 the test runner, 13 `Locator`s); the rest is
+deadlines, retries, the arm → input → disarm choreography, the moving-target aim, matcher polling and error text. The
+RPC is already one `page.evaluate` into `window.__geowright` (`_send`). Two `map.getCanvas()` calls in the binding
+(screenshot clip, keyboard focus) are the only breaks of the rule; both can become in-page calls in 0.x.
+
+**The interfaces.** A `Driver` has `evaluate`, real `pointer` and `keyboard` input in client CSS pixels, optional
+`touch`, `screenshot` and `route`, a `pinned(token)` that returns the runner's own element type, and stated
+capabilities. A `Runner` has `step`, `attach` and `testTimeout`; a plain script gets no-op defaults. On the map side,
+`CanvasAdapter` stays as it is, behind a registry of factories that detect a map by public-API duck typing (0004),
+plus one optional member, `isSurfaceElement(el)`: OpenLayers draws each layer into its own canvas, so "the element
+under the pointer is the surface" needs the adapter's answer. Each library gets its own in-page bundle.
+
+**The lever before 1.0: an action protocol.** Today the Node side leads every action. If the page instead returned
+the next step (`input`, `wait`, `done`, `fail`) and the binding only sent input and kept the clock, a new runner or
+language would need a short loop, not a port. It is a one-way door once 1.0 freezes the in-page API.
+
+**Migration.** First, in today's package with no API change, all Playwright and runner calls go through one private
+driver and one runner object (no `page.` outside the driver file). After 1.0 the core and the `geowright` package split.
+
+**Order.** OpenLayers 10 is the next reach, before any second runner: its hit test, render-complete event and motion
+flags are public, it is BSD-2-Clause and draws with canvas 2D. Then the runners, each only once its CI job passes the
+conformance suite:
+- *Puppeteer*: near-free. Same CDP input model, `evaluate`, `screenshot({ clip })`; it lacks a test runner, so it
+  gets a promise-style `expectMap(map)`.
+- *WebDriver BiDi* (WebdriverIO, selenium-webdriver): `script.callFunction`, `input.performActions` with touch pointers
+  (multi-touch not tied to CDP), screenshots and intercepts are in the spec. Every round trip goes through a driver
+  process, so suites slow down and moving targets retry more; the press-time check still decides.
+- *Cypress*, only if users ask: commands are queued, not awaited; its default input is synthetic (real input needs
+  CDP, Chromium only); its queries are synchronous while the in-page calls are async; the test runs in the browser.
+
+**The conformance suite.** About 40 scenarios written once against the core, run by a harness per driver. Two
+guards no driver may skip: every pointer, key and touch event in the fixture must have `isTrusted` (which turns 0003
+into a check), and with the press-time check disabled the race scenario must fail (0019's sabotage). A scenario a
+driver cannot run is skipped with its reason and the README says so. The map-library version matrix stays on
+Playwright only; other drivers run the latest MapLibre.
+
+**Not planned.** Runners whose input is synthetic, as a source of verdicts. Google Maps and ArcGIS (proprietary, they
+need the network). **Exploring: mobile.** Mobile web (emulation works today; real Chrome on Android shares the
+protocol) and maps in a WebView (the engine fits as is; reaching the WebView is the work). Native map SDKs are research
+only: no page to inject into, and the press-time check would have to be re-done inside the app.
+
 ## Costs and known limitations
 
 Measured with a single test worker and software rendering (medians of repeated runs), against

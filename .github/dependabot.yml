@@ -21,6 +21,11 @@ updates:
         update-types: ["version-update:semver-major"]
       # Mapbox GL JS is pinned to 1.13.3, the last BSD-licensed release. v2 and later are proprietary: never update.
       - dependency-name: "mapbox-gl*"
+      # Playwright 1.64.x is held back: on 1.64.1 the MapLibre 5 pixel-probe compat test never settles and the full suite times out (1.63.0 is green).
+      - dependency-name: "@playwright/test"
+        versions: ["1.64.x"]
+      - dependency-name: "playwright"
+        versions: ["1.64.x"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
