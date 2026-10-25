@@ -3,14 +3,14 @@
 Notable changes to geowright, newest first. While the version is 0.x a minor version may change the API; such changes
 are marked **BREAKING**. The reasoning behind each behaviour is in `docs/DESIGN.md`.
 
-## Unreleased
+## 0.1.1 — 2026-10-25
 
 - Refuse globe locations near the limb when projection round-tripping shows the click would land more than about one degree away.
 - `geowright init --help` and `-h` show init usage; `geowright --version` prints the package version.
 - Wrapper app hook validation matches recorded files by relative path, so an unrecorded file with the same basename is rejected.
 - Add npm keywords and clarify the package description for discoverability.
 
-## 0.1.0 — 2026-10-18
+## 0.1.0 — 2026-10-24
 
 The first published version.
 
