@@ -52,7 +52,7 @@
     "vite": "^8.3.0"
   },
   "dependencies": {
-    "@maplibre/geojson-vt": "^6.1.1",
+    "@maplibre/geojson-vt": "^6.3.0",
     "@maplibre/vt-pbf": "^4.3.2",
     "@types/geojson": "^7946.0.16"
   },
