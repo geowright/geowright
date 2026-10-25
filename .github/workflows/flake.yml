@@ -1,12 +1,32 @@
 name: flake
 
-# The different-machine flake check: the whole suite twice on hosted Linux (~42 min). Nightly, and
-# only when main changed in the last 24 hours — a quiet repository spends no minutes. The strict
-# bar (--repeat-each=20, zero flakes) is run on a desktop machine shown to be quiet: see CONTRIBUTING.md.
+# The nightly check runs the whole suite twice on hosted Linux when main changed in the last 25 hours
+# (about 42 minutes). The strict 20x bar can be started manually and is split across hosted runners:
+# see CONTRIBUTING.md.
 on:
   schedule:
     - cron: '17 1 * * *'
   workflow_dispatch:
+    inputs:
+      repeat:
+        description: Test repetitions
+        type: number
+        default: 20
+      path:
+        description: Optional spec path or grep
+        type: string
+        default: ''
+      shards:
+        description: Number of parallel shards
+        type: number
+        default: 10
+      runner:
+        description: Hosted runner for each shard
+        type: choice
+        options:
+          - ubuntu-latest
+          - macos-latest
+        default: ubuntu-latest
 
 concurrency:
   group: flake
@@ -16,10 +36,71 @@ permissions:
   contents: read
 
 jobs:
+  dispatch-matrix:
+    if: github.event_name == 'workflow_dispatch' && vars.CI_RUNS_ON == ''
+    runs-on: ubuntu-latest
+    outputs:
+      shards: ${{ steps.matrix.outputs.shards }}
+    steps:
+      - id: matrix
+        env:
+          COUNT: ${{ inputs.shards }}
+        run: echo "shards=$(node -e 'console.log(JSON.stringify(Array.from({length:Number(process.env.COUNT)},(_,i)=>i+1)))')" >> "$GITHUB_OUTPUT"
+
+  linux-20x:
+    if: github.event_name == 'workflow_dispatch' && vars.CI_RUNS_ON == ''
+    needs: dispatch-matrix
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.dispatch-matrix.outputs.shards) }}
+    env:
+      CI: 'true'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - name: Flake check (manual)
+        env:
+          REPEAT: ${{ inputs.repeat }}
+          PATH_FILTER: ${{ inputs.path }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ inputs.shards }}
+        run: |
+          args=(--repeat-each="$REPEAT" --shard="$SHARD/$SHARDS")
+          if [ -n "$PATH_FILTER" ]; then args+=("$PATH_FILTER"); fi
+          npx playwright test "${args[@]}"
+      - name: Pack the failed tests' output
+        if: failure()
+        run: node scripts/failed-test-results.mjs
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: linux-20x-shard-${{ matrix.shard }}-test-results
+          path: test-results-failed.tgz
+          retention-days: 5
+
+  dispatch-verdict:
+    if: always() && github.event_name == 'workflow_dispatch' && vars.CI_RUNS_ON == ''
+    needs: [dispatch-matrix, linux-20x]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every shard to pass
+        env:
+          MATRIX_RESULT: ${{ needs.dispatch-matrix.result }}
+          SHARDS_RESULT: ${{ needs.linux-20x.result }}
+        run: test "$MATRIX_RESULT" = success && test "$SHARDS_RESULT" = success
+
   linux-2x:
     # Only where CI runs on GitHub-hosted Linux. A repository that routes CI elsewhere (CI_RUNS_ON) has its own
     # flake check there; the same suite twice on the same machine would add nothing.
-    if: vars.CI_RUNS_ON == ''
+    if: github.event_name == 'schedule' && vars.CI_RUNS_ON == ''
     runs-on: ubuntu-latest
     timeout-minutes: 75
     env:
@@ -31,7 +112,7 @@ jobs:
       - name: Anything new since yesterday?
         id: fresh
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] || [ -n "$(git log --since='25 hours ago' --format=%h -1)" ]; then
+          if [ -n "$(git log --since='25 hours ago' --format=%h -1)" ]; then
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
             echo "run=false" >> "$GITHUB_OUTPUT"; echo "no commits in the last 25 hours: nothing to check"

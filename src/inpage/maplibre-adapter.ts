@@ -134,7 +134,8 @@ export class MapLibreAdapter implements InternalCanvasAdapter<LngLat> {
       const dLng = ((((a.lng - b.lng) % 360) + 540) % 360) - 180;
       return Math.hypot(dLng * Math.cos((a.lat * Math.PI) / 180), a.lat - b.lat);
     };
-    return dist(back, w) <= 3 * dist(back, next) + 1e-9;
+    const pixelTolerance = 3 * dist(back, next);
+    return dist(back, w) <= (projectionOf(this.map).globe ? Math.min(pixelTolerance, 1) : pixelTolerance) + 1e-9;
   }
 
   worldFromCoord(coord: number[]): LngLat {

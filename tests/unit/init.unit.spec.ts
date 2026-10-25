@@ -170,6 +170,20 @@ function project(name: string, pkg: object | string, files: Record<string, strin
   return cwd;
 }
 
+test('help and package version: init help prints init usage; package version exits successfully', async () => {
+  const cwd = project('help-version', {});
+  for (const flag of ['--help', '-h']) {
+    const result = await cli(cwd, 'init', flag);
+    expect(result.code, result.out).toBe(0);
+    expect(result.out).toContain('usage: geowright init');
+  }
+  const version = await cli(cwd, '--version');
+  expect(version.code, version.out).toBe(0);
+  expect(version.out.trim()).toBe(JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8')).version);
+  const invalid = await cli(cwd, 'init', '--unknown');
+  expect(invalid.code).toBe(1);
+});
+
 test('the CLI: init --dir e2e --url /app/ in an @vis.gl/react-maplibre app writes there, points the fixture at that URL, prints that wrapper\'s hook', async () => {
   const cwd = project('vis-gl', { dependencies: { '@vis.gl/react-maplibre': '^8.0.0', 'maplibre-gl': '^5.6.0' } });
   const { code, out } = await cli(cwd, 'init', '--dir', 'e2e', '--url', '/app/');

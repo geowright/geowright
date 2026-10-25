@@ -315,6 +315,7 @@ function hookLines(dir, name, upstreamMd, problems) {
   const shown = new Set(upstreamMd.split('\n').filter((l) => l.startsWith('+')).map((l) => l.slice(1).trim()));
   const vendored = new Map(); // app-relative path -> marked "+1 line"
   for (const m of upstreamMd.matchAll(new RegExp(`^wild/apps/${name}/(\\S+)\\s+<-.*$`, 'gm'))) vendored.set(m[1], /\(\+1 line/.test(m[0]));
+  const recordedPaths = new Set(vendored.keys());
   const walk = (d) => readdirSync(d).flatMap((f) => {
     const p = join(d, f);
     if (statSync(p).isDirectory()) return f === 'dist' || f === 'node_modules' ? [] : walk(p);
@@ -333,7 +334,10 @@ function hookLines(dir, name, upstreamMd, problems) {
     if (lines.length > 1) problems.push(`${rel(file)}: ${lines.length} lines name __geowright_maps (lines ${lines.map((x) => x.n).join(', ')}); a vendored file gets exactly one added line, the hook`);
     total += lines.length;
     hooked.add(r);
-    if (vendored.size ? vendored.get(r) !== true : !upstreamMd.includes(r)) {
+    const recorded = vendored.size
+      ? vendored.get(r) === true
+      : recordedPaths.has(r) || upstreamMd.includes(`./${r})`);
+    if (!recorded) {
       problems.push(`${rel(file)}: holds the hook, but ${rel(join(dir, 'UPSTREAM.md'))} does not ${vendored.size ? 'mark it "(+1 line)" in its vendored paths' : 'name it'}`);
     }
   }

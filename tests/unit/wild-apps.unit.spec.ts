@@ -475,6 +475,17 @@ test('check fails when a wrapper app\'s sources hold more than the one recorded 
   expect(run(tree, 'check').code, 'dist/ is not scanned').toBe(0);
 });
 
+test('relative path matches the recorded wrapper app file', () => {
+  const tree = scratchTree();
+  const planted = plantApp(tree);
+  expect(run(tree, 'check').code, 'the recorded relative path is accepted').toBe(0);
+  mkdirSync(join(planted, 'other'), { recursive: true });
+  writeFileSync(join(planted, 'other/app.js'), `${HOOK}\n`);
+  const r = run(tree, 'check');
+  expect(r.code).toBe(1);
+  expect(r.out).toContain('wild/apps/planted/other/app.js: holds the hook, but wild/apps/planted/UPSTREAM.md does not mark it');
+});
+
 test('check fails when a file under wild/fixtures has no row in SOURCES.md or a sources/*.md record', () => {
   const tree = scratchTree();
   writeFileSync(join(tree, 'wild/fixtures/planted.geojson'), '{"type":"FeatureCollection","features":[]}');

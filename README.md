@@ -74,6 +74,7 @@ await map.feature({ layer: 'alerts', id: 4 }).click();                          
 npm i -D geowright @playwright/test && npx playwright install chromium
 npx geowright init      # a fixture, the software-WebGL flags (+ a whole playwright.config if you have none), a first spec
                         # that prints map.snapshot(), and the hook for your wrapper
+npx geowright init --help   # the options (npx geowright --version prints the package version)
 ```
 More: [docs/RECIPES.md](docs/RECIPES.md).
 
@@ -426,8 +427,10 @@ For tiled sources the browser cannot know what is off-screen, and the failure me
   through, so a click goes through to the layer below and `toBeVisibleOnMap` passes: the pixel probe cannot tell an overlay's
   own colour drift from a target. Over such a map, assert on the feature (`toHaveFeature`) or pause the
   overlay first.
-- **A location just past a globe's horizon** is clicked at the limb, and a query `at` it can match the near-side feature:
-  the hit test and `getBounds` both stop at the horizon. On a globe, keep the locations of an action well inside the visible disc.
+- **A location just past a globe's horizon** is refused as not on the visible map surface, like any far-side location.
+  Near the limb one pixel covers many degrees, so a location whose project/unproject round trip is more than about one
+  degree off is refused too, rather than clicked at a different near-side point; a query `at` such a location matches
+  nothing for the same reason. Locations well inside the visible disc are unaffected.
 - **`hover` on a moving target** is only dependable when frames are short; `click` holds up.
 - **A feature whose source the app replaces on every frame is never "at rest"**, even one that stands still: "at rest"
   is the same pixel two frames running *and* no data replacement of its source in between (a starved renderer draws a

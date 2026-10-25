@@ -3,6 +3,22 @@
   "license": "Apache-2.0",
   "version": "0.1.0",
   "type": "module",
+  "keywords": [
+    "playwright",
+    "playwright-test",
+    "maplibre",
+    "maplibre-gl",
+    "mapbox-gl",
+    "mapbox",
+    "map",
+    "webgl",
+    "canvas",
+    "e2e",
+    "end-to-end",
+    "testing",
+    "test-automation",
+    "mcp"
+  ],
   "scripts": {
     "dev": "vite demo",
     "build:demo": "vite build demo",
@@ -40,7 +56,7 @@
     "@maplibre/vt-pbf": "^4.3.2",
     "@types/geojson": "^7946.0.16"
   },
-  "description": "Grey-box Playwright testing for canvas maps: assert on and act on MapLibre GL JS features with real input.",
+  "description": "Grey-box end-to-end Playwright testing for canvas maps: assert on and act on MapLibre GL JS and Mapbox GL JS 1.x features with real input.",
   "author": "Shai Sinai",
   "homepage": "https://geowright.dev",
   "repository": {

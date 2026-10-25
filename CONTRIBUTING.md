@@ -24,7 +24,9 @@
   run time, an internal not on the list.
 - **No network in tests.** Everything an app fetches is fulfilled by `page.route` from fixtures in the repo.
 - **The flake bar.** A change is done when `npx playwright test --repeat-each=20` passes with zero
-  flakes, zero retries and no fixed sleeps — on a quiet machine (check `uptime` first).
+  flakes, zero retries and no fixed sleeps — either on a quiet desktop machine (check `uptime` first)
+  or in a green hosted run (Actions > flake > Run workflow, repeat 20). Investigate a hosted failure;
+  shared runners are noisier, but that is evidence to examine, not a reason to dismiss it.
 - **Do not bend third-party apps** under `wild/` to fit the library: exactly one added line (the hook)
   per vendored file. `node wild/scripts/apps.mjs check` (in the unit suite) checks the recorded hook lines
   and the examples' committed patches; `bash wild/scripts/examples.sh verify` diffs the examples against

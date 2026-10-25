@@ -80,6 +80,26 @@ test.describe('wild: display-a-globe-with-a-vector-map', () => {
     await map.feature({ layer: 'countries-fill', at: { lng: 11.6, lat: -0.8 } }).click();
   });
 
+  test('locations near the globe limb are refused when the projected click would land elsewhere', async ({ wild, page }) => {
+    const map = await open(wild);
+    await page.evaluate(() => {
+      const m = (window as any).__geowright_maps.main;
+      (window as any).__limbClicks = [];
+      m.on('click', (event: any) => (window as any).__limbClicks.push({ lng: event.lngLat.lng, lat: event.lngLat.lat }));
+    });
+    for (const lng of [80, -80]) {
+      await page.evaluate(() => ((window as any).__limbClicks = []));
+      const error = await map.clickAt({ lng, lat: 0 }, { timeout: 2 * FAIL_FAST_MS }).then(() => null, (e: Error) => e);
+      const clicks = await page.evaluate(() => (window as any).__limbClicks as Array<{ lng: number; lat: number }>);
+      if (error) expect(error.message).toMatch(/not on the visible map surface/);
+      else {
+        expect(clicks).toHaveLength(1);
+        expect(Math.abs(clicks[0].lng - lng)).toBeLessThanOrEqual(1);
+        expect(Math.abs(clicks[0].lat)).toBeLessThanOrEqual(1);
+      }
+    }
+  });
+
   test('countries are found WITHOUT `at`, near side only — MapLibre\'s own viewport query gets this wrong on a globe', async ({ wild, page }) => {
     // Written as test.fixme by the example run: raw map.queryRenderedFeatures() with no geometry returns ~24
     // countries here (Americas + South Asia) and omits Gabon, Nigeria… which ARE on screen; box queries return
