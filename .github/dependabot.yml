@@ -26,6 +26,9 @@ updates:
         versions: ["1.64.x"]
       - dependency-name: "playwright"
         versions: ["1.64.x"]
+      # @playwright/mcp 0.0.83 and later nest a Playwright 1.64 pre-release; held back with Playwright 1.64.x.
+      - dependency-name: "@playwright/mcp"
+        versions: [">=0.0.83"]
   - package-ecosystem: github-actions
     directory: /
     schedule:

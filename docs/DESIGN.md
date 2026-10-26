@@ -1173,7 +1173,12 @@ under the pointer is the surface" needs the adapter's answer. Each library gets 
 
 **The lever before 1.0: an action protocol.** Today the Node side leads every action. If the page instead returned
 the next step (`input`, `wait`, `done`, `fail`) and the binding only sent input and kept the clock, a new runner or
-language would need a short loop, not a port. It is a one-way door once 1.0 freezes the in-page API.
+language would need a short loop, not a port. It is a one-way door once 1.0 freezes the in-page API. Decision 0027
+(Proposed) takes it: `begin` and `next` return one step at a time, the binding sends the input and enforces its own
+deadline around each call, and a `fail` says whether input already left so it is never sent twice. The same record
+adds an optional seam member for the layers the app added: the snapshot tells them from the basemap by a guess (an app
+layer is the only one of its type on the basemap's source), which takes a highlighted road for basemap; the adapter
+can answer instead, and the guess stays for adapters that cannot.
 
 **Migration.** First, in today's package with no API change, all Playwright and runner calls go through one private
 driver and one runner object (no `page.` outside the driver file). After 1.0 the core and the `geowright` package split.
