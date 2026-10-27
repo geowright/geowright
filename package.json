@@ -41,7 +41,7 @@
     "@types/node": "^26.6.2",
     "esbuild": "^0.28.2",
     "mapbox-gl-1": "npm:mapbox-gl@1.13.3",
-    "maplibre-gl": "^6.10.0",
+    "maplibre-gl": "^6.15.0",
     "maplibre-gl-2": "npm:maplibre-gl@^2.4.0",
     "maplibre-gl-3": "npm:maplibre-gl@^3.6.2",
     "maplibre-gl-4": "npm:maplibre-gl@^4.7.1",

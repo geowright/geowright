@@ -20,7 +20,7 @@ function fakeMaplibre(sources: Record<string, string>, pkgs: string[] = []): str
   const dir = join(root, 'node_modules/maplibre-gl');
   mkdirSync(join(dir, 'dist'), { recursive: true });
   writeFileSync(join(dir, 'package.json'), JSON.stringify({ name: 'maplibre-gl', version: '0.0.0' }));
-  writeFileSync(join(dir, 'dist/maplibre-gl.js'), '');
+  writeFileSync(join(dir, 'dist/maplibre-gl.js'), '/* bundled */\n');
   const names = Object.keys(sources);
   for (const p of pkgs) {
     const pd = join(root, 'node_modules', p);
@@ -67,6 +67,15 @@ test('code copied from vector-tile-js is covered by the @mapbox/vector-tile text
   const b = bundled(fakeMaplibre(copied, ['@mapbox/vector-tile'])) as Bundled;
   expect(b.packages.map((p) => p.name)).toContain('@mapbox/vector-tile');
   expect(b.copied).toEqual([]);
+});
+
+test('a 0-byte dist file without a source map (6.15\'s shared chunk) has no notices; a file with code but no map fails', () => {
+  const dir = fakeMaplibre({}, ['@mapbox/point-geometry']);
+  writeFileSync(join(dir, 'dist/maplibre-gl-shared.mjs'), '');
+  const b = bundled(dir, ['maplibre-gl.js', 'maplibre-gl-shared.mjs']) as Bundled;
+  expect(b.packages.map((p) => p.name)).toEqual(['@mapbox/point-geometry']);
+  writeFileSync(join(dir, 'dist/maplibre-gl-shared.mjs'), 'export const x = 1;\n');
+  expect(() => bundled(dir, ['maplibre-gl.js', 'maplibre-gl-shared.mjs'])).toThrow(/ENOENT.*maplibre-gl-shared\.mjs\.map/);
 });
 
 // The heading says which option of a choice is used (decision 0020); wild/scripts/apps.mjs check accepts the other

@@ -10,7 +10,7 @@
 // minifying drops. Each such file is named in `inlined` (its notice is added) or in `covered` (the package it came from
 // is bundled too, so its text is already listed); any other MapLibre source with a copyright line or a note saying where
 // its code came from ("Taken from [X](…)", "Copied from https://…") fails, to be read and added by hand.
-import { existsSync, readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 
 const MIT = (holder) => `MIT License
@@ -163,6 +163,16 @@ export function distFiles(maplibreDir) {
   return existsSync(join(dist, 'maplibre-gl.mjs')) ? ['maplibre-gl.mjs', 'maplibre-gl-shared.mjs', 'maplibre-gl-worker.mjs'] : ['maplibre-gl.js'];
 }
 
+/**
+ * Which of `files` (in maplibre-gl's dist/) hold code. Since 6.15 the worker is self-contained and the shared chunk is a
+ * 0-byte file with no source map: there is nothing in it to copy or to read notices from. A missing or empty file is left
+ * out, map or not; any other file must have its map.
+ */
+export function withCode(maplibreDir, files) {
+  const dist = join(maplibreDir, 'dist');
+  return files.filter((f) => existsSync(join(dist, f)) && statSync(join(dist, f)).size > 0);
+}
+
 /** The installed package `name` as Node resolves it from `from`: its directory, or undefined. */
 function resolvePackage(name, from) {
   for (let d = from; ; d = dirname(d)) {
@@ -193,7 +203,7 @@ export function bundled(dir, files = distFiles(dir)) {
   const names = new Set();
   const copied = [];
   const coveredBy = [];
-  for (const f of files) {
+  for (const f of withCode(maplibreDir, files)) {
     const map = JSON.parse(readFileSync(join(src, `${f}.map`), 'utf8'));
     map.sources.forEach((source, i) => {
       const parts = source.split('node_modules/').slice(1);

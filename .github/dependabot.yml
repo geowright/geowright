@@ -12,6 +12,10 @@ updates:
       dev-minor-and-patch:
         dependency-type: development
         update-types: [minor, patch]
+        exclude-patterns: ["maplibre-gl"]
+      maplibre-minor-and-patch:
+        patterns: ["maplibre-gl"]
+        update-types: [minor, patch]
     ignore:
       # The version matrix installs OLD majors on purpose, under npm aliases (maplibre-gl-2 … maplibre-gl-5), and
       # aliases are resolved to the real package name. A major bump of any of them would delete a column of the

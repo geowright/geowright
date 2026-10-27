@@ -1,8 +1,8 @@
 # Licenses
 
-`maplibre-gl-shared.mjs` and `maplibre-gl-worker.mjs` are maplibre-gl 6.10.0's prebuilt dist, copied verbatim by
+`maplibre-gl-worker.mjs` is maplibre-gl 6.15.0's prebuilt dist, copied verbatim by
 `demo/scripts/copy-worker.mjs`, which also writes this file. MapLibre's own license is `LICENSE.txt` beside it. The
-packages below are what the two files' source maps (in the npm package, not copied) name as bundled; each text is the
+packages below are what its source map (in the npm package, not copied) name as bundled; each text is the
 license file of the installed copy (the maps do not record versions; the installed ones satisfy maplibre-gl's ranges).
 
 ## @mapbox/point-geometry - 1.1.0 (ISC)
@@ -82,7 +82,7 @@ LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
 NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-## @maplibre/geojson-vt - 6.1.1 (ISC)
+## @maplibre/geojson-vt - 6.3.0 (ISC)
 
 The MIT License (MIT)
 
@@ -620,7 +620,7 @@ shall not be used in advertising or otherwise to promote the sale,
 use or other dealings in these Data Files or Software without prior
 written authorization of the copyright holder.
 
-## earcut - 3.2.3 (ISC)
+## earcut - 3.2.4 (ISC)
 
 ISC License
 
