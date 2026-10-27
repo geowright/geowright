@@ -36,8 +36,8 @@ jobs:
       CI: 'true'
       GEOWRIGHT_PORT: ${{ vars.CI_PORT || '4173' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -45,7 +45,7 @@ jobs:
       - name: Playwright version (cache key)
         id: pw
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         if: runner.environment == 'github-hosted' # a persistent runner keeps its browsers on disk
         with:
           path: ~/.cache/ms-playwright
@@ -76,7 +76,7 @@ jobs:
       - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
         if: failure()
         run: node scripts/failed-test-results.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: suite-test-results
@@ -92,8 +92,8 @@ jobs:
       CI: 'true'
       GEOWRIGHT_PORT: ${{ vars.CI_PORT || '4173' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -101,7 +101,7 @@ jobs:
       - name: Playwright version (cache key)
         id: pw
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         if: runner.environment == 'github-hosted' # a persistent runner keeps its browsers on disk
         with:
           path: ~/.cache/ms-playwright
@@ -111,7 +111,7 @@ jobs:
       - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
         if: failure()
         run: node scripts/failed-test-results.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: compat-test-results
@@ -131,8 +131,8 @@ jobs:
       CI: 'true'
       CI_PORT: ${{ vars.CI_PORT || '4173' }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -153,7 +153,7 @@ jobs:
           installed=$(node -p "require('@playwright/test/package.json').version")
           [ "$installed" = "$PLAYWRIGHT_FLOOR" ] || { echo "installed $installed, expected $PLAYWRIGHT_FLOOR"; exit 1; }
           npx playwright --version
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         if: runner.environment == 'github-hosted' # a persistent runner keeps its browsers on disk
         with:
           path: ${{ runner.tool_cache }}/ms-playwright-floor
@@ -175,7 +175,7 @@ jobs:
       - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
         if: failure()
         run: node scripts/failed-test-results.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: playwright-floor-test-results

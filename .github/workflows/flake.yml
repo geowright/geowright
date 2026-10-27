@@ -59,8 +59,8 @@ jobs:
     env:
       CI: 'true'
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: '22'
           cache: 'npm'
@@ -79,7 +79,7 @@ jobs:
       - name: Pack the failed tests' output
         if: failure()
         run: node scripts/failed-test-results.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: linux-20x-shard-${{ matrix.shard }}-test-results
@@ -106,7 +106,7 @@ jobs:
     env:
       CI: 'true'
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 50
       - name: Anything new since yesterday?
@@ -117,7 +117,7 @@ jobs:
           else
             echo "run=false" >> "$GITHUB_OUTPUT"; echo "no commits in the last 25 hours: nothing to check"
           fi
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         if: steps.fresh.outputs.run == 'true'
         with:
           node-version: '22'
@@ -128,7 +128,7 @@ jobs:
         if: steps.fresh.outputs.run == 'true'
         id: pw
         run: echo "version=$(node -p "require('@playwright/test/package.json').version")" >> "$GITHUB_OUTPUT"
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         if: steps.fresh.outputs.run == 'true'
         with:
           path: ~/.cache/ms-playwright
@@ -141,7 +141,7 @@ jobs:
       - name: Pack the failed tests' output (the whole tree is too big to upload; a 20x run left 960,000 files in it)
         if: failure()
         run: node scripts/failed-test-results.mjs
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: failure()
         with:
           name: linux-2x-test-results
